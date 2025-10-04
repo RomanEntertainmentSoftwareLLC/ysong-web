@@ -52,7 +52,7 @@ function Mobile() {
           </a>
         </div>
 
-        <h1 className="text-3xl sm:text-6xl font-extrabold tracking-tight">
+        <h1 className="text-2xl sm:text-6xl font-extrabold tracking-tight">
           Welcome to{" "}
           <img
             src={ysongTitleWithLogo}
