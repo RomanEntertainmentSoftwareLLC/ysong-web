@@ -1,6 +1,7 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
-import viteLogo from "/vite.svg";
+import ysongLogo from "/ysong-icon.ico";
+import ysongTitleWithLogo from "/ysong-logo-with-title-darkmode.png";
 import "./App.css";
 
 function App() {
@@ -15,13 +16,18 @@ function App() {
             href="https://vite.dev"
             target="_blank"
             rel="noopener noreferrer"
-            aria-label="Vite"
+            aria-label="YSong"
             className="transition-transform hover:scale-105"
           >
             <img
-              src={viteLogo}
-              alt="Vite"
-              className="h-20 w-20 sm:h-24 sm:w-24 drop-shadow-[0_0_20px_#646cff88]"
+              src={ysongLogo}
+              alt="YSong"
+              className="
+                h-20 w-20 sm:h-24 sm:w-24
+                transition-[filter,transform] duration-300
+                hover:drop-shadow-[0_0_20px_#646cff88]
+                hover:scale-105
+              "
             />
           </a>
 
@@ -35,13 +41,25 @@ function App() {
             <img
               src={reactLogo}
               alt="React"
-              className="h-20 w-20 sm:h-24 sm:w-24 drop-shadow-[0_0_20px_#61dafb88] animate-[spin_20s_linear_infinite]"
+              className="
+                h-20 w-20 sm:h-24 sm:w-24
+                transition-[filter,transform] duration-300
+                hover:drop-shadow-[0_0_20px_#61dafb88]
+                hover:scale-105
+                motion-safe:animate-[spin_20s_linear_infinite]
+              "
             />
           </a>
         </div>
 
         <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight">
-          Welcome to <span className="text-white">YSong.ai</span> 🎶
+          Welcome to{" "}
+          <img
+            src={ysongTitleWithLogo}
+            alt="Title"
+            className="h-20 w-auto inline-block align-middle transition-transform hover:scale-110"
+          />{" "}
+          🎶
         </h1>
 
         <p className="mt-3 text-sm text-neutral-300">
@@ -69,7 +87,7 @@ function App() {
     <>
       <div>
         <a href="https://vite.dev" target="_blank" rel="noopener noreferrer">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
+          <img src={ysongLogo} className="logo" alt="Vite logo" />
         </a>
         <a href="https://react.dev" target="_blank" rel="noopener noreferrer">
           <img src={reactLogo} className="logo react" alt="React logo" />
