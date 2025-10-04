@@ -50,8 +50,11 @@ function App() {
           <span className="font-medium">Vercel</span> 🚀
         </p>
 
-        <button className="mt-6 rounded-lg border border-transparent px-5 py-2.5 text-base font-medium bg-neutral-800 hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-          count is 0
+        <button
+          onClick={() => setCount((count) => count + 1)}
+          className="mt-6 rounded-lg border border-transparent px-5 py-2.5 text-base font-medium bg-neutral-800 hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          count is {count}
         </button>
 
         <p className="mt-6 text-neutral-400">
