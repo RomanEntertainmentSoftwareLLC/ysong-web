@@ -65,7 +65,9 @@ function App() {
         <p className="mt-3 text-sm text-neutral-300">
           Powered by <span className="font-medium">Vite</span> +{" "}
           <span className="font-medium">React</span> +{" "}
-          <span className="font-medium">Vercel</span> 🚀
+          <span className="font-medium">TypeScript</span> +{" "}
+          <span className="font-medium">Vercel</span> +{" "}
+          <span className="font-medium">Tailwind CSS</span>🚀
         </p>
 
         <button
