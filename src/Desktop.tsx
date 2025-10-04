@@ -53,7 +53,7 @@ function Desktop() {
         </div>
 
         <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight">
-          Welcome to{" "}
+          Desktop{" "}
           <img
             src={ysongTitleWithLogo}
             alt="Title"
