@@ -8,6 +8,49 @@ function App() {
 
   return (
     <>
+      <div className="min-h-screen grid place-items-center bg-neutral-900 text-neutral-100">
+        <div>
+          <a href="https://vite.dev" target="_blank" rel="noopener noreferrer">
+            <img src={viteLogo} className="logo" alt="Vite logo" />
+          </a>
+          <a href="https://react.dev" target="_blank" rel="noopener noreferrer">
+            <img src={reactLogo} className="logo react" alt="React logo" />
+          </a>
+        </div>
+        <main className="text-center font-sans">
+          <div className="flex justify-center gap-12 mb-8 opacity-90">
+            {/* icons */}
+          </div>
+
+          <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight">
+            Welcome to{" "}
+            <span className="text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.6)]">
+              YSong.ai
+            </span>{" "}
+            🎶
+          </h1>
+
+          <p className="mt-3 text-sm text-neutral-300">
+            Powered by <span className="font-medium">Vite</span> +{" "}
+            <span className="font-medium">React</span> +{" "}
+            <span className="font-medium">Vercel</span> 🚀
+          </p>
+
+          <button className="mt-6 rounded-lg border border-transparent px-5 py-2.5 text-base font-medium bg-neutral-800 hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            count is 0
+          </button>
+
+          <p className="mt-6 text-neutral-400">
+            Edit <code className="font-mono">src/App.tsx</code> and save to test
+            HMR
+          </p>
+        </main>
+      </div>
+    </>
+  );
+  /*
+  return (
+    <>
       <div>
         <a href="https://vite.dev" target="_blank" rel="noopener noreferrer">
           <img src={viteLogo} className="logo" alt="Vite logo" />
@@ -31,6 +74,7 @@ function App() {
       </p>
     </>
   );
+  */
 }
 
 export default App;
