@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Mobile from "./Mobile";
 import Desktop from "./Desktop";
 import "./App.css";
+import Navbar from "./components/NavBar";
 
 function useMediaQuery(query: string) {
   const get = () =>
@@ -23,7 +24,12 @@ function useMediaQuery(query: string) {
 function App() {
   const isMobile = useMediaQuery("(max-width: 640px)");
 
-  return <div>{isMobile ? <Mobile /> : <Desktop />}</div>;
+  return (
+    <>
+      <Navbar />
+      <div>{isMobile ? <Mobile /> : <Desktop />}</div>;
+    </>
+  );
   /*
   return (
     <>
