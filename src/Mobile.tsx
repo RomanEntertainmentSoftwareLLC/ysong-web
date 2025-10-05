@@ -17,9 +17,9 @@ function Mobile() {
   // apply the theme to <html>
   useEffect(() => {
     // apply colors you chose
-    document.body.style.backgroundColor = dark
-      ? "rgb(26,26,26)"
-      : "rgb(242,246,252)";
+    document.body.style.background = dark
+      ? "linear-gradient(180deg, rgb(26,26,26) 0%, rgb(40,40,40) 100%)"
+      : "linear-gradient(180deg, rgb(108,112,118) 0%, rgb(242,246,252) 100%)";
     document.body.style.color = dark ? "rgb(245,245,245)" : "rgb(17,17,17)";
     // optional: let the browser know which scheme is active (scrollbars, form controls)
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
