@@ -17,9 +17,7 @@
 }
 
 body {
-  @apply m-0 min-h-screen min-w-[320px] grid place-items-center antialiased
-         bg-[rgb(242,246,252)] text-neutral-900
-         dark:bg-[rgb(26,26,26)] dark:text-neutral-100;
+  @apply m-0 min-h-screen min-w-[320px] grid place-items-center antialiased;
 }
 
 a {

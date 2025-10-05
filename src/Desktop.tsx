@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import reactLogo from "./assets/react.svg";
-import ysongLogo from "/ysong-icon.ico";
+import ysongLogo from "/ysong-logo.png";
+import ysongLogoDark from "/ysong-logo-darkmode.png";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 import "./App.css";
@@ -37,7 +38,7 @@ function Desktop() {
             className="transition-transform hover:scale-105"
           >
             <img
-              src={ysongLogo}
+              src={dark ? ysongLogoDark : ysongLogo}
               alt="YSong"
               className="
                 h-20 w-20 sm:h-24 sm:w-24
