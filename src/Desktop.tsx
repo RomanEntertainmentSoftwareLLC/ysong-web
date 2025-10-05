@@ -8,11 +8,7 @@ import "./App.css";
 function Desktop() {
   //const [count, setCount] = useState(0);
 
-  const [dark, setDark] = useState(
-    () =>
-      // default: prefer system dark
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
+  const [dark, setDark] = useState(true);
 
   // apply the theme to <html>
   useEffect(() => {
