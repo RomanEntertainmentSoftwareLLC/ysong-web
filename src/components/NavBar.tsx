@@ -27,8 +27,8 @@ export default function Navbar() {
         <a
           href="/"
           className="inline-flex items-center gap-2 
-            rounded-lg focus:outline-none focus-visible:ring-2 
-            focus-visible:ring-sky-500"
+                rounded-lg focus:outline-none focus-visible:ring-2 
+                focus-visible:ring-sky-500"
           aria-label="YSong Home"
         >
           <img
@@ -44,20 +44,20 @@ export default function Navbar() {
           {/* Login Button */}
           <a
             href="/login"
-            className="px-3 py-2 text-sm font-medium rounded-lg 
-                border border-neutral-300/70 dark:border-neutral-700/70
-                hover:bg-neutral-50 dark:hover:bg-neutral-900 
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            className="px-3 py-2 text-sm font-medium rounded-lg border
+                        border-neutral-300/70 dark:border-neutral-700/70
+                        hover:bg-neutral-50 dark:hover:bg-neutral-900 
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             Log in
           </a>
           {/* Create Account Button*/}
           <a
             href="/signup"
-            className="px-3.5 py-2 text-sm font-medium rounded-lg
-                border border-neutral-300/70 dark:border-neutral-700/70
-                hover:bg-neutral-50 dark:hover:bg-neutral-900 
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            className="px-3.5 py-2 text-sm font-medium rounded-lg border
+                        border-neutral-300/70 dark:border-neutral-700/70
+                        hover:bg-neutral-50 dark:hover:bg-neutral-900 
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             Create account
           </a>
@@ -69,13 +69,14 @@ export default function Navbar() {
             aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
             title={dark ? "Light mode" : "Dark mode"}
             className="inline-flex items-center justify-center rounded-lg px-2.5 py-2
-                       hover:bg-neutral-100 dark:hover:bg-neutral-900
-                       focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                            hover:bg-neutral-100 dark:hover:bg-neutral-900
+                            focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
           </button>
         </div>
 
+        {/* If the website is in mobile mode...*/}
         {/* Mobile: hamburger */}
         <div className="sm:hidden">
           <button
@@ -87,8 +88,8 @@ export default function Navbar() {
             aria-controls="mobile-menu"
             aria-expanded="false" // literal; updated via useEffect
             className="inline-flex items-center justify-center rounded-lg p-2
-                       hover:bg-neutral-100 dark:hover:bg-neutral-900
-                       focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                        hover:bg-neutral-100 dark:hover:bg-neutral-900
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             <span className="sr-only">Toggle menu</span>
             {/* hamburger / close */}
@@ -124,20 +125,25 @@ export default function Navbar() {
         className="sm:hidden px-4 pb-3"
       >
         <div className="mt-2 flex flex-col items-stretch gap-2">
+          {/* Mobile Login Button*/}
           <a
             href="/login"
             onClick={() => setOpen(false)}
-            className="px-3 py-2 text-sm font-medium rounded-lg border border-neutral-300/70 dark:border-neutral-700/70
-                       hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            className="px-3 py-2 text-sm font-medium rounded-lg border 
+                        border-neutral-300/70 dark:border-neutral-700/70
+                        hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none 
+                        focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             Log in
           </a>
+          {/* Mobile Create Account Button*/}
           <a
             href="/signup"
             onClick={() => setOpen(false)}
-            className="px-3.5 py-2 text-sm font-semibold rounded-lg
-                       bg-sky-600 hover:bg-sky-700 text-white
-                       focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            className="px-3.5 py-2 text-sm font-medium rounded-lg border
+                        border-neutral-300/70 dark:border-neutral-700/70
+                        hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none 
+                        focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             Create account
           </a>
@@ -149,8 +155,8 @@ export default function Navbar() {
               setOpen(false);
             }}
             className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2
-                       hover:bg-neutral-100 dark:hover:bg-neutral-900
-                       focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                            hover:bg-neutral-100 dark:hover:bg-neutral-900
+                            focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             {dark ? "☀️ Light mode" : "🌙 Dark mode"}
           </button>
