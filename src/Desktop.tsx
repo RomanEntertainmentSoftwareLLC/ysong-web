@@ -1,14 +1,35 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import reactLogo from "./assets/react.svg";
 import ysongLogo from "/ysong-icon.ico";
-import ysongTitleWithLogo from "/ysong-logo-with-title-darkmode.png";
+import ysongTitleWithLogo from "/ysong-logo-with-title.png";
+import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 import "./App.css";
 
 function Desktop() {
-  const [count, setCount] = useState(0);
+  //const [count, setCount] = useState(0);
+
+  const [dark, setDark] = useState(
+    () =>
+      // default: prefer system dark
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+
+  // apply the theme to <html>
+  useEffect(() => {
+    // apply colors you chose
+    document.body.style.backgroundColor = dark
+      ? "rgb(26,26,26)"
+      : "rgb(242,246,252)";
+    document.body.style.color = dark ? "rgb(245,245,245)" : "rgb(17,17,17)";
+    // optional: let the browser know which scheme is active (scrollbars, form controls)
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
+
+    // (optional) remember choice
+    localStorage.setItem("theme", dark ? "dark" : "light");
+  }, [dark]);
 
   return (
-    <div className="min-h-screen grid place-items-center bg-neutral-900 text-neutral-100">
+    <div className="min-h-screen grid place-items-center bg-transparent">
       <main className="text-center font-sans">
         {/* ICON ROW */}
         <div className="flex items-center justify-center gap-12 mb-10">
@@ -52,17 +73,17 @@ function Desktop() {
           </a>
         </div>
 
-        <h1 className="text-5xl sm:text-6xl font-extrabold tracking-tight">
+        <h1>
           Desktop{" "}
           <img
-            src={ysongTitleWithLogo}
+            src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
             alt="Title"
             className="h-20 w-auto inline-block align-middle transition-transform hover:scale-110"
           />{" "}
           🎶
         </h1>
 
-        <p className="mt-3 text-sm text-neutral-300">
+        <p className="mt-3 text-sm">
           Powered by <span className="font-medium">Vite</span> +{" "}
           <span className="font-medium">React</span> +{" "}
           <span className="font-medium">TypeScript</span> +{" "}
@@ -71,16 +92,22 @@ function Desktop() {
         </p>
 
         <button
+          onClick={() => setDark(!dark)}
+          className="mt-6 rounded-lg border border-transparent 
+                    px-5 py-2.5 text-base font-medium
+                    bg-[rgb(155,155,155)] hover:bg-[rgb(185,185,185)]
+                    hover:border-indigo-400 focus:outline-none focus:ring-2
+                    focus:ring-indigo-500 transition"
+        >
+          {dark ? "☀️ Light mode" : "🌙 Dark mode"}
+        </button>
+
+        {/*<button
           onClick={() => setCount((count) => count + 1)}
           className="mt-6 rounded-lg border border-transparent px-5 py-2.5 text-base font-medium bg-neutral-800 hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           count is {count}
-        </button>
-
-        <p className="mt-6 text-neutral-400">
-          Edit <code className="font-mono">src/App.tsx</code> and save to test
-          HMR
-        </p>
+        </button>*/}
       </main>
     </div>
   );
