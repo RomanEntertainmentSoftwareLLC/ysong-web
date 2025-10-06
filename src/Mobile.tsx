@@ -20,7 +20,7 @@ function Mobile() {
 
   return (
     <div className="min-h-screen grid place-items-center bg-transparent">
-      <main className="text-center font-sans">
+      <main className="text-left font-sans">
         <section className="pt-24 sm:pt-10">
           <Home />
         </section>
