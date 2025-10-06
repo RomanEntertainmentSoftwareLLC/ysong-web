@@ -1,17 +1,24 @@
 import Reveal from "./Reveal";
 import { useTheme } from "../ThemeContext";
+import ysongTitleWithLogo from "/ysong-logo-with-title.png";
+import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 
 export default function Home() {
-  //const { dark } = useTheme();
-  useTheme();
+  const { dark } = useTheme();
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
       {/* HERO */}
       <section className="pt-6 sm:pt-10">
         <Reveal className="text-center">
+          <img
+            src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
+            alt="YSong"
+            className="mx-auto h-16 sm:h-20 md:h-28 lg:h-32 w-auto"
+            loading="eager"
+          />
           <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight">
-            YSong — Your ultimate AI music co-pilot
+            Your ultimate AI music co-pilot
           </h1>
           <p className="mt-3 text-sm sm:text-base">
             Create, transform, generate, and learn music all on one platform
