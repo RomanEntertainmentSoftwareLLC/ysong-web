@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
+import { Routes, Route } from "react-router-dom";
 import Mobile from "./Mobile";
 import Desktop from "./Desktop";
 import "./App.css";
 import Navbar from "./components/NavBar";
+import Legal from "./pages/Legal";
+import Privacy from "./pages/Privacy";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
 
 function useMediaQuery(query: string) {
   const get = () =>
@@ -27,36 +32,17 @@ function App() {
   return (
     <>
       <Navbar />
-      <div>{isMobile ? <Mobile /> : <Desktop />}</div>
+      <div className="pt-16">
+        <Routes>
+          <Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
+          <Route path="/legal" element={<Legal />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+        </Routes>
+      </div>
     </>
   );
-  /*
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank" rel="noopener noreferrer">
-          <img src={ysongLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank" rel="noopener noreferrer">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Welcome to YSong.ai 🎶</h1>
-      <p>Powered by Vite + React + Vercel 🚀</p>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  );
-  */
 }
 
 export default App;
