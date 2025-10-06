@@ -27,7 +27,7 @@ function App() {
   return (
     <>
       <Navbar />
-      <div>{isMobile ? <Mobile /> : <Desktop />}</div>;
+      <div>{isMobile ? <Mobile /> : <Desktop />}</div>
     </>
   );
   /*
