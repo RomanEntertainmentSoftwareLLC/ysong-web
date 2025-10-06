@@ -155,7 +155,7 @@ export default function Navbar() {
               setOpen(false);
             }}
             className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2
-                            hover:bg-neutral-100 dark:hover:bg-neutral-900
+                            text-white hover:bg-neutral-100 dark:hover:bg-neutral-900
                             focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             {dark ? "☀️ Light mode" : "🌙 Dark mode"}
