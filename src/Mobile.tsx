@@ -1,12 +1,13 @@
-import { useEffect } from "react";
+//import { useEffect } from "react";
 import "./App.css";
-import { useTheme } from "./ThemeContext";
+//import { useTheme } from "./ThemeContext";
 import Home from "./components/Home";
 import Footer from "./components/Footer";
 
 function Mobile() {
-  const { dark } = useTheme();
+  //const { dark } = useTheme();
 
+  /*
   // Apply gradient background + text color when dark changes
   useEffect(() => {
     document.body.style.background = dark
@@ -17,7 +18,7 @@ function Mobile() {
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
     localStorage.setItem("theme", dark ? "dark" : "light");
   }, [dark]);
-
+*/
   return (
     <div className="min-h-screen grid place-items-center bg-transparent">
       <main className="text-left font-sans">

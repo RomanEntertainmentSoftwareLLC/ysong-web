@@ -1,20 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useTheme } from "../ThemeContext";
 
 export default function Login() {
-  const { dark } = useTheme();
   const [show, setShow] = useState(false);
-
-  useEffect(() => {
-    document.body.style.background = dark
-      ? "linear-gradient(180deg, rgb(26,26,26) 0%, rgb(40,40,40) 100%)"
-      : "linear-gradient(180deg, rgb(108,112,118) 0%, rgb(242,246,252) 100%)";
-
-    document.body.style.color = dark ? "rgb(245,245,245)" : "rgb(17,17,17)";
-    document.documentElement.style.colorScheme = dark ? "dark" : "light";
-    localStorage.setItem("theme", dark ? "dark" : "light");
-  }, [dark]);
 
   return (
     <div className="mx-auto max-w-md px-4 sm:px-6 lg:px-8 py-10">
@@ -35,9 +23,7 @@ export default function Login() {
             id="email"
             type="email"
             required
-            className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                       text-white bg-white dark:bg-neutral-900 px-3 py-2
-                       focus:outline-none focus:ring-2 focus:ring-sky-500"
+            className="px-3 py-2 w-full rounded-lg border"
           />
         </div>
 
@@ -50,9 +36,7 @@ export default function Login() {
               id="password"
               type={show ? "text" : "password"}
               required
-              className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                         text-white bg-white dark:bg-neutral-900 px-3 py-2 pr-10
-                         focus:outline-none focus:ring-2 focus:ring-sky-500"
+              className="px-3 py-2 pr-10 w-full rounded-lg border"
             />
             <button
               type="button"
@@ -65,7 +49,7 @@ export default function Login() {
           </div>
         </div>
 
-        {/*Submit Button*/}
+        {/* Submit */}
         <button
           type="submit"
           className="w-full px-4 py-2 text-sm font-semibold rounded-lg border
@@ -78,10 +62,12 @@ export default function Login() {
       </form>
 
       <p className="mt-4 text-center text-sm opacity-80">
-        New to YSong?{" "}
-        <Link to="/signup" className="text-sky-600 hover:underline">
-          Create an account
-        </Link>
+        New to YSong? <Link to="/signup">Create an account</Link>
+      </p>
+
+      {/* NEW: forgot link */}
+      <p className="mt-4 text-center text-sm opacity-80">
+        <Link to="/forgot">Forgot username or password?</Link>
       </p>
     </div>
   );

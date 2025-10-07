@@ -1,10 +1,12 @@
 import Reveal from "./Reveal";
 import { useTheme } from "../ThemeContext";
+import { useNavigate } from "react-router-dom";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 
 export default function Home() {
   const { dark } = useTheme();
+  const navigate = useNavigate();
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
@@ -35,8 +37,8 @@ export default function Home() {
         <Reveal className="mt-6">
           <div
             className="h-56 sm:h-72 md:h-96 w-full rounded-2xl
-                       bg-gradient-to-r from-neutral-200 to-neutral-300
-                       dark:from-neutral-800 dark:to-neutral-700
+                       bg-gradient-to-r from-neutral-400 to-neutral-600
+                       dark:from-neutral-800 dark:to-neutral-600
                        grid place-items-center text-neutral-600 dark:text-neutral-300"
           >
             {/* TODO: Replace with your hero image when ready */}
@@ -159,15 +161,13 @@ export default function Home() {
       {/* CTA (optional placeholder for now) */}
       <section className="mt-10 sm:mt-12 mb-16 text-center">
         <Reveal>
-          <a
-            href="/signup"
-            className="px-3 py-2 text-sm font-medium rounded-lg border 
-                        border-neutral-300/70 dark:border-neutral-700/70
-                        hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none 
-                        focus-visible:ring-2 focus-visible:ring-sky-500"
+          <button
+            type="button"
+            onClick={() => navigate("/signup")}
+            className="px-3 py-2 text-sm font-medium rounded-lg border"
           >
             Get started
-          </a>
+          </button>
         </Reveal>
       </section>
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTheme } from "../ThemeContext";
+import { useNavigate } from "react-router-dom";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 
@@ -7,6 +8,7 @@ export default function Navbar() {
   const { dark, toggleDark } = useTheme();
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const navigate = useNavigate();
 
   // Keep axe happy: update aria-expanded after render with a string token
   useEffect(() => {
@@ -16,6 +18,7 @@ export default function Navbar() {
   }, [open]);
 
   return (
+    /* Navigation Bar */
     <header
       className="fixed inset-x-0 top-0 z-50 border-b
         border-neutral-200/60 dark:border-neutral-800/60
@@ -24,13 +27,7 @@ export default function Navbar() {
     >
       <nav className="mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
         {/* Left: Logo */}
-        <a
-          href="/"
-          className="inline-flex items-center gap-2 
-                rounded-lg focus:outline-none focus-visible:ring-2 
-                focus-visible:ring-sky-500"
-          aria-label="YSong Home"
-        >
+        <a href="/" aria-label="YSong Home">
           <img
             src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
             alt="YSong"
@@ -42,25 +39,21 @@ export default function Navbar() {
         {/* Right (desktop) */}
         <div className="hidden sm:flex items-center gap-2">
           {/* Login Button */}
-          <a
-            href="/login"
-            className="px-3 py-2 text-sm font-medium rounded-lg border
-                        border-neutral-300/70 dark:border-neutral-700/70
-                        hover:bg-neutral-50 dark:hover:bg-neutral-900 
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          <button
+            type="button"
+            onClick={() => navigate("/login")}
+            className="px-3 py-2 text-sm font-medium rounded-lg border"
           >
             Log in
-          </a>
+          </button>
           {/* Create Account Button*/}
-          <a
-            href="/signup"
-            className="px-3.5 py-2 text-sm font-medium rounded-lg border
-                        border-neutral-300/70 dark:border-neutral-700/70
-                        hover:bg-neutral-50 dark:hover:bg-neutral-900 
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          <button
+            type="button"
+            onClick={() => navigate("/signup")}
+            className="px-3.5 py-2 text-sm font-medium rounded-lg border"
           >
             Create account
-          </a>
+          </button>
 
           {/* Theme toggle */}
           <button

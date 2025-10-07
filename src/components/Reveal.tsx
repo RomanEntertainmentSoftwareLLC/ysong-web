@@ -1,4 +1,3 @@
-// src/components/Reveal.tsx
 import {
   useEffect,
   useRef,

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* Optional ergonomics using Tailwind utilities */
 :root {
@@ -7,8 +8,8 @@
   font-weight: 400;
 
   color-scheme: light dark;
-  color: rgba(242, 246, 252, 0.87);
-  background-color: #242424;
+  color: rgba(242, 246, 252, 0.87); /* Default forecolor of the webpage */
+  background-color: rgba(26, 26, 26, 1); /* Default backcolor of the webpage */
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -21,20 +22,31 @@ body {
 }
 
 a {
-  @apply font-medium text-indigo-400 no-underline hover:text-indigo-300;
+  @apply font-medium no-underline
+      /* light theme */
+      text-indigo-600 hover:text-indigo-500
+      /* dark theme */
+      dark:text-indigo-400 dark:hover:text-indigo-300;
 }
 
 h1 {
   @apply text-5xl leading-tight font-extrabold;
 }
 
-/*
 button {
-  @apply rounded-lg border border-transparent px-5 py-2.5 text-base font-medium
-         bg-neutral-800 cursor-pointer transition
-         hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500;
+  @apply inline-flex items-center justify-center rounded-lg
+           font-medium text-indigo-400 hover:text-indigo-300
+           border border-neutral-400/70 dark:border-neutral-700/70
+           transition-colors
+           hover:bg-neutral-950 dark:hover:bg-neutral-950
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500;
 }
-*/
+
+input {
+  @apply border-neutral-300 dark:border-neutral-700
+         bg-neutral-300/70 dark:bg-neutral-900
+          focus:outline-none focus:ring-2 focus:ring-sky-500;
+}
 
 /*:root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;

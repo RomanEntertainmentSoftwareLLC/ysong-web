@@ -8,6 +8,8 @@ import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import Forgot from "./pages/Forgot";
+import UseGradientBackground from "./components/UseGradientBackground";
 
 function useMediaQuery(query: string) {
   const get = () =>
@@ -32,6 +34,7 @@ function App() {
   return (
     <>
       <Navbar />
+      <UseGradientBackground />
       <div className="pt-16">
         <Routes>
           <Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
@@ -39,6 +42,7 @@ function App() {
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/forgot" element={<Forgot />} />
         </Routes>
       </div>
     </>

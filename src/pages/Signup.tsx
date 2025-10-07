@@ -1,25 +1,12 @@
-// src/pages/Signup.tsx
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { useTheme } from "../ThemeContext";
 
 export default function Signup() {
   const [show, setShow] = useState(false);
-  const { dark } = useTheme();
   const [matchErr, setMatchErr] = useState("");
 
   // axe-friendly ARIA for confirm field
   const confirmRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    document.body.style.background = dark
-      ? "linear-gradient(180deg, rgb(26,26,26) 0%, rgb(40,40,40) 100%)"
-      : "linear-gradient(180deg, rgb(108,112,118) 0%, rgb(242,246,252) 100%)";
-
-    document.body.style.color = dark ? "rgb(245,245,245)" : "rgb(17,17,17)";
-    document.documentElement.style.colorScheme = dark ? "dark" : "light";
-    localStorage.setItem("theme", dark ? "dark" : "light");
-  }, [dark]);
 
   useEffect(() => {
     const el = confirmRef.current;
@@ -65,7 +52,7 @@ export default function Signup() {
             autoComplete="name"
             required
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                       text-white bg-white dark:bg-neutral-900 px-3 py-2
+                       bg-white dark:bg-neutral-900 px-3 py-2
                        focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
         </div>
@@ -80,7 +67,7 @@ export default function Signup() {
             autoComplete="email"
             required
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                       text-white bg-white dark:bg-neutral-900 px-3 py-2
+                       bg-white dark:bg-neutral-900 px-3 py-2
                        focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
         </div>
@@ -97,7 +84,7 @@ export default function Signup() {
               autoComplete="new-password"
               required
               className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                         text-white bg-white dark:bg-neutral-900 px-3 py-2 pr-10
+                         bg-white dark:bg-neutral-900 px-3 py-2 pr-10
                          focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
             <button
@@ -125,7 +112,7 @@ export default function Signup() {
             required
             aria-invalid="false" // literal; updated via useEffect
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700
-                       text-white bg-white dark:bg-neutral-900 px-3 py-2
+                       bg-white dark:bg-neutral-900 px-3 py-2
                        focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
           {matchErr && (

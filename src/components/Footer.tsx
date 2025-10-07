@@ -1,8 +1,4 @@
-import { useTheme } from "../ThemeContext";
-
 export default function Footer() {
-  useTheme();
-
   return (
     <footer className="mt-10 sm:mt-16 border-t border-neutral-200/70 dark:border-neutral-800/70">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-6 text-sm flex flex-col sm:flex-row items-center justify-between gap-2">
