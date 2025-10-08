@@ -7,11 +7,11 @@ import { ThemeProvider } from "./ThemeContext"; // <— add this import
 
 const container = document.getElementById("root")!;
 createRoot(container).render(
-  <StrictMode>
-    <ThemeProvider>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </ThemeProvider>
-  </StrictMode>
+    <StrictMode>
+        <ThemeProvider>
+            <BrowserRouter>
+                <App />
+            </BrowserRouter>
+        </ThemeProvider>
+    </StrictMode>
 );

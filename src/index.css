@@ -3,26 +3,31 @@
 
 /* Optional ergonomics using Tailwind utilities */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+    font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
 
-  color-scheme: light dark;
-  color: rgba(242, 246, 252, 0.87); /* Default forecolor of the webpage */
-  background-color: rgba(26, 26, 26, 1); /* Default backcolor of the webpage */
+    color-scheme: light dark;
+    color: rgba(242, 246, 252, 0.87); /* Default forecolor of the webpage */
+    background-color: rgba(
+        26,
+        26,
+        26,
+        1
+    ); /* Default backcolor of the webpage */
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  @apply m-0 min-h-screen min-w-[320px] grid place-items-center antialiased;
+    @apply m-0 min-h-screen min-w-[320px] grid place-items-center antialiased;
 }
 
 a {
-  @apply font-medium no-underline
+    @apply font-medium no-underline
       /* light theme */
       text-indigo-600 hover:text-indigo-500
       /* dark theme */
@@ -30,11 +35,11 @@ a {
 }
 
 h1 {
-  @apply text-5xl leading-tight font-extrabold;
+    @apply text-5xl leading-tight font-extrabold;
 }
 
 button {
-  @apply inline-flex items-center justify-center rounded-lg
+    @apply inline-flex items-center justify-center rounded-lg
            font-medium text-indigo-400 hover:text-indigo-300
            border border-neutral-400/70 dark:border-neutral-700/70
            transition-colors
@@ -43,7 +48,7 @@ button {
 }
 
 input {
-  @apply border-neutral-300 dark:border-neutral-700
+    @apply border-neutral-300 dark:border-neutral-700
          bg-neutral-300/70 dark:bg-neutral-900
           focus:outline-none focus:ring-2 focus:ring-sky-500;
 }

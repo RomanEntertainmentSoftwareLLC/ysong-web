@@ -8,7 +8,8 @@ import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
-import Forgot from "./pages/Forgot";
+import ForgotUserName from "./pages/ForgotUserName";
+import ForgotPassword from "./pages/ForgotPassword";
 import UseGradientBackground from "./components/UseGradientBackground";
 
 function useMediaQuery(query: string) {
@@ -42,7 +43,8 @@ function App() {
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
-          <Route path="/forgot" element={<Forgot />} />
+          <Route path="/forgot-username" element={<ForgotUserName />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
         </Routes>
       </div>
     </>
