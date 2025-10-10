@@ -77,12 +77,7 @@ export default function ForgotUserName() {
             </section>
 
             <p className="mt-6 text-center text-sm">
-                <Link
-                    to="/login"
-                    className="text-indigo-400 hover:text-indigo-300"
-                >
-                    Back to login
-                </Link>
+                <Link to="/login">Back to login</Link>
             </p>
         </div>
     );
