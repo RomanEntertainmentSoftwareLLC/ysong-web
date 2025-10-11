@@ -55,15 +55,14 @@ export default function Home() {
                     What is YSong?
                 </Reveal>
                 <Reveal as="p" className="mt-3">
-                    <strong>YSong</strong> is an end-to-end AI music app and
-                    co-pilot. It generates original tracks, transforms existing
-                    songs, swaps genres and voices, separates stems, and
-                    includes a built-in DAW so you can record and edit with the
-                    instruments you already use. It also analyzes music (artist,
-                    album, label, year, BPM, key/scale), produces notation and
-                    guitar tabs, teaches instruments from beginner to advanced,
-                    and even creates cover art. Use it on Windows, macOS, Linux,
-                    iOS, Android, the web—and as a VST3 in your favorite DAW.
+                    <strong>YSong</strong> is an end-to-end AI music studio,
+                    co-pilot, and instructor. Create, transform, generate, and
+                    analyze music from first idea to finished release while
+                    working with the tools you already use. With a vast library
+                    spanning from Bach to Beyoncé, YSong surfaces artist
+                    histories and discographies and guides you with interactive
+                    lessons to level up your skills on any instrument. Available
+                    on desktop, mobile, and the web.
                 </Reveal>
             </section>
 
@@ -148,8 +147,10 @@ export default function Home() {
                         <ul className="mt-2 list-disc pl-5 text-sm leading-6">
                             <li>Smart search and music knowledge Q&amp;A</li>
                             <li>Project sharing and collaboration</li>
+                            <li>Export to WAV, MP3, and MIDI.</li>
                             <li>
-                                Export to WAV, MP3, stems, MIDI, MusicXML, PDFs
+                                Writers block mode to suggest the next set of
+                                notes or lyrics
                             </li>
                         </ul>
                     </Reveal>
