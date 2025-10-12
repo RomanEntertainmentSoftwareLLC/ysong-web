@@ -68,9 +68,7 @@ export default function Navbar() {
                                 : "Switch to dark mode"
                         }
                         title={dark ? "Light mode" : "Dark mode"}
-                        className="inline-flex items-center justify-center rounded-lg px-2.5 py-2
-										hover:bg-neutral-100 dark:hover:bg-neutral-900
-										focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                        className="inline-flex items-center justify-center rounded-lg px-2.5 py-2"
                     >
                         <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
                     </button>
@@ -87,9 +85,7 @@ export default function Navbar() {
                         aria-haspopup="menu"
                         aria-controls="mobile-menu"
                         aria-expanded="false" // literal; updated via useEffect
-                        className="inline-flex items-center justify-center rounded-lg p-2
-									hover:bg-neutral-100 dark:hover:bg-neutral-900
-									focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                        className="inline-flex items-center justify-center rounded-lg p-2"
                     >
                         <span className="sr-only">Toggle menu</span>
                         {/* hamburger / close */}
@@ -126,27 +122,21 @@ export default function Navbar() {
             >
                 <div className="mt-2 flex flex-col items-stretch gap-2">
                     {/* Mobile Login Button*/}
-                    <a
-                        href="/login"
-                        onClick={() => setOpen(false)}
-                        className="px-3 py-2 text-sm font-medium rounded-lg border 
-								border-neutral-300/70 dark:border-neutral-700/70
-								hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none 
-								focus-visible:ring-2 focus-visible:ring-sky-500"
+                    <button
+                        type="button"
+                        onClick={() => navigate("/login")}
+                        className="px-3 py-2 text-sm font-medium rounded-lg border"
                     >
                         Log in
-                    </a>
+                    </button>
                     {/* Mobile Create Account Button*/}
-                    <a
-                        href="/signup"
-                        onClick={() => setOpen(false)}
-                        className="px-3.5 py-2 text-sm font-medium rounded-lg border
-								border-neutral-300/70 dark:border-neutral-700/70
-								hover:bg-neutral-50 dark:hover:bg-neutral-900 focus:outline-none 
-								focus-visible:ring-2 focus-visible:ring-sky-500"
+                    <button
+                        type="button"
+                        onClick={() => navigate("/signup")}
+                        className="px-3.5 py-2 text-sm font-medium rounded-lg border"
                     >
                         Create account
-                    </a>
+                    </button>
 
                     <button
                         type="button"
@@ -154,9 +144,7 @@ export default function Navbar() {
                             toggleDark();
                             setOpen(false);
                         }}
-                        className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2
-									text-white hover:bg-neutral-100 dark:hover:bg-neutral-900
-									focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                        className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2"
                     >
                         {dark ? "☀️ Light mode" : "🌙 Dark mode"}
                     </button>

@@ -147,11 +147,11 @@ export default function Home() {
                         <ul className="mt-2 list-disc pl-5 text-sm leading-6">
                             <li>Smart search and music knowledge Q&amp;A</li>
                             <li>Project sharing and collaboration</li>
-                            <li>Export to WAV, MP3, and MIDI.</li>
                             <li>
                                 Writers block mode to suggest the next set of
                                 notes or lyrics
                             </li>
+                            <li>Export to WAV, MP3, and MIDI</li>
                         </ul>
                     </Reveal>
                 </div>
