@@ -48,7 +48,7 @@ function App() {
                     <Route path="/privacy" element={<Privacy />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/signup" element={<Signup />} />
-                    <Route path="verify" element={<Verify />} />
+                    <Route path="/verify" element={<Verify />} />
                     <Route
                         path="/forgot-username"
                         element={<ForgotUserName />}

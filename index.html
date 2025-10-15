@@ -1,6 +1,27 @@
 <!doctype html>
 <html lang="en">
   <head>
+	<script>
+		(function () {
+			try {
+			var KEY = 'ysong-theme';
+			var saved = localStorage.getItem(KEY);
+			var prefersDark = window.matchMedia &&
+				window.matchMedia('(prefers-color-scheme: dark)').matches;
+			var theme = saved || (prefersDark ? 'dark' : 'light');
+
+			var root = document.documentElement;
+			if (theme === 'dark') root.classList.add('dark');
+			else root.classList.remove('dark');
+			// hint the UA while CSS loads (affects form controls, scrollbars, etc.)
+			root.style.colorScheme = theme;
+			} catch (e) {}
+		})();
+	</script>
+
+	<!-- optional: micro prepaint to avoid a white flash before CSS arrives -->
+	<style>html{background:#0a0a0a;color-scheme:dark}</style>
+
     <meta charset="UTF-8" />
 	<!-- Open Graph -->
 	<meta property="og:type" content="website" />
