@@ -8,6 +8,22 @@ import { sendVerifyEmail } from "./email.js";
 
 const app = express();
 
+// ---- SUPER-PERMISSIVE CORS (debug mode) ----
+// put this at the VERY TOP, right after you create `app`
+app.use((req, res, next) => {
+  const origin = req.headers.origin || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin"); // caches per-origin
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // res.setHeader("Access-Control-Allow-Credentials", "true"); // leave off for now
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204); // Preflight OK
+  }
+  next();
+});
+
 /* -------------------- CORS (permissive for debugging) -------------------- */
 const corsOptions = {
   origin: true, // reflect whatever Origin the browser sends (localhost, 127.0.0.1, vercel, etc.)
