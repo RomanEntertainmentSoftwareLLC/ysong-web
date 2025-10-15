@@ -10,7 +10,7 @@ export default function Home() {
 
     return (
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
-            {/* HERO */}
+            {/* LOGO */}
             <section className="pt-6 sm:pt-10">
                 <Reveal className="text-center">
                     <img
