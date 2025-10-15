@@ -8,6 +8,7 @@ import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import Verify from "./pages/Verify";
 import ForgotUserName from "./pages/ForgotUserName";
 import ForgotPassword from "./pages/ForgotPassword";
 import ForgotSent from "./pages/ForgotSent";
@@ -47,6 +48,7 @@ function App() {
                     <Route path="/privacy" element={<Privacy />} />
                     <Route path="/login" element={<Login />} />
                     <Route path="/signup" element={<Signup />} />
+                    <Route path="verify" element={<Verify />} />
                     <Route
                         path="/forgot-username"
                         element={<ForgotUserName />}
