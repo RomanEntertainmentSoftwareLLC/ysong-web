@@ -7,14 +7,41 @@ import { pool } from "./db.js";
 import { sendVerifyEmail } from "./email.js";
 
 const app = express();
-app.use(express.json());
-app.use(cors({
-  origin: ["http://localhost:5173", /\.vercel\.app$/], // add your Vercel domain later
-  credentials: false
-}));
 
-// Health check
-app.get("/healthz/db", async (req, res) => {
+/** ----- CORS (put BEFORE routes) ----- */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://ysong.ai",
+  "https://www.ysong.ai",
+  /\.vercel\.app$/, // any Vercel preview domain
+];
+
+const corsOptions = {
+  origin: (origin, cb) => {
+    // allow no-origin (curl/Postman) and same-origin calls
+    if (!origin) return cb(null, true);
+    const ok = allowedOrigins.some((o) =>
+      o instanceof RegExp ? o.test(origin) : o === origin
+    );
+    return ok ? cb(null, true) : cb(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  maxAge: 86400, // cache preflight for a day
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
+/** ----- Body parser ----- */
+app.use(express.json());
+
+/** ----- Simple health (no DB) to confirm correct revision) ----- */
+app.get("/healthz", (_req, res) => res.send("ok"));
+
+/** ----- DB health ----- */
+app.get("/healthz/db", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
     res.json({ ok: true });
@@ -23,10 +50,11 @@ app.get("/healthz/db", async (req, res) => {
   }
 });
 
-// Helpers
+/** ----- Helpers ----- */
 const SignupSchema = z.object({
   email: z.string().email().max(320),
-  password: z.string().min(8).max(200)
+  password: z.string().min(8).max(200),
+  // passing an extra "name" from the client is fine; zod will ignore it
 });
 
 function sha256(hexOrBuffer) {
@@ -37,7 +65,7 @@ function minutesFromNow(mins) {
   return new Date(Date.now() + mins * 60_000);
 }
 
-// POST /auth/signup
+/** ----- POST /auth/signup ----- */
 app.post("/auth/signup", async (req, res) => {
   try {
     const { email, password } = SignupSchema.parse(req.body);
@@ -68,15 +96,17 @@ app.post("/auth/signup", async (req, res) => {
 
     await sendVerifyEmail(normalized, raw);
 
-    // Generic response (don’t leak existence)
+    // Generic response (don’t leak account existence)
     res.json({ message: "If an account exists, check your email for a verification link." });
   } catch (err) {
     console.error(err);
+    // CORS errors will not reach here (they're blocked by the browser),
+    // but other validation/db errors will.
     res.status(400).json({ error: "invalid_request" });
   }
 });
 
-// GET /auth/verify?token=...&email=...
+/** ----- GET /auth/verify?token=...&email=... ----- */
 app.get("/auth/verify", async (req, res) => {
   const token = String(req.query.token || "");
   const email = String(req.query.email || "").trim().toLowerCase();
@@ -103,10 +133,15 @@ app.get("/auth/verify", async (req, res) => {
 
     const { user_id, id: ev_id } = rows[0];
 
-    await pool.query("UPDATE users SET email_verified_at = now(), updated_at = now() WHERE id = $1", [user_id]);
-    await pool.query("UPDATE email_verifications SET consumed_at = now() WHERE id = $1", [ev_id]);
+    await pool.query(
+      "UPDATE users SET email_verified_at = now(), updated_at = now() WHERE id = $1",
+      [user_id]
+    );
+    await pool.query("UPDATE email_verifications SET consumed_at = now() WHERE id = $1", [
+      ev_id,
+    ]);
 
-    // You can redirect to a “verified” page on your frontend:
+    // Optionally redirect:
     // return res.redirect(302, `${process.env.APP_URL}/verified`);
     res.json({ ok: true });
   } catch (e) {
