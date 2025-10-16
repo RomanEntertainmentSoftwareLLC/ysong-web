@@ -12,10 +12,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { error } = await resend.emails.send({
-      from: 'YSong <onboarding@resend.dev>', // works without domain verification
+      from: 'ysong <onboarding@resend.dev>', // works without domain verification
       to,
-      subject: 'Hello from YSong',
-      text: 'Hello World from YSong by Roman Entertainment Software LLC',
+      subject: 'Hello from ysong',
+      text: 'Hello World from ysong by Roman Entertainment Software LLC',
       // reply_to: 'support@ysong.ai', // optional
     });
 

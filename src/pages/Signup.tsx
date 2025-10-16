@@ -54,9 +54,11 @@ export default function Signup() {
             form.reset();
         } catch (err: any) {
             setStatus("error");
-            setErrorMsg(
-                err?.message || "Something went wrong. Please try again."
-            );
+            const msg =
+                err?.message === "account_exists"
+                    ? "An account with that email already exists. Try logging in."
+                    : err?.message || "Something went wrong. Please try again.";
+            setErrorMsg(msg);
         }
     };
 
