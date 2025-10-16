@@ -1,8 +1,12 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { api } from "../lib/api";
 
 export default function Login() {
     const [show, setShow] = useState(false);
+    const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const navigate = useNavigate();
 
     return (
         <div className="mx-auto max-w-md px-4 sm:px-6 lg:px-8 py-10">
@@ -12,9 +16,29 @@ export default function Login() {
 
             <form
                 className="mt-6 space-y-4"
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                     e.preventDefault();
-                    // TODO: plug in auth
+                    setErrorMsg(null);
+                    const form = e.currentTarget as HTMLFormElement;
+                    const email = (
+                        form.elements.namedItem("email") as HTMLInputElement
+                    )?.value.trim();
+                    const password = (
+                        form.elements.namedItem("password") as HTMLInputElement
+                    )?.value;
+
+                    try {
+                        setStatus("loading");
+                        await api.login(email, password);
+                        navigate("/app");
+                    } catch (err: any) {
+                        setStatus("error");
+                        setErrorMsg(
+                            err?.message || "Invalid email or password."
+                        );
+                    } finally {
+                        setStatus((s) => (s === "loading" ? "idle" : s));
+                    }
                 }}
             >
                 <div>
@@ -26,9 +50,14 @@ export default function Login() {
                     </label>
                     <input
                         id="email"
+                        name="email"
                         type="email"
+                        autoComplete="username"
                         required
-                        className="px-3 py-2 w-full rounded-lg border"
+                        className="px-3 py-2 w-full rounded-lg border
+                       border-neutral-300 dark:border-neutral-700
+                       bg-white dark:bg-neutral-900
+                       focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                 </div>
 
@@ -42,9 +71,14 @@ export default function Login() {
                     <div className="relative">
                         <input
                             id="password"
+                            name="password"
                             type={show ? "text" : "password"}
+                            autoComplete="current-password"
                             required
-                            className="px-3 py-2 pr-10 w-full rounded-lg border"
+                            className="px-3 py-2 pr-10 w-full rounded-lg border
+                         border-neutral-300 dark:border-neutral-700
+                         bg-white dark:bg-neutral-900
+                         focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
                         <button
                             type="button"
@@ -59,23 +93,47 @@ export default function Login() {
                     </div>
                 </div>
 
-                {/* Submit */}
                 <button
                     type="submit"
-                    className="w-full px-4 py-2 text-sm font-semibold rounded-lg border"
+                    disabled={status === "loading"}
+                    className="w-full px-4 py-2 text-sm font-semibold rounded-lg border
+                     border-neutral-300/70 dark:border-neutral-700/70
+                     hover:bg-neutral-50 dark:hover:bg-neutral-900
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
                 >
-                    Continue
+                    {status === "loading" ? "Signing in…" : "Continue"}
                 </button>
+
+                {status === "error" && (
+                    <p className="text-sm text-rose-600" role="alert">
+                        {errorMsg}
+                    </p>
+                )}
             </form>
 
             <p className="mt-4 text-center text-sm opacity-80">
-                New to ysong? <Link to="/signup">Create an account</Link>
+                New to ysong?{" "}
+                <Link className="text-sky-600 hover:underline" to="/signup">
+                    Create an account
+                </Link>
             </p>
 
-            {/* NEW: forgot link */}
             <p className="mt-4 text-center text-sm opacity-80">
-                Forgot <Link to="/forgot-username">username</Link> or{" "}
-                <Link to="/forgot-password">password</Link>?
+                Forgot{" "}
+                <Link
+                    className="text-sky-600 hover:underline"
+                    to="/forgot-username"
+                >
+                    username
+                </Link>{" "}
+                or{" "}
+                <Link
+                    className="text-sky-600 hover:underline"
+                    to="/forgot-password"
+                >
+                    password
+                </Link>
+                ?
             </p>
         </div>
     );

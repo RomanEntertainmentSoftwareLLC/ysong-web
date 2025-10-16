@@ -13,6 +13,8 @@ import ForgotUserName from "./pages/ForgotUserName";
 import ForgotPassword from "./pages/ForgotPassword";
 import ForgotSent from "./pages/ForgotSent";
 import UseGradientBackground from "./components/UseGradientBackground";
+import RequireAuth from "./components/RequireAuth";
+import UI from "./pages/UI";
 
 function useMediaQuery(query: string) {
     const get = () =>
@@ -58,6 +60,14 @@ function App() {
                         element={<ForgotPassword />}
                     />
                     <Route path="/forgot-sent" element={<ForgotSent />} />
+                    <Route
+                        path="/app"
+                        element={
+                            <RequireAuth>
+                                <UI />
+                            </RequireAuth>
+                        }
+                    />
                 </Routes>
             </div>
         </>
