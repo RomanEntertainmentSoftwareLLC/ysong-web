@@ -66,7 +66,7 @@ function buildVerifyEmail(verifyUrl, toEmail) {
 					<tr>
 						<td align="center" style="padding:28px 24px 12px;">
 						<a href="${BRAND_URL}" target="_blank" style="text-decoration:none;">
-							<img src="https://www.ysong.ai/ysong-logo-with-title.png" width="44" height="44" alt="${BRAND} logo" style="display:block;border:0;outline:none;">
+							<img src="https://www.ysong.ai/ysong-logo-with-title-darkmode-no-transparency.png" width="123" height="44" alt="${BRAND} logo" style="display:block;border:0;outline:none;">
 						</a>
 						</td>
 					</tr>
