@@ -69,7 +69,7 @@ export default function Login() {
             </form>
 
             <p className="mt-4 text-center text-sm opacity-80">
-                New to YSong? <Link to="/signup">Create an account</Link>
+                New to ysong? <Link to="/signup">Create an account</Link>
             </p>
 
             {/* NEW: forgot link */}

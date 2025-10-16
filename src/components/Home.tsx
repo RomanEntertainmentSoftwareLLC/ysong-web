@@ -15,7 +15,7 @@ export default function Home() {
                 <Reveal className="text-center">
                     <img
                         src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
-                        alt="YSong"
+                        alt="ysong"
                         className="mx-auto h-16 sm:h-20 md:h-28 lg:h-32 w-auto"
                         loading="eager"
                     />
@@ -52,14 +52,14 @@ export default function Home() {
             {/* WHAT IS YSONG */}
             <section className="mt-12 sm:mt-16">
                 <Reveal as="h2" className="text-2xl sm:text-3xl font-bold">
-                    What is YSong?
+                    What is ysong?
                 </Reveal>
                 <Reveal as="p" className="mt-3">
-                    <strong>YSong</strong> is an end-to-end AI music studio,
+                    <strong>ysong</strong> is an end-to-end AI music studio,
                     co-pilot, and instructor. Create, transform, generate, and
                     analyze music from first idea to finished release while
                     working with the tools you already use. With a vast library
-                    spanning from Bach to Beyoncé, YSong surfaces artist
+                    spanning from Bach to Beyoncé, ysong surfaces artist
                     histories and discographies and guides you with interactive
                     lessons to level up your skills on any instrument. Available
                     on desktop, mobile, and the web.
@@ -69,7 +69,7 @@ export default function Home() {
             {/* FEATURE GRID */}
             <section className="mt-10 sm:mt-12">
                 <Reveal as="h3" className="text-xl sm:text-2xl font-semibold">
-                    What you can do with YSong
+                    What you can do with ysong
                 </Reveal>
 
                 <div className="mt-6 grid gap-4 sm:gap-6 md:grid-cols-2 lg:grid-cols-3">

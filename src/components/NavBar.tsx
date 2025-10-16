@@ -30,10 +30,10 @@ export default function Navbar() {
         >
             <nav className="mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
                 {/* Left: Logo */}
-                <a href="/" aria-label="YSong Home">
+                <a href="/" aria-label="ysong Home">
                     <img
                         src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
-                        alt="YSong"
+                        alt="ysong"
                         className="h-8 w-auto sm:h-9"
                         loading="eager"
                     />
