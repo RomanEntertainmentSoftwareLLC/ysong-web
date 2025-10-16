@@ -157,30 +157,47 @@ app.get("/auth/verify", async (req, res) => {
 
 	try {
 		const { rows } = await pool.query(
-			`SELECT ev.id, u.id AS user_id
+			`SELECT ev.id, ev.consumed_at,
+			u.id AS user_id, u.email_verified_at
 			FROM email_verifications ev
 			JOIN users u ON u.id = ev.user_id
 			WHERE u.email = $1
 			AND ev.token_hash = $2
-			AND ev.consumed_at IS NULL
 			AND ev.expires_at > now()
+			ORDER BY ev.created_at DESC
 			LIMIT 1`,
 			[email, token_hash]
 		);
 
+		// If no matching (still-valid) token, treat "already verified" as success
 		if (rows.length === 0) {
+			const { rows: urows } = await pool.query(
+				`SELECT email_verified_at FROM users WHERE email = $1 LIMIT 1`,
+				[email]
+			);
+			if (urows.length && urows[0].email_verified_at) {
+				return res.json({ ok: true });
+			}
 			return res.status(400).json({ ok: false, reason: "invalid_or_expired" });
 		}
 
-		const { user_id, id: ev_id } = rows[0];
+		const { user_id, id: ev_id, consumed_at, email_verified_at } = rows[0];
+
+		// If already verified, just say ok
+		if (email_verified_at) return res.json({ ok: true });
 
 		await pool.query(
 			"UPDATE users SET email_verified_at = now(), updated_at = now() WHERE id = $1",
 			[user_id]
 		);
-		await pool.query("UPDATE email_verifications SET consumed_at = now() WHERE id = $1", 
-			[ev_id]
-		);
+
+		// Mark token consumed if not already
+		if (!consumed_at) {
+			await pool.query(
+				"UPDATE email_verifications SET consumed_at = now() WHERE id = $1",
+				[ev_id]
+			);
+		}
 
 		res.json({ ok: true });
 	} catch (e) {
