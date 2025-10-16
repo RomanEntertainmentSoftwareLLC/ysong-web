@@ -14,7 +14,7 @@ export async function sendVerifyEmail(toEmail, rawToken) {
   const verifyUrl = `${APP_URL}/verify?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(toEmail)}`;
   const html = `
     <div style="font-family:system-ui,Arial,sans-serif;line-height:1.5">
-      <h2>Verify your YSong account</h2>
+      <h2>Verify your ysong account</h2>
       <p>Click the button below to confirm your email. The link expires in 30 minutes.</p>
       <p><a href="${verifyUrl}"
             style="display:inline-block;background:#111;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">
@@ -30,7 +30,7 @@ export async function sendVerifyEmail(toEmail, rawToken) {
   await resend.emails.send({
     from: EMAIL_FROM,
     to: toEmail,
-    subject: "Verify your YSong account",
+    subject: "Verify your ysong account",
     html
   });
 }
