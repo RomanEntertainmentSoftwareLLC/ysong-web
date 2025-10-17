@@ -5,6 +5,7 @@ import argon2 from "argon2";
 import { z } from "zod";
 import { pool } from "./db.js";
 import { sendVerifyEmail } from "./email.js";
+import jwt from "jsonwebtoken";
 
 const app = express();
 
@@ -32,6 +33,11 @@ const corsOptions = {
 	credentials: false,
 	maxAge: 86400,
 };
+
+const LoginSchema = z.object({
+  email: z.string().email().max(320),
+  password: z.string().min(8).max(200),
+});
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions)); // preflight for all routes
@@ -63,6 +69,21 @@ function sha256(hexOrBuffer) {
 
 function minutesFromNow(mins) {
   	return new Date(Date.now() + mins * 60_000);
+}
+
+function signToken(user) {
+  // keep payload small; only what you’ll show in UI
+  return jwt.sign(
+    { uid: user.id, email: user.email },
+    process.env.JWT_SECRET,
+    { algorithm: "HS256", expiresIn: "7d" }
+  );
+}
+
+function authFromHeader(req) {
+  const h = req.headers.authorization || "";
+  const m = /^Bearer (.+)$/.exec(h);
+  return m ? m[1] : null;
 }
 
 /* -------------------- Routes -------------------- */
@@ -204,6 +225,81 @@ app.get("/auth/verify", async (req, res) => {
 		console.error(e);
 		res.status(500).json({ ok: false });
 	}
+});
+
+// POST /auth/login
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password } = LoginSchema.parse(req.body);
+    const normalized = email.trim().toLowerCase();
+
+    const { rows } = await pool.query(
+      `SELECT id, email, password_hash, email_verified_at
+         FROM users
+        WHERE email = $1
+        LIMIT 1`,
+      [normalized]
+    );
+
+    // unified error to avoid account enumeration
+    const invalid = () => res.status(401).json({ error: "invalid_credentials" });
+
+    if (rows.length === 0) return invalid();
+
+    const user = rows[0];
+
+    // require verified email
+    if (!user.email_verified_at) {
+      return res.status(403).json({ error: "email_unverified" });
+    }
+
+    const ok = await argon2.verify(user.password_hash, password);
+    if (!ok) return invalid();
+
+    const token = signToken(user);
+
+    // return token + lightweight profile
+    res.json({
+      token,
+      user: { id: user.id, email: user.email },
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: "invalid_request" });
+    }
+    console.error(err);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// GET /auth/me
+app.get("/auth/me", async (req, res) => {
+  try {
+    const raw = authFromHeader(req);
+    if (!raw) return res.status(401).json({ error: "missing_token" });
+
+    let payload;
+    try {
+      payload = jwt.verify(raw, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: "invalid_token" });
+    }
+
+    // Optionally re-fetch user (handy if you may disable accounts)
+    const { rows } = await pool.query(
+      `SELECT id, email, email_verified_at
+         FROM users
+        WHERE id = $1
+        LIMIT 1`,
+      [payload.uid]
+    );
+    if (rows.length === 0) return res.status(401).json({ error: "invalid_token" });
+
+    res.json({ ok: true, user: { id: rows[0].id, email: rows[0].email } });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 /* -------------------- Start -------------------- */
