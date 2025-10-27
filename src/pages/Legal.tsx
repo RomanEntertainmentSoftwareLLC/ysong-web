@@ -10,7 +10,7 @@ export default function Legal() {
             </p>
             <ul className="mt-6 list-disc pl-6 space-y-2">
                 <li>Company: Roman Entertainment Software LLC</li>
-                <li>Contact: hello@ysong.ai (example)</li>
+                <li>Contact: support@ysong.ai</li>
                 <li>Last updated: {new Date().toLocaleDateString()}</li>
             </ul>
         </div>

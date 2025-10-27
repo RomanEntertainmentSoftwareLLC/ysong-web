@@ -112,7 +112,7 @@ export default function Login() {
             </form>
 
             <p className="mt-4 text-center text-sm opacity-80">
-                New to ysong?{" "}
+                New to {import.meta.env.VITE_APP_NAME}?{" "}
                 <Link className="text-sky-600 hover:underline" to="/signup">
                     Create an account
                 </Link>
