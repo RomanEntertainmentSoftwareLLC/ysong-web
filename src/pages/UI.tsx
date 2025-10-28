@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
 import { useNavigate } from "react-router-dom";
+import { apiGet, apiPost } from "../lib/authApi";
 
 type Chat = {
     id: string;
@@ -22,7 +22,8 @@ export default function UI() {
     const nav = useNavigate();
 
     useEffect(() => {
-        api.me()
+        // was: api.me()
+        apiGet<{ email: string }>("/auth/me")
             .then((u) => setMe({ email: u.email }))
             .catch(() => {});
     }, []);
@@ -41,7 +42,6 @@ export default function UI() {
         const text = input.trim();
         setInput("");
 
-        // append user message
         setChats((prev) =>
             prev.map((c) =>
                 c.id === activeId
@@ -53,7 +53,6 @@ export default function UI() {
             )
         );
 
-        // fake assistant reply for now
         setTimeout(() => {
             setChats((prev) =>
                 prev.map((c) =>
@@ -74,8 +73,9 @@ export default function UI() {
         }, 400);
     }
 
-    function logout() {
-        api.logout();
+    async function logout() {
+        // was: api.logout()
+        await apiPost("/auth/logout", {});
         nav("/login");
     }
 
