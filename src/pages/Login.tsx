@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { apiPost } from "../lib/authApi";
 
 export default function Login() {
     const [show, setShow] = useState(false);
@@ -29,7 +29,7 @@ export default function Login() {
 
                     try {
                         setStatus("loading");
-                        await api.login(email, password);
+                        await apiPost("/auth/login", { email, password });
                         navigate("/app");
                     } catch (err: any) {
                         setStatus("error");
