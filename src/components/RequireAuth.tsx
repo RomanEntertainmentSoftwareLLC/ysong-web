@@ -1,44 +1,28 @@
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api, isAuthed } from "../lib/api";
+import { apiGet } from "../lib/authApi";
 
 export default function RequireAuth({ children }: { children: ReactNode }) {
-    const [ready, setReady] = useState(!isAuthed());
-    const navigate = useNavigate();
+    const nav = useNavigate();
     const loc = useLocation();
 
     useEffect(() => {
-        if (!isAuthed()) {
-            // no token — go to login with redirect
-            navigate(
-                `/login?next=${encodeURIComponent(loc.pathname + loc.search)}`,
-                { replace: true }
-            );
-            return;
-        }
-        // optionally ping /auth/me once to validate token
-        api.me().then(
-            () => setReady(true),
-            () => {
-                // bad token -> clear + go login
-                localStorage.removeItem("ysong_auth_token");
-                navigate(
-                    `/login?next=${encodeURIComponent(
-                        loc.pathname + loc.search
-                    )}`,
-                    { replace: true }
-                );
+        let alive = true;
+        (async () => {
+            try {
+                await apiGet("/auth/me"); // or "/auth/session" if that’s your endpoint
+                if (!alive) return;
+                // OK -> stay
+            } catch {
+                if (!alive) return;
+                nav("/login", { replace: true, state: { from: loc.pathname } });
             }
-        );
-    }, []);
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [nav, loc]);
 
-    if (!ready) {
-        return (
-            <div className="min-h-[50vh] grid place-items-center opacity-80 text-sm">
-                Checking your session…
-            </div>
-        );
-    }
     return <>{children}</>;
 }
