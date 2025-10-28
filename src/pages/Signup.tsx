@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../lib/api";
+import { apiPost } from "../lib/authApi";
 
 export default function Signup() {
     const [show, setShow] = useState(false);
@@ -49,8 +49,13 @@ export default function Signup() {
 
         try {
             setStatus("loading");
-            await api.signup(email, pw, name || undefined);
-            setStatus("done"); // show “check your email” UI
+            // was: await api.signup(email, pw, name || undefined)
+            await apiPost("/auth/signup", {
+                email,
+                password: pw,
+                name: name || undefined,
+            });
+            setStatus("done");
             form.reset();
         } catch (err: any) {
             setStatus("error");
