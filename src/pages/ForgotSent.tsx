@@ -24,7 +24,7 @@ export default function ForgotSent() {
                 ) : (
                     "We've sent an email."
                 )}{" "}
-                Follow the instructions to recover your username. If you don’t
+                Follow the instructions to recover your username. If you don't
                 see it, check your spam or junk folder.
             </p>
 
