@@ -2,11 +2,60 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
 
+type ApiUser = { id: string; email: string };
+
 export default function Login() {
     const [show, setShow] = useState(false);
     const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const navigate = useNavigate();
+
+    async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+        e.preventDefault();
+        setErrorMsg(null);
+
+        const form = e.currentTarget;
+        const email = (
+            form.elements.namedItem("email") as HTMLInputElement
+        ).value.trim();
+        const password = (
+            form.elements.namedItem("password") as HTMLInputElement
+        ).value;
+
+        try {
+            setStatus("loading");
+
+            // Expecting { token, user: { id, email } }
+            const resp = await apiPost<{ token: string; user: ApiUser }>(
+                "/auth/login",
+                {
+                    email,
+                    password,
+                }
+            );
+
+            // Persist bearer for subsequent requests (authApi.ts reads it)
+            localStorage.setItem("ys_token", resp.token);
+
+            navigate("/app");
+        } catch (err: any) {
+            setStatus("error");
+            const code = String(err?.message ?? "request_failed");
+            const friendly =
+                code === "invalid_credentials"
+                    ? "Email or password is incorrect."
+                    : code === "email_unverified"
+                    ? "Please verify your email first. Check your inbox (and spam)."
+                    : code === "request_failed"
+                    ? "Could not reach the server. Try again shortly."
+                    : code === "server_error"
+                    ? "Server error. Please try again."
+                    : "Something went wrong. Please try again.";
+            setErrorMsg(friendly);
+        } finally {
+            setStatus((s) => (s === "loading" ? "idle" : s));
+        }
+    }
 
     return (
         <div className="mx-auto max-w-md px-4 sm:px-6 lg:px-8 py-10">
@@ -14,33 +63,7 @@ export default function Login() {
                 Log in
             </h1>
 
-            <form
-                className="mt-6 space-y-4"
-                onSubmit={async (e) => {
-                    e.preventDefault();
-                    setErrorMsg(null);
-                    const form = e.currentTarget as HTMLFormElement;
-                    const email = (
-                        form.elements.namedItem("email") as HTMLInputElement
-                    )?.value.trim();
-                    const password = (
-                        form.elements.namedItem("password") as HTMLInputElement
-                    )?.value;
-
-                    try {
-                        setStatus("loading");
-                        await apiPost("/auth/login", { email, password });
-                        navigate("/app");
-                    } catch (err: any) {
-                        setStatus("error");
-                        setErrorMsg(
-                            err?.message || "Invalid email or password."
-                        );
-                    } finally {
-                        setStatus((s) => (s === "loading" ? "idle" : s));
-                    }
-                }}
-            >
+            <form className="mt-6 space-y-4" onSubmit={onSubmit}>
                 <div>
                     <label
                         htmlFor="email"
@@ -55,9 +78,9 @@ export default function Login() {
                         autoComplete="username"
                         required
                         className="px-3 py-2 w-full rounded-lg border
-                       border-neutral-300 dark:border-neutral-700
-                       bg-white dark:bg-neutral-900
-                       focus:outline-none focus:ring-2 focus:ring-sky-500"
+              border-neutral-300 dark:border-neutral-700
+              bg-white dark:bg-neutral-900
+              focus:outline-none focus:ring-2 focus:ring-sky-500"
                     />
                 </div>
 
@@ -76,9 +99,9 @@ export default function Login() {
                             autoComplete="current-password"
                             required
                             className="px-3 py-2 pr-10 w-full rounded-lg border
-                         border-neutral-300 dark:border-neutral-700
-                         bg-white dark:bg-neutral-900
-                         focus:outline-none focus:ring-2 focus:ring-sky-500"
+                border-neutral-300 dark:border-neutral-700
+                bg-white dark:bg-neutral-900
+                focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
                         <button
                             type="button"
@@ -97,9 +120,9 @@ export default function Login() {
                     type="submit"
                     disabled={status === "loading"}
                     className="w-full px-4 py-2 text-sm font-semibold rounded-lg border
-                     border-neutral-300/70 dark:border-neutral-700/70
-                     hover:bg-neutral-50 dark:hover:bg-neutral-900
-                     focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
+            border-neutral-300/70 dark:border-neutral-700/70
+            hover:bg-neutral-50 dark:hover:bg-neutral-900
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
                 >
                     {status === "loading" ? "Signing in…" : "Continue"}
                 </button>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiGet, apiPost } from "../lib/authApi";
+import { apiGet, apiPost, clearToken } from "../lib/authApi";
 
 type Chat = {
     id: string;
@@ -22,9 +22,8 @@ export default function UI() {
     const nav = useNavigate();
 
     useEffect(() => {
-        // was: api.me()
-        apiGet<{ email: string }>("/auth/me")
-            .then((u) => setMe({ email: u.email }))
+        apiGet<{ ok: boolean; user: { id: string; email: string } }>("/auth/me")
+            .then((u) => setMe({ email: u.user.email }))
             .catch(() => {});
     }, []);
 
@@ -74,8 +73,10 @@ export default function UI() {
     }
 
     async function logout() {
-        // was: api.logout()
-        await apiPost("/auth/logout", {});
+        try {
+            await apiPost("/auth/logout", {});
+        } catch {}
+        clearToken();
         nav("/login");
     }
 
