@@ -36,11 +36,12 @@ export default function UI() {
         setActiveId(id);
     }
 
-    function send() {
+    async function send() {
         if (!input.trim()) return;
         const text = input.trim();
         setInput("");
 
+        // 1) show the user message right away
         setChats((prev) =>
             prev.map((c) =>
                 c.id === activeId
@@ -52,7 +53,26 @@ export default function UI() {
             )
         );
 
-        setTimeout(() => {
+        // 2) call your Python endpoint (expects { reply: string })
+        try {
+            const baseMsgs = (
+                chats.find((c) => c.id === activeId)?.messages || []
+            ).map((m) => ({
+                role: m.role,
+                content: m.text, // Python accepts content or text
+            }));
+
+            const res = await fetch("https://api.ysong.ai/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    messages: [...baseMsgs, { role: "user", content: text }],
+                }),
+            });
+
+            const data = await res.json();
+
+            // 3) append assistant reply
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === activeId
@@ -62,14 +82,31 @@ export default function UI() {
                                   ...c.messages,
                                   {
                                       role: "assistant",
-                                      text: `You said: "${text}"`,
+                                      text: data.reply || "…",
                                   },
                               ],
                           }
                         : c
                 )
             );
-        }, 400);
+        } catch {
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === activeId
+                        ? {
+                              ...c,
+                              messages: [
+                                  ...c.messages,
+                                  {
+                                      role: "assistant",
+                                      text: "⚠️ AI request failed.",
+                                  },
+                              ],
+                          }
+                        : c
+                )
+            );
+        }
     }
 
     async function logout() {
