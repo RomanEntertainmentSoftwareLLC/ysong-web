@@ -220,7 +220,7 @@ export default function UI() {
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && send()}
-                            placeholder="Message {import.meta.env.VITE_APP_NAME}…"
+                            placeholder="Message ${import.meta.env.VITE_APP_NAME}…"
                             className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
                          bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
