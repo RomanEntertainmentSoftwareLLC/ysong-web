@@ -38,13 +38,23 @@ export default function UI() {
 
     async function send() {
         if (!input.trim()) return;
+
         const text = input.trim();
         setInput("");
 
-        // 1) show the user message right away
+        // snapshot state to avoid races during await
+        const currentChatId = activeId;
+        const baseMsgs = (
+            chats.find((c) => c.id === currentChatId)?.messages || []
+        ).map((m) => ({
+            role: m.role,
+            content: m.text,
+        }));
+
+        // show user message immediately
         setChats((prev) =>
             prev.map((c) =>
-                c.id === activeId
+                c.id === currentChatId
                     ? {
                           ...c,
                           messages: [...c.messages, { role: "user", text }],
@@ -53,15 +63,27 @@ export default function UI() {
             )
         );
 
-        // 2) call your Python endpoint (expects { reply: string })
-        try {
-            const baseMsgs = (
-                chats.find((c) => c.id === activeId)?.messages || []
-            ).map((m) => ({
-                role: m.role,
-                content: m.text, // Python accepts content or text
-            }));
+        // optional: optimistic "typing..." bubble
+        const typingToken = `__typing_${crypto.randomUUID()}__`;
+        setChats((prev) =>
+            prev.map((c) =>
+                c.id === currentChatId
+                    ? {
+                          ...c,
+                          messages: [
+                              ...c.messages,
+                              {
+                                  role: "assistant",
+                                  text: "…" as any,
+                                  token: typingToken as any,
+                              },
+                          ],
+                      }
+                    : c
+            )
+        );
 
+        try {
             const res = await fetch("https://api.ysong.ai/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -70,38 +92,41 @@ export default function UI() {
                 }),
             });
 
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
+            const reply = data?.reply ?? "…";
 
-            // 3) append assistant reply
+            // replace the last "typing…" with the real reply
             setChats((prev) =>
                 prev.map((c) =>
-                    c.id === activeId
+                    c.id === currentChatId
                         ? {
                               ...c,
-                              messages: [
-                                  ...c.messages,
-                                  {
-                                      role: "assistant",
-                                      text: data.reply || "…",
-                                  },
-                              ],
+                              messages: c.messages.map((m, i, arr) =>
+                                  i === arr.length - 1 &&
+                                  (m as any).token === typingToken
+                                      ? { role: "assistant", text: reply }
+                                      : m
+                              ),
                           }
                         : c
                 )
             );
-        } catch {
+        } catch (e) {
             setChats((prev) =>
                 prev.map((c) =>
-                    c.id === activeId
+                    c.id === currentChatId
                         ? {
                               ...c,
-                              messages: [
-                                  ...c.messages,
-                                  {
-                                      role: "assistant",
-                                      text: "⚠️ AI request failed.",
-                                  },
-                              ],
+                              messages: c.messages.map((m, i, arr) =>
+                                  i === arr.length - 1 &&
+                                  (m as any).token === typingToken
+                                      ? {
+                                            role: "assistant",
+                                            text: "⚠️ AI request failed.",
+                                        }
+                                      : m
+                              ),
                           }
                         : c
                 )
