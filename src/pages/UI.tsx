@@ -46,7 +46,6 @@ export default function UI() {
             chats.find((c) => c.id === currentChatId)?.messages || []
         ).map((m) => ({ role: m.role, content: m.text }));
 
-        // show user message immediately
         setChats((prev) =>
             prev.map((c) =>
                 c.id === currentChatId
@@ -58,7 +57,6 @@ export default function UI() {
             )
         );
 
-        // optimistic "typing…" bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
         setChats((prev) =>
             prev.map((c) =>
@@ -90,7 +88,6 @@ export default function UI() {
             const data = await res.json();
             const reply = data?.reply ?? "…";
 
-            // replace the last "typing…" with the real reply
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === currentChatId
@@ -137,9 +134,9 @@ export default function UI() {
     }
 
     return (
-        // Two columns: fixed 20rem sidebar + fluid main
+        // Fixed 20rem sidebar + fluid main; full viewport below header (~4rem)
         <div className="grid [grid-template-columns:20rem_1fr] h-[calc(100vh-4rem)]">
-            {/* Sidebar (fixed width, its own scroll if long) */}
+            {/* Sidebar (fixed width, its own scroll) */}
             <aside className="border-r border-neutral-200 dark:border-neutral-800">
                 <div className="h-full overflow-y-auto p-4 space-y-3">
                     <div className="flex items-center justify-between">
@@ -189,41 +186,46 @@ export default function UI() {
 
             {/* Chat column */}
             <main className="flex flex-col h-[calc(100vh-4rem)]">
-                {/* Message rail: fixed max width to prevent reflow; only this scrolls.
-            overflow-y-scroll reserves scrollbar gutter = no horizontal shift */}
-                <div className="flex-1 overflow-y-scroll">
-                    <div className="mx-auto max-w-3xl w-full p-6 space-y-4">
-                        {active.messages.map((m, i) => (
-                            <div
-                                key={i}
-                                className={`flex ${
-                                    m.role === "user"
-                                        ? "justify-end"
-                                        : "justify-start"
-                                }`}
-                            >
+                {/* Messages area (left-aligned fixed rail). scrollbarGutter prevents width snap */}
+                <div
+                    className="flex-1 overflow-y-scroll"
+                    style={{ scrollbarGutter: "stable" as any }}
+                >
+                    {/* Left-aligned rail: fixed max width so content never reflows wider/narrower */}
+                    <div className="w-full max-w-5xl pl-6 pr-6 pt-6 pb-4">
+                        <div className="space-y-4">
+                            {active.messages.map((m, i) => (
                                 <div
-                                    className={`w-full rounded-2xl px-4 py-3 ${
+                                    key={i}
+                                    className={`flex ${
                                         m.role === "user"
-                                            ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                                            : "bg-neutral-100 dark:bg-neutral-900"
+                                            ? "justify-end"
+                                            : "justify-start"
                                     }`}
                                 >
-                                    {m.text}
+                                    <div
+                                        className={`max-w-[80ch] rounded-2xl px-4 py-3 ${
+                                            m.role === "user"
+                                                ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                                                : "bg-neutral-100 dark:bg-neutral-900"
+                                        }`}
+                                    >
+                                        {m.text}
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
-                        {active.messages.length === 0 && (
-                            <div className="opacity-70 text-sm">
-                                Start a conversation below…
-                            </div>
-                        )}
+                            ))}
+                            {active.messages.length === 0 && (
+                                <div className="opacity-70 text-sm">
+                                    Start a conversation below…
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                {/* Input rail matches message rail width; single-line, no inner scroll */}
+                {/* Input rail – same left-aligned fixed width as messages rail */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800">
-                    <div className="mx-auto max-w-3xl w-full p-4">
+                    <div className="w-full max-w-5xl pl-6 pr-6 py-4">
                         <div className="flex gap-2">
                             <input
                                 value={input}
