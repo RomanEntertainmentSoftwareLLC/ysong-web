@@ -38,17 +38,13 @@ export default function UI() {
 
     async function send() {
         if (!input.trim()) return;
-
         const text = input.trim();
         setInput("");
 
         const currentChatId = activeId;
         const baseMsgs = (
             chats.find((c) => c.id === currentChatId)?.messages || []
-        ).map((m) => ({
-            role: m.role,
-            content: m.text,
-        }));
+        ).map((m) => ({ role: m.role, content: m.text }));
 
         // show user message immediately
         setChats((prev) =>
@@ -90,7 +86,6 @@ export default function UI() {
                     messages: [...baseMsgs, { role: "user", content: text }],
                 }),
             });
-
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             const reply = data?.reply ?? "…";
@@ -142,16 +137,16 @@ export default function UI() {
     }
 
     return (
-        // Fill the viewport below your header (assumed 4rem high)
-        <div className="grid grid-cols-12 h-[calc(100vh-4rem)]">
-            {/* Sidebar (pinned; its own content can scroll if long) */}
-            <aside className="col-span-3 border-r border-neutral-200 dark:border-neutral-800">
-                <div className="sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto p-4 space-y-3">
+        // Two columns: fixed 20rem sidebar + fluid main
+        <div className="grid [grid-template-columns:20rem_1fr] h-[calc(100vh-4rem)]">
+            {/* Sidebar (fixed width, its own scroll if long) */}
+            <aside className="border-r border-neutral-200 dark:border-neutral-800">
+                <div className="h-full overflow-y-auto p-4 space-y-3">
                     <div className="flex items-center justify-between">
                         <h2 className="font-semibold">Chats</h2>
                         <button
-                            onClick={newChat}
                             className="text-sm px-2 py-1 rounded-lg border"
+                            onClick={newChat}
                         >
                             New
                         </button>
@@ -193,48 +188,61 @@ export default function UI() {
             </aside>
 
             {/* Chat column */}
-            <main className="col-span-9 flex flex-col h-[calc(100vh-4rem)]">
-                {/* Messages list (scrolls; keep scrollbar space to prevent layout shift) */}
-                <div className="flex-1 overflow-y-scroll p-6 space-y-4">
-                    {active.messages.map((m, i) => (
-                        <div
-                            key={i}
-                            className={`max-w-[70ch] rounded-2xl px-4 py-3 ${
-                                m.role === "user"
-                                    ? "ml-auto bg-neutral-700 text-white dark:bg-neutral-800"
-                                    : "mr-auto bg-neutral-100 dark:bg-neutral-900"
-                            }`}
-                        >
-                            {m.text}
-                        </div>
-                    ))}
-                    {active.messages.length === 0 && (
-                        <div className="opacity-70 text-sm">
-                            Start a conversation below…
-                        </div>
-                    )}
+            <main className="flex flex-col h-[calc(100vh-4rem)]">
+                {/* Message rail: fixed max width to prevent reflow; only this scrolls.
+            overflow-y-scroll reserves scrollbar gutter = no horizontal shift */}
+                <div className="flex-1 overflow-y-scroll">
+                    <div className="mx-auto max-w-3xl w-full p-6 space-y-4">
+                        {active.messages.map((m, i) => (
+                            <div
+                                key={i}
+                                className={`flex ${
+                                    m.role === "user"
+                                        ? "justify-end"
+                                        : "justify-start"
+                                }`}
+                            >
+                                <div
+                                    className={`w-full rounded-2xl px-4 py-3 ${
+                                        m.role === "user"
+                                            ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                                            : "bg-neutral-100 dark:bg-neutral-900"
+                                    }`}
+                                >
+                                    {m.text}
+                                </div>
+                            </div>
+                        ))}
+                        {active.messages.length === 0 && (
+                            <div className="opacity-70 text-sm">
+                                Start a conversation below…
+                            </div>
+                        )}
+                    </div>
                 </div>
 
-                {/* Input row (no internal scroll; single-line) */}
-                <div className="p-4 border-t border-neutral-200 dark:border-neutral-800">
-                    <div className="flex gap-2">
-                        <input
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && send()}
-                            placeholder={`Message ${
-                                import.meta.env.VITE_APP_NAME
-                            }…`}
-                            className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
-                         bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
-                         focus:ring-2 focus:ring-neutral-500/40"
-                        />
-                        <button
-                            onClick={send}
-                            className="px-4 py-2 rounded-lg border"
-                        >
-                            Send
-                        </button>
+                {/* Input rail matches message rail width; single-line, no inner scroll */}
+                <div className="border-t border-neutral-200 dark:border-neutral-800">
+                    <div className="mx-auto max-w-3xl w-full p-4">
+                        <div className="flex gap-2">
+                            <input
+                                value={input}
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && send()}
+                                placeholder={`Message ${
+                                    import.meta.env.VITE_APP_NAME
+                                }…`}
+                                className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
+                           bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
+                           focus:ring-2 focus:ring-neutral-500/40"
+                            />
+                            <button
+                                onClick={send}
+                                className="px-4 py-2 rounded-lg border"
+                            >
+                                Send
+                            </button>
+                        </div>
                     </div>
                 </div>
             </main>
