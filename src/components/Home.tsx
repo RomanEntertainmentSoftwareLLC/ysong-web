@@ -20,7 +20,7 @@ export default function Home() {
                         loading="eager"
                     />
                     <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight">
-                        Your ultimate AI music co-pilot
+                        Your ultimate AI music studio and co-pilot
                     </h1>
                     <p className="mt-3 text-sm sm:text-base">
                         Create, transform, generate, and learn music all on one
@@ -33,18 +33,16 @@ export default function Home() {
                     </p>
                 </Reveal>
 
-                {/* Image / banner placeholder */}
+                {/* Image / banner */}
                 <Reveal className="mt-6">
-                    <div
-                        className="h-56 sm:h-72 md:h-96 w-full rounded-2xl
-							bg-gradient-to-r from-neutral-400 to-neutral-600
-							dark:from-neutral-800 dark:to-neutral-600
-							grid place-items-center text-neutral-600 dark:text-neutral-300"
-                    >
-                        {/* TODO: Replace with your hero image when ready */}
-                        <span className="text-sm sm:text-base">
-                            Hero image placeholder
-                        </span>
+                    <div className="relative w-full h-56 sm:h-72 md:h-96 rounded-2xl overflow-hidden">
+                        <img
+                            src="/homestudio.png"
+                            alt="Producer smiling in a neon-lit home studio"
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="eager"
+                            decoding="async"
+                        />
                     </div>
                 </Reveal>
             </section>
