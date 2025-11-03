@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Outlet, useLocation } from "react-router-dom";
+
 import Mobile from "./Mobile";
 import Desktop from "./Desktop";
 import "./App.css";
+
 import Navbar from "./components/NavBar";
+import UINavbar from "./components/UINavBar"; // <-- new in-app navbar
+
 import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
 import Login from "./pages/Login";
@@ -12,6 +16,7 @@ import Verify from "./pages/Verify";
 import ForgotUserName from "./pages/ForgotUserName";
 import ForgotPassword from "./pages/ForgotPassword";
 import ForgotSent from "./pages/ForgotSent";
+
 import UseGradientBackground from "./components/UseGradientBackground";
 import RequireAuth from "./components/RequireAuth";
 import UI from "./pages/UI";
@@ -33,44 +38,49 @@ function useMediaQuery(query: string) {
     return matches;
 }
 
+/** Shell that chooses which header to show and preserves the header offset */
+function AppShell() {
+    const location = useLocation();
+    const inApp = location.pathname.startsWith("/app");
+
+    return (
+        <>
+            {inApp ? <UINavbar /> : <Navbar />}
+            <UseGradientBackground />
+            {/* keep content pushed below 4rem header */}
+            <div className="pt-16">
+                <Outlet />
+            </div>
+        </>
+    );
+}
+
 function App() {
     const isMobile = useMediaQuery("(max-width: 640px)");
 
     return (
-        <>
-            <Navbar />
-            <UseGradientBackground />
-            <div className="pt-16">
-                <Routes>
-                    <Route
-                        path="/"
-                        element={isMobile ? <Mobile /> : <Desktop />}
-                    />
-                    <Route path="/legal" element={<Legal />} />
-                    <Route path="/privacy" element={<Privacy />} />
-                    <Route path="/login" element={<Login />} />
-                    <Route path="/signup" element={<Signup />} />
-                    <Route path="/verify" element={<Verify />} />
-                    <Route
-                        path="/forgot-username"
-                        element={<ForgotUserName />}
-                    />
-                    <Route
-                        path="/forgot-password"
-                        element={<ForgotPassword />}
-                    />
-                    <Route path="/forgot-sent" element={<ForgotSent />} />
-                    <Route
-                        path="/app"
-                        element={
-                            <RequireAuth>
-                                <UI />
-                            </RequireAuth>
-                        }
-                    />
-                </Routes>
-            </div>
-        </>
+        <Routes>
+            {/* Everything renders inside the shell so the correct header shows */}
+            <Route element={<AppShell />}>
+                <Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
+                <Route path="/legal" element={<Legal />} />
+                <Route path="/privacy" element={<Privacy />} />
+                <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Signup />} />
+                <Route path="/verify" element={<Verify />} />
+                <Route path="/forgot-username" element={<ForgotUserName />} />
+                <Route path="/forgot-password" element={<ForgotPassword />} />
+                <Route path="/forgot-sent" element={<ForgotSent />} />
+                <Route
+                    path="/app"
+                    element={
+                        <RequireAuth>
+                            <UI />
+                        </RequireAuth>
+                    }
+                />
+            </Route>
+        </Routes>
     );
 }
 
