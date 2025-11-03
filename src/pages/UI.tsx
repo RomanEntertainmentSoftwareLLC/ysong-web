@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost, clearToken } from "../lib/authApi";
-import Sidebar, { Chat } from "../components/UISidebar";
+import Sidebar, { type Chat } from "../components/UISidebar";
 
 export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);

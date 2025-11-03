@@ -15,7 +15,7 @@ type Props = {
     onLogout: () => void;
 };
 
-export default function Sidebar({
+function UISidebar({
     chats,
     activeId,
     setActiveId,
@@ -24,8 +24,8 @@ export default function Sidebar({
     onLogout,
 }: Props) {
     return (
-        // Fixed width; only this column can scroll if it overflows
-        <aside className="w-[20rem] flex-shrink-0 border-r border-neutral-200 dark:border-neutral-800">
+        // ~14% width, but never skinnier than 12rem or wider than 16rem
+        <aside className="basis-[14%] min-w-[12rem] max-w-[16rem] shrink-0 border-r border-neutral-200 dark:border-neutral-800">
             <div className="h-[calc(100vh-4rem)] overflow-y-auto p-4 space-y-3">
                 <div className="flex items-center justify-between">
                     <h2 className="font-semibold">Chats</h2>
@@ -50,7 +50,6 @@ export default function Sidebar({
                             }`}
                             title={c.title}
                         >
-                            {/* Title line (truncate); drop the literal word “Welcome” */}
                             <div className="truncate">
                                 {c.title.replace(/^Welcome\s*/i, "") ||
                                     "Untitled"}
@@ -77,3 +76,5 @@ export default function Sidebar({
         </aside>
     );
 }
+
+export default React.memo(UISidebar);
