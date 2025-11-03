@@ -26,7 +26,7 @@ function UISidebar({
     return (
         // ~14% width, but never skinnier than 12rem or wider than 16rem
         <aside className="basis-[14%] min-w-[12rem] max-w-[16rem] shrink-0 border-r border-neutral-200 dark:border-neutral-800">
-            <div className="h-[calc(100vh-4rem)] overflow-y-auto p-4 space-y-3">
+            <div className="h-full overflow-y-auto p-4 space-y-3">
                 <div className="flex items-center justify-between">
                     <h2 className="font-semibold">Chats</h2>
                     <button

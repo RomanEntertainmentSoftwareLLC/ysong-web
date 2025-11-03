@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost, clearToken } from "../lib/authApi";
-import Sidebar, { type Chat } from "../components/UISidebar";
+import UISidebar, { type Chat } from "../components/UISidebar";
 
 export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);
     const [chats, setChats] = useState<Chat[]>([
         {
             id: "1",
-            // drop “Welcome” so it doesn't cover chat names
             title: "Ask me anything 🎶",
             messages: [{ role: "assistant", text: "Hey! Ask me anything 🎶" }],
         },
@@ -42,7 +41,6 @@ export default function UI() {
             chats.find((c) => c.id === currentChatId)?.messages || []
         ).map((m) => ({ role: m.role, content: m.text }));
 
-        // show user message immediately
         setChats((prev) =>
             prev.map((c) =>
                 c.id === currentChatId
@@ -54,7 +52,6 @@ export default function UI() {
             )
         );
 
-        // optimistic "typing…" bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
         setChats((prev) =>
             prev.map((c) =>
@@ -86,7 +83,6 @@ export default function UI() {
             const data = await res.json();
             const reply = data?.reply ?? "…";
 
-            // replace the last "typing…" with the real reply
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === currentChatId
@@ -132,10 +128,10 @@ export default function UI() {
         nav("/login");
     }
 
+    // Adjust 4rem if your header height differs
     return (
-        // Use flex so the fixed-width Sidebar never reflows the main column.
-        <div className="h-[calc(100vh-4rem)] flex">
-            <Sidebar
+        <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
+            <UISidebar
                 chats={chats}
                 activeId={activeId}
                 setActiveId={setActiveId}
@@ -144,14 +140,11 @@ export default function UI() {
                 onLogout={logout}
             />
 
-            {/* Main chat column (fills remaining space) */}
-            <main className="flex-1 flex flex-col">
-                {/* Messages list — fixed rail width, gutter reserved so it never snaps */}
+            <main className="flex-1 h-full flex flex-col">
                 <div
                     className="flex-1 overflow-y-scroll"
                     style={{ scrollbarGutter: "stable both-edges" as any }}
                 >
-                    {/* fixed rail width; adjust to taste */}
                     <div className="w-[680px] max-w-full pl-8 pr-6 pt-6 pb-4">
                         <div className="space-y-4">
                             {active.messages.map((m, i) => (
@@ -163,7 +156,6 @@ export default function UI() {
                                             : "justify-start"
                                     }`}
                                 >
-                                    {/* Bubbles take the whole rail width so they never shrink/expand on load */}
                                     <div
                                         className={`w-full rounded-2xl px-4 py-3 ${
                                             m.role === "user"
@@ -184,7 +176,6 @@ export default function UI() {
                     </div>
                 </div>
 
-                {/* Input row — same rail width; single-line, no inner scroll */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800">
                     <div className="w-[680px] max-w-full pl-8 pr-6 py-4">
                         <div className="flex gap-2">
