@@ -42,7 +42,6 @@ export default function UI() {
         const text = input.trim();
         setInput("");
 
-        // snapshot state to avoid races during await
         const currentChatId = activeId;
         const baseMsgs = (
             chats.find((c) => c.id === currentChatId)?.messages || []
@@ -63,7 +62,7 @@ export default function UI() {
             )
         );
 
-        // optional: optimistic "typing..." bubble
+        // optimistic "typing…" bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
         setChats((prev) =>
             prev.map((c) =>
@@ -112,7 +111,7 @@ export default function UI() {
                         : c
                 )
             );
-        } catch (e) {
+        } catch {
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === currentChatId
@@ -143,64 +142,66 @@ export default function UI() {
     }
 
     return (
-        <div className="grid grid-cols-12 min-h-[calc(100vh-4rem)]">
-            {/* Sidebar */}
-            <aside className="col-span-3 border-r border-neutral-200 dark:border-neutral-800 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                    <h2 className="font-semibold">Chats</h2>
-                    <button
-                        onClick={newChat}
-                        className="text-sm px-2 py-1 rounded-lg border"
-                    >
-                        New
-                    </button>
-                </div>
-
-                <div className="space-y-1">
-                    {chats.map((c) => (
+        // Fill the viewport below your header (assumed 4rem high)
+        <div className="grid grid-cols-12 h-[calc(100vh-4rem)]">
+            {/* Sidebar (pinned; its own content can scroll if long) */}
+            <aside className="col-span-3 border-r border-neutral-200 dark:border-neutral-800">
+                <div className="sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                        <h2 className="font-semibold">Chats</h2>
                         <button
-                            key={c.id}
-                            onClick={() => setActiveId(c.id)}
-                            className={`w-full text-left px-3 py-2 rounded-lg border
-                ${
-                    c.id === activeId
-                        ? "bg-neutral-100 dark:bg-neutral-900"
-                        : "hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                }
-              `}
+                            onClick={newChat}
+                            className="text-sm px-2 py-1 rounded-lg border"
                         >
-                            <div className="truncate">{c.title}</div>
-                            <div className="text-xs opacity-70 truncate">
-                                {c.messages[c.messages.length - 1]?.text ||
-                                    "No messages yet"}
-                            </div>
+                            New
                         </button>
-                    ))}
-                </div>
-
-                <div className="mt-6 text-xs opacity-80">
-                    <div className="truncate">Signed in as</div>
-                    <div className="truncate font-medium">
-                        {me?.email || "…"}
                     </div>
-                    <button
-                        onClick={logout}
-                        className="mt-2 text-rose-600 hover:underline"
-                    >
-                        Sign out
-                    </button>
+
+                    <div className="space-y-1">
+                        {chats.map((c) => (
+                            <button
+                                key={c.id}
+                                onClick={() => setActiveId(c.id)}
+                                className={`w-full text-left px-3 py-2 rounded-lg border ${
+                                    c.id === activeId
+                                        ? "bg-neutral-100 dark:bg-neutral-900"
+                                        : "hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                                }`}
+                            >
+                                <div className="truncate">{c.title}</div>
+                                <div className="text-xs opacity-70 truncate">
+                                    {c.messages[c.messages.length - 1]?.text ||
+                                        "No messages yet"}
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="mt-6 text-xs opacity-80">
+                        <div className="truncate">Signed in as</div>
+                        <div className="truncate font-medium">
+                            {me?.email || "…"}
+                        </div>
+                        <button
+                            onClick={logout}
+                            className="mt-2 text-rose-600 hover:underline"
+                        >
+                            Sign out
+                        </button>
+                    </div>
                 </div>
             </aside>
 
-            {/* Chat */}
-            <main className="col-span-9 flex flex-col">
-                <div className="flex-1 overflow-auto p-6 space-y-4">
+            {/* Chat column */}
+            <main className="col-span-9 flex flex-col h-[calc(100vh-4rem)]">
+                {/* Messages list (scrolls; keep scrollbar space to prevent layout shift) */}
+                <div className="flex-1 overflow-y-scroll p-6 space-y-4">
                     {active.messages.map((m, i) => (
                         <div
                             key={i}
                             className={`max-w-[70ch] rounded-2xl px-4 py-3 ${
                                 m.role === "user"
-                                    ? "ml-auto bg-sky-600 text-white"
+                                    ? "ml-auto bg-neutral-700 text-white dark:bg-neutral-800"
                                     : "mr-auto bg-neutral-100 dark:bg-neutral-900"
                             }`}
                         >
@@ -214,6 +215,7 @@ export default function UI() {
                     )}
                 </div>
 
+                {/* Input row (no internal scroll; single-line) */}
                 <div className="p-4 border-t border-neutral-200 dark:border-neutral-800">
                     <div className="flex gap-2">
                         <input
@@ -224,7 +226,8 @@ export default function UI() {
                                 import.meta.env.VITE_APP_NAME
                             }…`}
                             className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
-                         bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                         bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
+                         focus:ring-2 focus:ring-neutral-500/40"
                         />
                         <button
                             onClick={send}
