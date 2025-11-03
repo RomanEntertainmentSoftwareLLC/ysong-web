@@ -128,7 +128,7 @@ export default function UI() {
         nav("/login");
     }
 
-    // Adjust 4rem if your header height differs
+    // Full-bleed app area under the header (adjust 4rem if your header differs)
     return (
         <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
             <UISidebar
@@ -140,13 +140,16 @@ export default function UI() {
                 onLogout={logout}
             />
 
+            {/* Main chat column */}
             <main className="flex-1 h-full flex flex-col">
+                {/* Messages list */}
                 <div
                     className="flex-1 overflow-y-scroll"
                     style={{ scrollbarGutter: "stable both-edges" as any }}
                 >
-                    <div className="w-[680px] max-w-full pl-8 pr-6 pt-6 pb-4">
-                        <div className="space-y-4">
+                    {/* Centered chat rail (same width used for input row) */}
+                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-6 pb-4">
+                        <div className="flex flex-col gap-4">
                             {active.messages.map((m, i) => (
                                 <div
                                     key={i}
@@ -157,11 +160,13 @@ export default function UI() {
                                     }`}
                                 >
                                     <div
-                                        className={`w-full rounded-2xl px-4 py-3 ${
-                                            m.role === "user"
-                                                ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                                                : "bg-neutral-100 dark:bg-neutral-900"
-                                        }`}
+                                        className={`rounded-2xl px-4 py-3 leading-relaxed min-h-[44px] shadow-sm
+                    ${
+                        m.role === "user"
+                            ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                            : "bg-neutral-100 dark:bg-neutral-900"
+                    }
+                    max-w-[70%]`}
                                     >
                                         {m.text}
                                     </div>
@@ -176,8 +181,9 @@ export default function UI() {
                     </div>
                 </div>
 
+                {/* Input row — centered to exactly match the chat rail */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800">
-                    <div className="w-[680px] max-w-full pl-8 pr-6 py-4">
+                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4">
                         <div className="flex gap-2">
                             <input
                                 value={input}
