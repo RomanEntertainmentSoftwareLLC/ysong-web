@@ -1,19 +1,39 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost, clearToken } from "../lib/authApi";
 import UISidebar, { type Chat } from "../components/UISidebar";
 
+type ChatMessage = {
+    role: "user" | "assistant";
+    text: string;
+    attachments?: { name: string; size: number; type: string }[]; // local-only metadata
+    token?: string; // typing placeholder token
+};
+
 export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);
+
     const [chats, setChats] = useState<Chat[]>([
         {
             id: "1",
-            title: "Ask me anything 🎶",
-            messages: [{ role: "assistant", text: "Hey! Ask me anything 🎶" }],
-        },
+            title: "",
+            messages: [
+                {
+                    role: "assistant",
+                    text:
+                        "Welcome to " +
+                        import.meta.env.VITE_APP_NAME +
+                        "! Ask me anything music related.",
+                },
+            ] as ChatMessage[],
+        } as Chat,
     ]);
     const [activeId, setActiveId] = useState("1");
+
     const [input, setInput] = useState("");
+    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
     const nav = useNavigate();
 
     useEffect(() => {
@@ -26,32 +46,73 @@ export default function UI() {
 
     function newChat() {
         const id = crypto.randomUUID();
-        const chat: Chat = { id, title: "New chat", messages: [] };
+        const chat: Chat = { id, title: "New chat", messages: [] as any };
         setChats([chat, ...chats]);
         setActiveId(id);
     }
 
-    async function send() {
-        if (!input.trim()) return;
-        const text = input.trim();
-        setInput("");
+    // ---------- [+] picker handlers ----------
+    function triggerPicker() {
+        fileInputRef.current?.click();
+    }
 
+    function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
+        const files = Array.from(e.target.files ?? []);
+        if (!files.length) return;
+        // simple UI guard: ignore files > 50MB each
+        const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024);
+        setPendingFiles((prev) => [...prev, ...filtered]);
+        e.currentTarget.value = ""; // allow re-picking same files later
+    }
+
+    function removeAttachment(i: number) {
+        setPendingFiles((prev) => prev.filter((_, idx) => idx !== i));
+    }
+    // ----------------------------------------
+
+    async function send() {
+        if (!input.trim() && pendingFiles.length === 0) return;
+
+        const text = input.trim();
+        const attachments =
+            pendingFiles.length > 0
+                ? pendingFiles.map((f) => ({
+                      name: f.name,
+                      size: f.size,
+                      type: f.type,
+                  }))
+                : undefined;
+
+        setInput("");
+        setPendingFiles([]);
+
+        // snapshot
         const currentChatId = activeId;
         const baseMsgs = (
-            chats.find((c) => c.id === currentChatId)?.messages || []
+            (chats.find((c) => c.id === currentChatId)
+                ?.messages as ChatMessage[]) || []
         ).map((m) => ({ role: m.role, content: m.text }));
 
+        // show user msg immediately (with local-only attachments metadata)
         setChats((prev) =>
             prev.map((c) =>
                 c.id === currentChatId
                     ? {
                           ...c,
-                          messages: [...c.messages, { role: "user", text }],
+                          messages: [
+                              ...(c.messages as any),
+                              {
+                                  role: "user",
+                                  text: text || "(no text)",
+                                  attachments,
+                              } as ChatMessage,
+                          ],
                       }
                     : c
             )
         );
 
+        // optimistic typing bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
         setChats((prev) =>
             prev.map((c) =>
@@ -59,12 +120,12 @@ export default function UI() {
                     ? {
                           ...c,
                           messages: [
-                              ...c.messages,
+                              ...(c.messages as any),
                               {
                                   role: "assistant",
-                                  text: "…" as any,
-                                  token: typingToken as any,
-                              },
+                                  text: "…",
+                                  token: typingToken,
+                              } as ChatMessage,
                           ],
                       }
                     : c
@@ -88,11 +149,16 @@ export default function UI() {
                     c.id === currentChatId
                         ? {
                               ...c,
-                              messages: c.messages.map((m, i, arr) =>
-                                  i === arr.length - 1 &&
-                                  (m as any).token === typingToken
-                                      ? { role: "assistant", text: reply }
-                                      : m
+                              messages: (c.messages as any).map(
+                                  (
+                                      m: ChatMessage,
+                                      i: number,
+                                      arr: ChatMessage[]
+                                  ) =>
+                                      i === arr.length - 1 &&
+                                      m.token === typingToken
+                                          ? { role: "assistant", text: reply }
+                                          : m
                               ),
                           }
                         : c
@@ -104,14 +170,19 @@ export default function UI() {
                     c.id === currentChatId
                         ? {
                               ...c,
-                              messages: c.messages.map((m, i, arr) =>
-                                  i === arr.length - 1 &&
-                                  (m as any).token === typingToken
-                                      ? {
-                                            role: "assistant",
-                                            text: "⚠️ AI request failed.",
-                                        }
-                                      : m
+                              messages: (c.messages as any).map(
+                                  (
+                                      m: ChatMessage,
+                                      i: number,
+                                      arr: ChatMessage[]
+                                  ) =>
+                                      i === arr.length - 1 &&
+                                      m.token === typingToken
+                                          ? {
+                                                role: "assistant",
+                                                text: "⚠️ AI request failed.",
+                                            }
+                                          : m
                               ),
                           }
                         : c
@@ -128,11 +199,11 @@ export default function UI() {
         nav("/login");
     }
 
-    // Full-bleed app area under the header (adjust 4rem if your header differs)
     return (
         <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
+            {/* Sidebar */}
             <UISidebar
-                chats={chats}
+                chats={chats as any}
                 activeId={activeId}
                 setActiveId={setActiveId}
                 newChat={newChat}
@@ -147,32 +218,58 @@ export default function UI() {
                     className="flex-1 overflow-y-scroll"
                     style={{ scrollbarGutter: "stable both-edges" as any }}
                 >
-                    {/* Centered chat rail (same width used for input row) */}
+                    {/* centered chat rail */}
                     <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-6 pb-4">
                         <div className="flex flex-col gap-4">
-                            {active.messages.map((m, i) => (
-                                <div
-                                    key={i}
-                                    className={`flex ${
-                                        m.role === "user"
-                                            ? "justify-end"
-                                            : "justify-start"
-                                    }`}
-                                >
+                            {(active.messages as unknown as ChatMessage[]).map(
+                                (m, i) => (
                                     <div
-                                        className={`rounded-2xl px-4 py-3 leading-relaxed min-h-[44px] shadow-sm
-                    ${
-                        m.role === "user"
-                            ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                            : "bg-neutral-100 dark:bg-neutral-900"
-                    }
-                    max-w-[70%]`}
+                                        key={i}
+                                        className={`flex ${
+                                            m.role === "user"
+                                                ? "justify-end"
+                                                : "justify-start"
+                                        }`}
                                     >
-                                        {m.text}
+                                        <div
+                                            className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
+                      ${
+                          m.role === "user"
+                              ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                              : "bg-neutral-100 dark:bg-neutral-900"
+                      }
+                      max-w-[70%]`}
+                                        >
+                                            {m.text}
+                                            {m.attachments &&
+                                                m.attachments.length > 0 && (
+                                                    <div className="mt-2 text-xs opacity-80">
+                                                        📎 Attachments:
+                                                        <ul className="mt-1 space-y-0.5">
+                                                            {m.attachments.map(
+                                                                (a, j) => (
+                                                                    <li
+                                                                        key={j}
+                                                                        className="truncate"
+                                                                    >
+                                                                        {a.name}{" "}
+                                                                        <span className="opacity-60">
+                                                                            (
+                                                                            {a.type ||
+                                                                                "file"}
+                                                                            )
+                                                                        </span>
+                                                                    </li>
+                                                                )
+                                                            )}
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-                            {active.messages.length === 0 && (
+                                )
+                            )}
+                            {(active.messages as any).length === 0 && (
                                 <div className="opacity-70 text-sm">
                                     Start a conversation below…
                                 </div>
@@ -181,10 +278,62 @@ export default function UI() {
                     </div>
                 </div>
 
-                {/* Input row — centered to exactly match the chat rail */}
+                {/* Composer */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800">
+                    {/* chips for pending attachments */}
+                    {pendingFiles.length > 0 && (
+                        <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 flex flex-wrap gap-2">
+                            {pendingFiles.map((f, idx) => (
+                                <span
+                                    key={idx}
+                                    className="inline-flex items-center gap-2 text-xs px-2 py-1 rounded-full border border-neutral-300 dark:border-neutral-700"
+                                >
+                                    <span className="truncate max-w-[14rem]">
+                                        {f.name}
+                                    </span>
+                                    <button
+                                        onClick={() => removeAttachment(idx)}
+                                        className="opacity-70 hover:opacity-100"
+                                        aria-label={`Remove ${f.name}`}
+                                        title="Remove"
+                                    >
+                                        ✕
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    )}
+
                     <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4">
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-2">
+                            {/* Visually hidden label for the file input */}
+                            <label htmlFor="filePicker" className="sr-only">
+                                Add files
+                            </label>
+
+                            {/* [+] button that triggers the hidden input */}
+                            <button
+                                type="button"
+                                onClick={triggerPicker}
+                                className="shrink-0 px-3 py-2 rounded-lg border"
+                                title="Add files"
+                                aria-label="Add files"
+                            >
+                                +
+                            </button>
+
+                            {/* Hidden file input with an id that matches the label */}
+                            <input
+                                id="filePicker"
+                                ref={fileInputRef}
+                                type="file"
+                                multiple
+                                onChange={onPickFiles}
+                                accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
+                                className="hidden"
+                            />
+
+                            {/* Text box with placeholder (or use a visible <label> if you prefer) */}
                             <input
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -193,9 +342,10 @@ export default function UI() {
                                     import.meta.env.VITE_APP_NAME
                                 }…`}
                                 className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
-                           bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
-                           focus:ring-2 focus:ring-neutral-500/40"
+									bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
+									focus:ring-2 focus:ring-neutral-500/40"
                             />
+
                             <button
                                 onClick={send}
                                 className="px-4 py-2 rounded-lg border"
