@@ -52,24 +52,34 @@ export default function UISidebar({
 
             <div className="space-y-1">
                 {chats.map((c) => {
-                    const labelFull = chatLabel(c);
-                    const label = truncate(labelFull, 48);
-                    const isActive = c.id === activeId;
+                    const fallbackFromUser = c.messages?.find(
+                        (m: any) => m.role === "user"
+                    )?.text;
+                    const fallbackAny = c.messages?.[0]?.text;
+                    const raw =
+                        c.title?.trim?.() ||
+                        "" ||
+                        fallbackFromUser?.trim?.() ||
+                        "" ||
+                        fallbackAny?.trim?.() ||
+                        "" ||
+                        "New chat";
+
+                    const primary =
+                        raw.length > 48 ? raw.slice(0, 47) + "…" : raw;
 
                     return (
                         <button
                             key={c.id}
                             onClick={() => setActiveId(c.id)}
-                            className={`w-full text-left px-3 py-2 rounded-lg border truncate
-                ${
-                    isActive
-                        ? "bg-neutral-100 dark:bg-neutral-900"
-                        : "hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                }`}
-                            title={labelFull}
+                            className={`w-full text-left px-3 py-2 rounded-lg border ${
+                                c.id === activeId
+                                    ? "bg-neutral-100 dark:bg-neutral-900"
+                                    : "hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                            }`}
+                            title={raw}
                         >
-                            <div className="truncate font-medium">{label}</div>
-                            {/* No second line, no "No messages yet" — single line only */}
+                            <div className="truncate">{primary}</div>
                         </button>
                     );
                 })}

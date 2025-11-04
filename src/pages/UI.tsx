@@ -39,13 +39,22 @@ export default function UI() {
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
     function scrollToBottom(smooth = true) {
-        // let layout paint, then scroll
-        requestAnimationFrame(() => {
-            bottomRef.current?.scrollIntoView({
+        const el = scrollerRef.current;
+        if (el) {
+            // scroll the actual chat scroller
+            el.scrollTo({
+                top: el.scrollHeight,
                 behavior: smooth ? "smooth" : "auto",
-                block: "end",
             });
-        });
+        } else {
+            // fallback: let browser pick a scrollable ancestor
+            requestAnimationFrame(() => {
+                bottomRef.current?.scrollIntoView({
+                    behavior: smooth ? "smooth" : "auto",
+                    block: "end",
+                });
+            });
+        }
     }
 
     //const nearBottom = (el: HTMLElement, thresholdPx = 160) =>
@@ -78,9 +87,10 @@ export default function UI() {
 
     function newChat() {
         const id = crypto.randomUUID();
-        const chat: Chat = { id, title: "New chat", messages: [] as any };
+        const chat: Chat = { id, title: "", messages: [] as any };
         setChats([chat, ...chats]);
         setActiveId(id);
+        scrollToBottom(false);
     }
 
     // ---------- [+] picker handlers ----------
@@ -246,10 +256,10 @@ export default function UI() {
             />
 
             {/* Main chat column */}
-            <main className="flex-1 h-full flex flex-col">
+            <main className="flex-1 h-full min-h-0 flex flex-col">
                 {/* Messages list */}
                 <div
-                    className="flex-1 overflow-y-scroll"
+                    className="flex-1 min-h-0 overflow-y-auto"
                     style={{ scrollbarGutter: "stable both-edges" as any }}
                     ref={scrollerRef}
                 >
