@@ -32,7 +32,13 @@ export default function UI() {
 
     const [input, setInput] = useState("");
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    // --- autoscroll refs ---
+    const scrollerRef = useRef<HTMLDivElement | null>(null);
+    const bottomRef = useRef<HTMLDivElement | null>(null);
+    const nearBottom = (el: HTMLElement, thresholdPx = 160) =>
+        el.scrollHeight - (el.scrollTop + el.clientHeight) <= thresholdPx;
 
     const nav = useNavigate();
 
@@ -43,6 +49,20 @@ export default function UI() {
     }, []);
 
     const active = chats.find((c) => c.id === activeId)!;
+
+    // follow new messages if the user is already near the bottom
+    useEffect(() => {
+        const scroller = scrollerRef.current;
+        if (!scroller) return;
+        if (nearBottom(scroller)) {
+            requestAnimationFrame(() => {
+                bottomRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "end",
+                });
+            });
+        }
+    }, [activeId, active.messages]);
 
     function newChat() {
         const id = crypto.randomUUID();
@@ -59,8 +79,7 @@ export default function UI() {
     function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
-        // simple UI guard: ignore files > 50MB each
-        const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024);
+        const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024); // 50MB UI guard
         setPendingFiles((prev) => [...prev, ...filtered]);
         e.currentTarget.value = ""; // allow re-picking same files later
     }
@@ -99,14 +118,15 @@ export default function UI() {
                 c.id === currentChatId
                     ? {
                           ...c,
-                          messages: [
-                              ...(c.messages as any),
-                              {
-                                  role: "user",
-                                  text: text || "(no text)",
-                                  attachments,
-                              } as ChatMessage,
-                          ],
+                          title:
+                              c.title && c.title.trim().length
+                                  ? c.title
+                                  : text
+                                  ? text.length > 48
+                                      ? text.slice(0, 47) + "…"
+                                      : text
+                                  : "New chat",
+                          messages: [...c.messages, { role: "user", text }],
                       }
                     : c
             )
@@ -217,6 +237,7 @@ export default function UI() {
                 <div
                     className="flex-1 overflow-y-scroll"
                     style={{ scrollbarGutter: "stable both-edges" as any }}
+                    ref={scrollerRef}
                 >
                     {/* centered chat rail */}
                     <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-6 pb-4">
@@ -269,6 +290,10 @@ export default function UI() {
                                     </div>
                                 )
                             )}
+
+                            {/* anchor for autoscroll */}
+                            <div ref={bottomRef} />
+
                             {(active.messages as any).length === 0 && (
                                 <div className="opacity-70 text-sm">
                                     Start a conversation below…
@@ -333,7 +358,7 @@ export default function UI() {
                                 className="hidden"
                             />
 
-                            {/* Text box with placeholder (or use a visible <label> if you prefer) */}
+                            {/* Text box */}
                             <input
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
