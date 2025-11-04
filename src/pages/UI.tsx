@@ -37,8 +37,19 @@ export default function UI() {
     // --- autoscroll refs ---
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
-    const nearBottom = (el: HTMLElement, thresholdPx = 160) =>
-        el.scrollHeight - (el.scrollTop + el.clientHeight) <= thresholdPx;
+
+    function scrollToBottom(smooth = true) {
+        // let layout paint, then scroll
+        requestAnimationFrame(() => {
+            bottomRef.current?.scrollIntoView({
+                behavior: smooth ? "smooth" : "auto",
+                block: "end",
+            });
+        });
+    }
+
+    //const nearBottom = (el: HTMLElement, thresholdPx = 160) =>
+    //    el.scrollHeight - (el.scrollTop + el.clientHeight) <= thresholdPx;
 
     const nav = useNavigate();
 
@@ -52,7 +63,8 @@ export default function UI() {
 
     // follow new messages if the user is already near the bottom
     useEffect(() => {
-        const scroller = scrollerRef.current;
+        scrollToBottom(true);
+        /*const scroller = scrollerRef.current;
         if (!scroller) return;
         if (nearBottom(scroller)) {
             requestAnimationFrame(() => {
@@ -61,8 +73,8 @@ export default function UI() {
                     block: "end",
                 });
             });
-        }
-    }, [activeId, active.messages]);
+        }*/
+    }, [activeId, active.messages.length]);
 
     function newChat() {
         const id = crypto.randomUUID();
@@ -131,6 +143,7 @@ export default function UI() {
                     : c
             )
         );
+        scrollToBottom(false);
 
         // optimistic typing bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
@@ -184,6 +197,7 @@ export default function UI() {
                         : c
                 )
             );
+            scrollToBottom(true);
         } catch {
             setChats((prev) =>
                 prev.map((c) =>
