@@ -144,7 +144,7 @@ export default function Home() {
     return (
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
             {/* LOGO */}
-            <section className="pt-1 sm:pt-3">
+            <section className="pt-1 sm:pt-1">
                 <Reveal className="text-center space-y-2 sm:space-y-3g">
                     <img
                         src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
@@ -168,11 +168,11 @@ export default function Home() {
 
                 {/* Image / banner */}
                 <Reveal className="mt-6">
-                    <div className="relative w-full h-56 sm:h-72 md:h-96 rounded-2xl overflow-hidden">
+                    <div className="relative w-full h-56 sm:h-72 md:h-120 rounded-2xl overflow-hidden">
                         <img
                             src="/homestudio.png"
                             alt="Producer smiling in a neon-lit home studio"
-                            className="absolute inset-0 h-full w-full object-cover"
+                            className="absolute inset-0 w-full h-full object-cover"
                             loading="eager"
                             decoding="async"
                         />
@@ -181,7 +181,7 @@ export default function Home() {
             </section>
 
             {/* WHAT IS YSONG */}
-            <section className="mt-12 sm:mt-16">
+            <section className="mt-6 sm:mt-8">
                 <Reveal as="h2" className="text-2xl sm:text-3xl font-bold">
                     What is {import.meta.env.VITE_APP_NAME}?
                 </Reveal>
