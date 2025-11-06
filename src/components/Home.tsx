@@ -168,13 +168,19 @@ export default function Home() {
 
                 {/* Image / banner */}
                 <Reveal className="mt-6">
-                    <div className="relative w-full h-56 sm:h-72 md:h-96 rounded-2xl overflow-hidden">
+                    <div className="relative w-full rounded-2xl bg-neutral-900/30">
                         <img
                             src="/homestudio.png"
                             alt="Producer smiling in a neon-lit home studio"
-                            className="absolute inset-0 h-full w-full object-cover"
+                            className="
+							block w-full h-auto
+							rounded-2xl
+							object-contain
+							md:max-h-[560px] lg:max-h-[640px]
+						"
                             loading="eager"
                             decoding="async"
+                            fetchPriority="high"
                         />
                     </div>
                 </Reveal>
