@@ -166,25 +166,18 @@ export default function Home() {
                     </p>
                 </Reveal>
 
-                <div className="mx-auto w-full max-w-5xl px-4">
-                    {/* Image / banner */}
-                    <Reveal className="mt-6">
-                        <div className="rounded-2xl overflow-hidden bg-neutral-900/30">
-                            <img
-                                src="/homestudio.png"
-                                alt="Producer smiling in a neon-lit home studio"
-                                className="
-								block w-full h-auto
-								object-contain
-								rounded-2xl
-								"
-                                loading="eager"
-                                decoding="async"
-                                fetchPriority="high"
-                            />
-                        </div>
-                    </Reveal>
-                </div>
+                {/* Image / banner */}
+                <Reveal className="mt-6">
+                    <div className="relative w-full h-56 sm:h-72 md:h-96 rounded-2xl overflow-hidden">
+                        <img
+                            src="/homestudio.png"
+                            alt="Producer smiling in a neon-lit home studio"
+                            className="absolute inset-0 h-full w-full object-cover"
+                            loading="eager"
+                            decoding="async"
+                        />
+                    </div>
+                </Reveal>
             </section>
 
             {/* WHAT IS YSONG */}
