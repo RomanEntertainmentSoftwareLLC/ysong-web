@@ -144,8 +144,8 @@ export default function Home() {
     return (
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
             {/* LOGO */}
-            <section className="pt-2 sm:pt-4 md:pt-6">
-                <Reveal className="text-center space-y-2 sm:space-y-3">
+            <section className="pt-1 sm:pt-3">
+                <Reveal className="text-center space-y-2 sm:space-y-3g">
                     <img
                         src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
                         alt={import.meta.env.VITE_APP_NAME}
