@@ -108,6 +108,11 @@ function App() {
                                     currentUser?.tosAcceptedVersion
                                 }
                                 currentVersion={currentUser?.currentTosVersion}
+                                userId={currentUser?.id}
+                                onAccepted={() => {
+                                    // quick client refresh of /auth/me if you like; optional
+                                    // location.reload();  // brute-force
+                                }}
                             >
                                 <UI />
                             </TosGate>
