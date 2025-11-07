@@ -1,23 +1,31 @@
+// src/ToSGate.tsx
 import { useEffect, useState } from "react";
 
 const TOS_VERSION = "2025-11-05-v1";
 const KEY = `ysong.tos.accepted.${TOS_VERSION}`;
 
-export default function TosGate({ children }: { children: React.ReactNode }) {
+type Props = {
+    children: React.ReactNode;
+    /** ISO timestamp from /auth/me (or undefined/null if not accepted server-side) */
+    userAcceptedAt?: string | null;
+};
+
+export default function ToSGate({ children, userAcceptedAt }: Props) {
     const [ready, setReady] = useState(false);
     const [mustAccept, setMustAccept] = useState(false);
 
     useEffect(() => {
-        const accepted = localStorage.getItem(KEY) === "1";
-        setMustAccept(!accepted);
+        const localAccepted = localStorage.getItem(KEY) === "1";
+        const serverAccepted = Boolean(userAcceptedAt);
+        setMustAccept(!(localAccepted || serverAccepted));
         setReady(true);
-    }, []);
+    }, [userAcceptedAt]);
 
     if (!ready) return null;
 
     async function onAccept() {
         try {
-            // Try to find a bearer token from localStorage (covering common keys)
+            // Try a couple common keys; adjust if you store it differently
             const token =
                 localStorage.getItem("ysong.token") ||
                 localStorage.getItem("token") ||
@@ -30,9 +38,8 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
                 });
             }
         } catch {
-            // ignore network errors; we'll still set local flag below
+            // ignore network errors; still set local flag
         }
-        // local "show once per version"
         localStorage.setItem(KEY, "1");
         setMustAccept(false);
     }
@@ -60,6 +67,7 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
                                 Read full Terms
                             </a>
                         </p>
+
                         <div className="mt-4 h-48 overflow-y-auto rounded-lg bg-neutral-800/60 p-3 text-sm">
                             <ul className="list-disc pl-5 space-y-2">
                                 <li>
@@ -76,6 +84,7 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
                                 </li>
                             </ul>
                         </div>
+
                         <div className="mt-6 flex justify-end gap-3">
                             <button
                                 onClick={() => {
@@ -86,7 +95,7 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
                                 Decline
                             </button>
                             <button
-                                onClick={onAccept} // ← call the handler
+                                onClick={onAccept}
                                 className="rounded-xl px-4 py-2 bg-white text-black font-semibold"
                             >
                                 I Accept

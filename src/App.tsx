@@ -23,6 +23,12 @@ import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
 
+type CurrentUser = {
+    id: string;
+    email: string;
+    tosAcceptedAt?: string | null;
+};
+
 function useMediaQuery(query: string) {
     const get = () =>
         typeof window !== "undefined" && window.matchMedia(query).matches;
@@ -59,6 +65,25 @@ function AppShell() {
 
 function App() {
     const isMobile = useMediaQuery("(max-width: 640px)");
+    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+    const getToken = () =>
+        localStorage.getItem("ysong.token") ||
+        localStorage.getItem("token") ||
+        "";
+
+    useEffect(() => {
+        const token = getToken();
+        if (!token) return;
+
+        fetch("/auth/me", {
+            headers: { Authorization: `Bearer ${token}` },
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (data?.user) setCurrentUser(data.user as CurrentUser);
+            })
+            .catch(() => {});
+    }, []);
 
     return (
         <Routes>
