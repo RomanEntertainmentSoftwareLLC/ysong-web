@@ -23,6 +23,7 @@ import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
 import { ensureSaveChatsDefault } from "./lib/settings";
+import { apiGet } from "./lib/authApi";
 
 type CurrentUser = {
     id: string;
@@ -71,18 +72,12 @@ function App() {
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
     useEffect(() => {
-        const token =
-            localStorage.getItem("ysong.token") ||
-            localStorage.getItem("token") ||
-            "";
-        if (!token) return;
-
-        fetch("/auth/me", { headers: { Authorization: `Bearer ${token}` } })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
-                if (data?.user) setCurrentUser(data.user as CurrentUser);
-            })
-            .catch(() => {});
+        // this hits the API base and includes Authorization automatically
+        apiGet<{ ok: boolean; user: CurrentUser }>("/auth/me")
+            .then((res) => setCurrentUser(res.user))
+            .catch(() => {
+                // leave currentUser as null if the call fails
+            });
     }, []);
 
     useEffect(() => {
