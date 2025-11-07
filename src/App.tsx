@@ -28,6 +28,8 @@ type CurrentUser = {
     id: string;
     email: string;
     tosAcceptedAt?: string | null;
+    tosAcceptedVersion?: string | null;
+    currentTosVersion?: string | null;
 };
 
 function useMediaQuery(query: string) {
@@ -67,18 +69,15 @@ function AppShell() {
 function App() {
     const isMobile = useMediaQuery("(max-width: 640px)");
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
-    const getToken = () =>
-        localStorage.getItem("ysong.token") ||
-        localStorage.getItem("token") ||
-        "";
 
     useEffect(() => {
-        const token = getToken();
+        const token =
+            localStorage.getItem("ysong.token") ||
+            localStorage.getItem("token") ||
+            "";
         if (!token) return;
 
-        fetch("/auth/me", {
-            headers: { Authorization: `Bearer ${token}` },
-        })
+        fetch("/auth/me", { headers: { Authorization: `Bearer ${token}` } })
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
                 if (data?.user) setCurrentUser(data.user as CurrentUser);
@@ -110,6 +109,10 @@ function App() {
                         <RequireAuth>
                             <TosGate
                                 userAcceptedAt={currentUser?.tosAcceptedAt}
+                                userAcceptedVersion={
+                                    currentUser?.tosAcceptedVersion
+                                }
+                                currentVersion={currentUser?.currentTosVersion}
                             >
                                 <UI />
                             </TosGate>
