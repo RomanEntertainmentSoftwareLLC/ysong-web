@@ -78,7 +78,9 @@ function App() {
                     path="/app"
                     element={
                         <RequireAuth>
-                            <TosGate>
+                            <TosGate
+                                userAcceptedAt={currentUser?.tosAcceptedAt}
+                            >
                                 <UI />
                             </TosGate>
                         </RequireAuth>

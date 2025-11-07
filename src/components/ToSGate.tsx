@@ -15,6 +15,28 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
 
     if (!ready) return null;
 
+    async function onAccept() {
+        try {
+            // Try to find a bearer token from localStorage (covering common keys)
+            const token =
+                localStorage.getItem("ysong.token") ||
+                localStorage.getItem("token") ||
+                "";
+
+            if (token) {
+                await fetch("/auth/accept-tos", {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+            }
+        } catch {
+            // ignore network errors; we'll still set local flag below
+        }
+        // local "show once per version"
+        localStorage.setItem(KEY, "1");
+        setMustAccept(false);
+    }
+
     return (
         <>
             {children}
@@ -64,10 +86,7 @@ export default function TosGate({ children }: { children: React.ReactNode }) {
                                 Decline
                             </button>
                             <button
-                                onClick={() => {
-                                    localStorage.setItem(KEY, "1");
-                                    setMustAccept(false);
-                                }}
+                                onClick={onAccept} // ← call the handler
                                 className="rounded-xl px-4 py-2 bg-white text-black font-semibold"
                             >
                                 I Accept
