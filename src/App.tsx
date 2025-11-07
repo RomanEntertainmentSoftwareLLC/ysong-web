@@ -22,6 +22,7 @@ import RequireAuth from "./components/RequireAuth";
 import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
+import { ensureSaveChatsDefault } from "./lib/settings";
 
 type CurrentUser = {
     id: string;
@@ -83,6 +84,10 @@ function App() {
                 if (data?.user) setCurrentUser(data.user as CurrentUser);
             })
             .catch(() => {});
+    }, []);
+
+    useEffect(() => {
+        ensureSaveChatsDefault(false); // default OFF
     }, []);
 
     return (

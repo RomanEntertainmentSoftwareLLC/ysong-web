@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiGet, apiPost, clearToken } from "../lib/authApi";
+import { getSaveChatsFlag } from "../lib/settings"; // ← NEW
 import UISidebar, { type Chat } from "../components/UISidebar";
 
 type ChatMessage = {
@@ -41,13 +42,11 @@ export default function UI() {
     function scrollToBottom(smooth = true) {
         const el = scrollerRef.current;
         if (el) {
-            // scroll the actual chat scroller
             el.scrollTo({
                 top: el.scrollHeight,
                 behavior: smooth ? "smooth" : "auto",
             });
         } else {
-            // fallback: let browser pick a scrollable ancestor
             requestAnimationFrame(() => {
                 bottomRef.current?.scrollIntoView({
                     behavior: smooth ? "smooth" : "auto",
@@ -57,35 +56,36 @@ export default function UI() {
         }
     }
 
-    //const nearBottom = (el: HTMLElement, thresholdPx = 160) =>
-    //    el.scrollHeight - (el.scrollTop + el.clientHeight) <= thresholdPx;
-
     const nav = useNavigate();
 
+    // Fetch minimal profile (email)
     useEffect(() => {
         apiGet<{ ok: boolean; user: { id: string; email: string } }>("/auth/me")
             .then((u) => setMe({ email: u.user.email }))
             .catch(() => {});
     }, []);
 
+    // 🔒 Hydrate chats from server ONLY if "Save to cloud" is ON
+    useEffect(() => {
+        if (!getSaveChatsFlag()) return; // flag OFF ➜ stay local-only
+        apiGet<{ chats: Chat[] }>("/api/chats")
+            .then((data) => {
+                if (!data?.chats || !Array.isArray(data.chats)) return;
+                setChats(data.chats);
+                if (data.chats.length) setActiveId(data.chats[0].id);
+            })
+            .catch(() => {});
+    }, []);
+
     const active = chats.find((c) => c.id === activeId)!;
 
-    // follow new messages if the user is already near the bottom
+    // follow new messages
     useEffect(() => {
         scrollToBottom(true);
-        /*const scroller = scrollerRef.current;
-        if (!scroller) return;
-        if (nearBottom(scroller)) {
-            requestAnimationFrame(() => {
-                bottomRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "end",
-                });
-            });
-        }*/
     }, [activeId, active.messages.length]);
 
     function newChat() {
+        // Local-only creation for now; when you flip saving ON, we’ll add POST /api/chats
         const id = crypto.randomUUID();
         const chat: Chat = { id, title: "", messages: [] as any };
         setChats([chat, ...chats]);
@@ -134,7 +134,7 @@ export default function UI() {
                 ?.messages as ChatMessage[]) || []
         ).map((m) => ({ role: m.role, content: m.text }));
 
-        // show user msg immediately (with local-only attachments metadata)
+        // show user msg immediately
         setChats((prev) =>
             prev.map((c) =>
                 c.id === currentChatId
