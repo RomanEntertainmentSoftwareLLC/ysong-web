@@ -6,7 +6,7 @@ import Desktop from "./Desktop";
 import "./App.css";
 
 import Navbar from "./components/NavBar";
-import UINavbar from "./components/UINavBar"; // <-- new in-app navbar
+import UINavbar from "./components/UINavBar";
 
 import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
@@ -71,18 +71,49 @@ function App() {
     const isMobile = useMediaQuery("(max-width: 640px)");
     const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
+    // Helper we can reuse (e.g. after accepting ToS)
+    async function refetchMe() {
+        try {
+            const res = await apiGet<{ ok: boolean; user: CurrentUser }>(
+                "/auth/me"
+            );
+            setCurrentUser(res.user);
+        } catch {
+            // ignore; user might be logged out
+        }
+    }
+
+    // Initial fetch of the signed-in user
     useEffect(() => {
-        // this hits the API base and includes Authorization automatically
-        apiGet<{ ok: boolean; user: CurrentUser }>("/auth/me")
-            .then((res) => setCurrentUser(res.user))
-            .catch(() => {
-                // leave currentUser as null if the call fails
-            });
+        refetchMe();
     }, []);
 
+    // Set your “save chats” default (OFF)
     useEffect(() => {
-        ensureSaveChatsDefault(false); // default OFF
+        ensureSaveChatsDefault(false);
     }, []);
+
+    // ---- ToS anon → per-user key migration -----------------------------------
+    // If an older session stored `ysong.tos.accepted.<ver>.anon` and we now know
+    // the real userId, move that flag to the user-specific key so a different
+    // account on the same browser doesn’t get blocked.
+    useEffect(() => {
+        if (!currentUser?.id) return;
+
+        const ver = currentUser.currentTosVersion || "v0";
+        const anonKey = `ysong.tos.accepted.${ver}.anon`;
+        const userKey = `ysong.tos.accepted.${ver}.${currentUser.id}`;
+
+        const hadAnon = localStorage.getItem(anonKey) === "1";
+        const hasUser = localStorage.getItem(userKey) === "1";
+
+        if (hadAnon && !hasUser) {
+            localStorage.setItem(userKey, "1");
+            // optional: clean up the anon flag so it doesn’t affect other logins
+            localStorage.removeItem(anonKey);
+        }
+    }, [currentUser?.id, currentUser?.currentTosVersion]);
+    // ---------------------------------------------------------------------------
 
     return (
         <Routes>
@@ -98,6 +129,7 @@ function App() {
                 <Route path="/forgot-password" element={<ForgotPassword />} />
                 <Route path="/forgot-sent" element={<ForgotSent />} />
                 <Route path="/terms-of-service" element={<TermsOfService />} />
+
                 <Route
                     path="/app"
                     element={
@@ -109,9 +141,7 @@ function App() {
                                 }
                                 currentVersion={currentUser?.currentTosVersion}
                                 userId={currentUser?.id}
-                                onAccepted={() => {
-                                    /* e.g., refetch /auth/me */
-                                }}
+                                onAccepted={refetchMe} // refresh /auth/me after accept
                             >
                                 <UI />
                             </TosGate>
