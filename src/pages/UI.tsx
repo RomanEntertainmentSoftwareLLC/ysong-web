@@ -3,6 +3,32 @@ import { apiGet, clearToken } from "../lib/authApi";
 import { getSaveChatsFlag } from "../lib/settings";
 import UISidebar, { type Chat } from "../components/UISidebar";
 
+/* ---------- tiny hook: true when viewport >= 1024px (Tailwind lg) ---------- */
+function useMediaQuery(query: string) {
+    const getMatch = () =>
+        typeof window !== "undefined"
+            ? window.matchMedia(query).matches
+            : false;
+    const [matches, setMatches] = useState<boolean>(getMatch);
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const m = window.matchMedia(query);
+        const onChange = () => setMatches(m.matches);
+        // modern browsers
+        m.addEventListener?.("change", onChange);
+        // older Safari
+        m.addListener?.(onChange);
+        return () => {
+            m.removeEventListener?.("change", onChange);
+            m.removeListener?.(onChange);
+        };
+    }, [query]);
+
+    return matches;
+}
+/* ------------------------------------------------------------------------- */
+
 type ChatMessage = {
     role: "user" | "assistant";
     text: string;
@@ -37,6 +63,9 @@ export default function UI() {
     // autoscroll
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
+
+    // responsive: mount/dismount mobile UI decisively
+    const isLgUp = useMediaQuery("(min-width: 1024px)");
 
     // mobile drawer
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -84,20 +113,20 @@ export default function UI() {
         scrollToBottom(true);
     }, [activeId, active.messages.length]);
 
-    // close drawer when a chat is selected
+    // close drawer when a chat is selected (mobile only)
     useEffect(() => {
-        if (mobileSidebarOpen) setMobileSidebarOpen(false);
+        if (!isLgUp && mobileSidebarOpen) setMobileSidebarOpen(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeId]);
 
-    // close drawer on Escape
+    // close drawer on Escape (mobile only)
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") setMobileSidebarOpen(false);
         };
-        window.addEventListener("keydown", onKey);
+        if (!isLgUp) window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, []);
+    }, [isLgUp]);
 
     function newChat() {
         const id = crypto.randomUUID();
@@ -256,7 +285,7 @@ export default function UI() {
         }
     }
 
-    // A11y: keep aria-expanded accurate without triggering the static linter
+    // A11y: reflect expanded state on the hamburger when it exists
     const menuBtnRef = useRef<HTMLButtonElement>(null);
     useEffect(() => {
         const el = menuBtnRef.current;
@@ -266,71 +295,9 @@ export default function UI() {
 
     return (
         <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
-            {/* Mobile hamburger (hidden on >= lg) */}
-            <button
-                ref={menuBtnRef}
-                type="button"
-                className="lg:hidden absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-lg border"
-                aria-controls="mobile-sidebar"
-                aria-haspopup="dialog"
-                aria-label="Menu"
-                onClick={() => setMobileSidebarOpen((v) => !v)}
-            >
-                <span
-                    aria-hidden="true"
-                    className="block h-[2px] w-5 bg-current"
-                />
-                <span
-                    aria-hidden="true"
-                    className="block h-[2px] w-5 bg-current mt-1.5"
-                />
-                <span
-                    aria-hidden="true"
-                    className="block h-[2px] w-5 bg-current mt-1.5"
-                />
-            </button>
-
-            {/* Desktop sidebar (>= lg) */}
-            <div className="hidden lg:block shrink-0 w-[280px] border-r border-neutral-200 dark:border-neutral-800">
-                <UISidebar
-                    chats={chats as any}
-                    activeId={activeId}
-                    setActiveId={setActiveId}
-                    newChat={newChat}
-                    meEmail={me?.email}
-                    onLogout={logout}
-                />
-            </div>
-
-            {/* Mobile drawer (< lg) */}
-            <div
-                className={`lg:hidden fixed inset-0 z-40 ${
-                    mobileSidebarOpen ? "" : "pointer-events-none"
-                }`}
-            >
-                {/* overlay */}
-                <div
-                    className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
-                        mobileSidebarOpen ? "opacity-100" : "opacity-0"
-                    }`}
-                    aria-hidden="true"
-                    onClick={() => setMobileSidebarOpen(false)}
-                />
-                {/* panel */}
-                <div
-                    id="mobile-sidebar"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="mobile-sidebar-title"
-                    className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
-                        mobileSidebarOpen
-                            ? "translate-x-0"
-                            : "-translate-x-full"
-                    }`}
-                >
-                    <h2 id="mobile-sidebar-title" className="sr-only">
-                        Sidebar
-                    </h2>
+            {/* Desktop sidebar — ONLY renders when >= lg */}
+            {isLgUp && (
+                <div className="shrink-0 w-[280px] border-r border-neutral-200 dark:border-neutral-800">
                     <UISidebar
                         chats={chats as any}
                         activeId={activeId}
@@ -340,7 +307,76 @@ export default function UI() {
                         onLogout={logout}
                     />
                 </div>
-            </div>
+            )}
+
+            {/* Mobile hamburger + drawer — ONLY render when < lg */}
+            {!isLgUp && (
+                <>
+                    {/* Hamburger */}
+                    <button
+                        ref={menuBtnRef}
+                        type="button"
+                        className="absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-lg border"
+                        aria-controls="mobile-sidebar"
+                        aria-haspopup="dialog"
+                        aria-label="Menu"
+                        onClick={() => setMobileSidebarOpen((v) => !v)}
+                    >
+                        <span
+                            aria-hidden="true"
+                            className="block h-[2px] w-5 bg-current"
+                        />
+                        <span
+                            aria-hidden="true"
+                            className="block h-[2px] w-5 bg-current mt-1.5"
+                        />
+                        <span
+                            aria-hidden="true"
+                            className="block h-[2px] w-5 bg-current mt-1.5"
+                        />
+                    </button>
+
+                    {/* Mobile drawer (< lg) */}
+                    <div
+                        className={`lg:hidden fixed inset-0 z-40 ${
+                            mobileSidebarOpen ? "" : "pointer-events-none"
+                        }`}
+                    >
+                        {/* overlay – decorative only */}
+                        <div
+                            aria-hidden="true"
+                            className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
+                                mobileSidebarOpen ? "opacity-100" : "opacity-0"
+                            }`}
+                            onClick={() => setMobileSidebarOpen(false)}
+                        />
+                        {/* panel */}
+                        <div
+                            id="mobile-sidebar"
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="mobile-sidebar-title"
+                            className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
+                                mobileSidebarOpen
+                                    ? "translate-x-0"
+                                    : "-translate-x-full"
+                            }`}
+                        >
+                            <h2 id="mobile-sidebar-title" className="sr-only">
+                                Sidebar
+                            </h2>
+                            <UISidebar
+                                chats={chats as any}
+                                activeId={activeId}
+                                setActiveId={setActiveId}
+                                newChat={newChat}
+                                meEmail={me?.email}
+                                onLogout={logout}
+                            />
+                        </div>
+                    </div>
+                </>
+            )}
 
             {/* Main chat column */}
             <main className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
