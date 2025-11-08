@@ -42,7 +42,12 @@ export default function TosGate({
 
         const localAccepted = localStorage.getItem(KEY) === "1";
 
-        setMustAccept(!(serverAccepted || localAccepted));
+        // **Key change**:
+        // - If signed in (userId truthy): only the server decides.
+        // - If not signed in / not loaded yet: use the local hint.
+        const accepted = userId ? serverAccepted : localAccepted;
+
+        setMustAccept(!accepted);
         setReady(true);
     }, [userId, userAcceptedAt, userAcceptedVersion, currentVersion, KEY]);
 
