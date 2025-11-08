@@ -85,6 +85,11 @@ function App() {
 
     // Initial fetch of the signed-in user
     useEffect(() => {
+        const token =
+            localStorage.getItem("ys_token") ||
+            localStorage.getItem("ysong.token"); // legacy fallback
+
+        if (!token) return; // <- don't call /auth/me when logged out
         refetchMe();
     }, []);
 
