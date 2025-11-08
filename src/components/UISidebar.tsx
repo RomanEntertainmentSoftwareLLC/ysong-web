@@ -77,7 +77,10 @@ export default function UISidebar({
                     {onLogout && (
                         <button
                             onClick={onLogout}
-                            className="ml-auto text-xs text-rose-600 hover:underline"
+                            className="ml-auto text-sm px-3 py-1.5 whitespace-nowrap rounded-lg border
+									border-neutral-300 dark:border-neutral-700
+									hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                            title="Sign out"
                         >
                             Sign out
                         </button>
