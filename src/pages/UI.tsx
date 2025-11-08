@@ -15,10 +15,8 @@ function useMediaQuery(query: string) {
         if (typeof window === "undefined") return;
         const m = window.matchMedia(query);
         const onChange = () => setMatches(m.matches);
-        // modern browsers
         m.addEventListener?.("change", onChange);
-        // older Safari
-        m.addListener?.(onChange);
+        m.addListener?.(onChange); // older Safari
         return () => {
             m.removeEventListener?.("change", onChange);
             m.removeListener?.(onChange);
@@ -64,7 +62,7 @@ export default function UI() {
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
-    // responsive: mount/dismount mobile UI decisively
+    // responsive
     const isLgUp = useMediaQuery("(min-width: 1024px)");
 
     // mobile drawer
@@ -127,6 +125,26 @@ export default function UI() {
         if (!isLgUp) window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
     }, [isLgUp]);
+
+    // --- POLISH #1: lock page scroll while drawer is open ---
+    useEffect(() => {
+        const html = document.documentElement;
+        const body = document.body;
+        const prevHtml = html.style.overflow;
+        const prevBody = body.style.overflow;
+
+        if (mobileSidebarOpen) {
+            html.style.overflow = "hidden";
+            body.style.overflow = "hidden";
+        } else {
+            html.style.overflow = prevHtml || "";
+            body.style.overflow = prevBody || "";
+        }
+        return () => {
+            html.style.overflow = prevHtml || "";
+            body.style.overflow = prevBody || "";
+        };
+    }, [mobileSidebarOpen]);
 
     function newChat() {
         const id = crypto.randomUUID();
@@ -285,12 +303,21 @@ export default function UI() {
         }
     }
 
-    // A11y: reflect expanded state on the hamburger when it exists
+    // A11y: reflect expanded state + return focus after closing
     const menuBtnRef = useRef<HTMLButtonElement>(null);
     useEffect(() => {
         const el = menuBtnRef.current;
         if (!el) return;
         el.setAttribute("aria-expanded", mobileSidebarOpen ? "true" : "false");
+    }, [mobileSidebarOpen]);
+
+    // --- POLISH #2: return focus to hamburger after the drawer closes ---
+    const wasOpenRef = useRef(false);
+    useEffect(() => {
+        if (wasOpenRef.current && !mobileSidebarOpen) {
+            menuBtnRef.current?.focus();
+        }
+        wasOpenRef.current = mobileSidebarOpen;
     }, [mobileSidebarOpen]);
 
     return (
@@ -322,12 +349,7 @@ export default function UI() {
                             mobileSidebarOpen ? "Close sidebar" : "Open sidebar"
                         }
                         onClick={() => setMobileSidebarOpen((v) => !v)}
-                        className="
-							lg:hidden fixed top-[4rem]
-							right-[max(0.75rem,env(safe-area-inset-right))]
-							z-[70] inline-flex h-10 w-10 items-center justify-center
-							rounded-xl border bg-black/25 dark:bg-white/10 backdrop-blur
-						"
+                        className="lg:hidden fixed top-[4rem] right-[max(0.75rem,env(safe-area-inset-right))] z-[70] inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-black/25 dark:bg-white/10 backdrop-blur"
                     >
                         {/* hamburger */}
                         <svg
@@ -380,12 +402,11 @@ export default function UI() {
                             role="dialog"
                             aria-modal="true"
                             aria-labelledby="mobile-sidebar-title"
-                            className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl
-										transition-transform duration-300 ${
-                                            mobileSidebarOpen
-                                                ? "translate-x-0"
-                                                : "-translate-x-full"
-                                        }`}
+                            className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
+                                mobileSidebarOpen
+                                    ? "translate-x-0"
+                                    : "-translate-x-full"
+                            }`}
                         >
                             <div className="relative h-full">
                                 <h2
