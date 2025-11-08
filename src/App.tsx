@@ -110,7 +110,7 @@ function App() {
                                 currentVersion={currentUser?.currentTosVersion}
                                 userId={currentUser?.id}
                                 onAccepted={() => {
-                                    // quick client refresh of /auth/me if you like; optional
+                                    // quick client refresh of /auth/me; optional
                                     // location.reload();  // brute-force
                                 }}
                             >
