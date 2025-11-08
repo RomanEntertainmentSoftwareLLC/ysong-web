@@ -316,33 +316,34 @@ export default function UI() {
                     <button
                         ref={menuBtnRef}
                         type="button"
-                        className="absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-lg border"
+                        className="lg:hidden fixed left-3 top-[4rem] z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border
+									bg-black/20 dark:bg-white/10 backdrop-blur"
                         aria-controls="mobile-sidebar"
                         aria-haspopup="dialog"
-                        aria-label="Menu"
+                        aria-label="Open sidebar"
                         onClick={() => setMobileSidebarOpen((v) => !v)}
                     >
-                        <span
+                        {/* SVG hamburger = consistent on all devices */}
+                        <svg
+                            viewBox="0 0 24 24"
+                            className="h-6 w-6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                            strokeLinecap="round"
                             aria-hidden="true"
-                            className="block h-[2px] w-5 bg-current"
-                        />
-                        <span
-                            aria-hidden="true"
-                            className="block h-[2px] w-5 bg-current mt-1.5"
-                        />
-                        <span
-                            aria-hidden="true"
-                            className="block h-[2px] w-5 bg-current mt-1.5"
-                        />
+                        >
+                            <path d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
                     </button>
 
-                    {/* Mobile drawer (< lg) */}
+                    {/* MOBILE: slide-in drawer */}
                     <div
                         className={`lg:hidden fixed inset-0 z-40 ${
                             mobileSidebarOpen ? "" : "pointer-events-none"
                         }`}
                     >
-                        {/* overlay – decorative only */}
+                        {/* overlay */}
                         <div
                             aria-hidden="true"
                             className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
@@ -356,23 +357,53 @@ export default function UI() {
                             role="dialog"
                             aria-modal="true"
                             aria-labelledby="mobile-sidebar-title"
-                            className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
-                                mobileSidebarOpen
-                                    ? "translate-x-0"
-                                    : "-translate-x-full"
-                            }`}
+                            className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl
+										transition-transform duration-300 ${
+                                            mobileSidebarOpen
+                                                ? "translate-x-0"
+                                                : "-translate-x-full"
+                                        }`}
                         >
-                            <h2 id="mobile-sidebar-title" className="sr-only">
-                                Sidebar
-                            </h2>
-                            <UISidebar
-                                chats={chats as any}
-                                activeId={activeId}
-                                setActiveId={setActiveId}
-                                newChat={newChat}
-                                meEmail={me?.email}
-                                onLogout={logout}
-                            />
+                            <div className="relative h-full">
+                                <h2
+                                    id="mobile-sidebar-title"
+                                    className="sr-only"
+                                >
+                                    Sidebar
+                                </h2>
+
+                                {/* Close button inside the drawer */}
+                                <button
+                                    type="button"
+                                    aria-label="Close sidebar"
+                                    className="absolute right-3 top-3 h-9 w-9 inline-flex items-center justify-center rounded-lg border"
+                                    onClick={() => setMobileSidebarOpen(false)}
+                                >
+                                    <svg
+                                        viewBox="0 0 24 24"
+                                        className="h-5 w-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth={2}
+                                        strokeLinecap="round"
+                                        aria-hidden="true"
+                                    >
+                                        <path d="M6 6l12 12M6 18L18 6" />
+                                    </svg>
+                                </button>
+
+                                {/* Sidebar content */}
+                                <div className="h-full overflow-y-auto">
+                                    <UISidebar
+                                        chats={chats as any}
+                                        activeId={activeId}
+                                        setActiveId={setActiveId}
+                                        newChat={newChat}
+                                        meEmail={me?.email}
+                                        onLogout={logout}
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </>
