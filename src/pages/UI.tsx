@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { apiGet, apiPost, clearToken } from "../lib/authApi";
+import { apiGet, clearToken } from "../lib/authApi";
 import { getSaveChatsFlag } from "../lib/settings"; // ← NEW
 import UISidebar, { type Chat } from "../components/UISidebar";
 
@@ -39,6 +38,9 @@ export default function UI() {
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
+    // --- MOBILE: sidebar drawer state ---
+    const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
     function scrollToBottom(smooth = true) {
         const el = scrollerRef.current;
         if (el) {
@@ -55,8 +57,6 @@ export default function UI() {
             });
         }
     }
-
-    const nav = useNavigate();
 
     // Fetch minimal profile (email)
     useEffect(() => {
@@ -83,6 +83,21 @@ export default function UI() {
     useEffect(() => {
         scrollToBottom(true);
     }, [activeId, active.messages.length]);
+
+    // MOBILE: close drawer when active chat changes (user tapped a chat)
+    useEffect(() => {
+        if (mobileSidebarOpen) setMobileSidebarOpen(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeId]);
+
+    // MOBILE: close drawer on Escape
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setMobileSidebarOpen(false);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
 
     function newChat() {
         // Local-only creation for now; when you flip saving ON, we’ll add POST /api/chats
@@ -148,7 +163,10 @@ export default function UI() {
                                       ? text.slice(0, 47) + "…"
                                       : text
                                   : "New chat",
-                          messages: [...c.messages, { role: "user", text }],
+                          messages: [
+                              ...c.messages,
+                              { role: "user", text, attachments },
+                          ],
                       }
                     : c
             )
@@ -244,24 +262,99 @@ export default function UI() {
         }
     }
 
+    const menuBtnRef = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        const el = menuBtnRef.current;
+        if (!el) return;
+        el.setAttribute("aria-expanded", mobileSidebarOpen ? "true" : "false");
+        // label text stays static via aria-labelledby; no need to set aria-label here anymore
+    }, [mobileSidebarOpen]);
+
     return (
         <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
-            {/* Sidebar */}
-            <UISidebar
-                chats={chats as any}
-                activeId={activeId}
-                setActiveId={setActiveId}
-                newChat={newChat}
-                meEmail={me?.email}
-                onLogout={logout}
-            />
+            {/* MOBILE: Hamburger (inside this region so it's below the global header) */}
+            <button
+                ref={menuBtnRef}
+                type="button"
+                className="lg:hidden absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-lg border"
+                aria-controls="mobile-sidebar"
+                aria-haspopup="dialog"
+                aria-labelledby="mobile-menu-label"
+                onClick={() => setMobileSidebarOpen((v) => !v)}
+            >
+                <span id="mobile-menu-label" className="sr-only">
+                    Menu
+                </span>
+                <span
+                    aria-hidden="true"
+                    className="block h-[2px] w-5 bg-current"
+                />
+                <span
+                    aria-hidden="true"
+                    className="block h-[2px] w-5 bg-current mt-1.5"
+                />
+                <span
+                    aria-hidden="true"
+                    className="block h-[2px] w-5 bg-current mt-1.5"
+                />
+            </button>
+
+            {/* Desktop sidebar */}
+            <div className="hidden lg:block shrink-0 w-[280px] border-r border-neutral-200 dark:border-neutral-800">
+                <UISidebar
+                    chats={chats as any}
+                    activeId={activeId}
+                    setActiveId={setActiveId}
+                    newChat={newChat}
+                    meEmail={me?.email}
+                    onLogout={logout}
+                />
+            </div>
+
+            {/* Mobile drawer sidebar */}
+            <div
+                className={`lg:hidden fixed inset-0 z-40 ${
+                    mobileSidebarOpen ? "" : "pointer-events-none"
+                }`}
+            >
+                <div
+                    className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
+                        mobileSidebarOpen ? "opacity-100" : "opacity-0"
+                    }`}
+                    aria-hidden="true"
+                    onClick={() => setMobileSidebarOpen(false)}
+                />
+                <div
+                    id="mobile-sidebar"
+                    className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
+                        mobileSidebarOpen
+                            ? "translate-x-0"
+                            : "-translate-x-full"
+                    }`}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="mobile-sidebar-title"
+                >
+                    <h2 id="mobile-sidebar-title" className="sr-only">
+                        Sidebar
+                    </h2>
+                    <UISidebar
+                        chats={chats as any}
+                        activeId={activeId}
+                        setActiveId={setActiveId}
+                        newChat={newChat}
+                        meEmail={me?.email}
+                        onLogout={logout}
+                    />
+                </div>
+            </div>
 
             {/* Main chat column */}
-            <main className="flex-1 h-full min-h-0 flex flex-col">
+            <main className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
                 {/* Messages list */}
                 <div
                     className="flex-1 min-h-0 overflow-y-auto"
-                    style={{ scrollbarGutter: "stable both-edges" as any }}
+                    style={{ scrollbarGutter: "stable both-edges" } as any}
                     ref={scrollerRef}
                 >
                     {/* centered chat rail */}
@@ -279,12 +372,12 @@ export default function UI() {
                                     >
                                         <div
                                             className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
-                      ${
-                          m.role === "user"
-                              ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                              : "bg-neutral-100 dark:bg-neutral-900"
-                      }
-                      max-w-[70%]`}
+                                            ${
+                                                m.role === "user"
+                                                    ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                                                    : "bg-neutral-100 dark:bg-neutral-900"
+                                            }
+                                            max-w-[85%] sm:max-w-[70%]`}
                                         >
                                             {m.text}
                                             {m.attachments &&
@@ -354,7 +447,7 @@ export default function UI() {
                         </div>
                     )}
 
-                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4">
+                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4 pb-[env(safe-area-inset-bottom)]">
                         <div className="flex items-center gap-2">
                             {/* Visually hidden label for the file input */}
                             <label htmlFor="filePicker" className="sr-only">
@@ -365,7 +458,7 @@ export default function UI() {
                             <button
                                 type="button"
                                 onClick={triggerPicker}
-                                className="shrink-0 px-3 py-2 rounded-lg border"
+                                className="shrink-0 h-10 w-10 rounded-lg border flex items-center justify-center"
                                 title="Add files"
                                 aria-label="Add files"
                             >
@@ -399,6 +492,7 @@ export default function UI() {
                             <button
                                 onClick={send}
                                 className="px-4 py-2 rounded-lg border"
+                                aria-label="Send message"
                             >
                                 Send
                             </button>
