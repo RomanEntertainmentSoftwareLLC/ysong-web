@@ -318,17 +318,23 @@ export default function UI() {
                         type="button"
                         aria-controls="mobile-sidebar"
                         aria-haspopup="dialog"
-                        aria-label="Open sidebar"
+                        aria-label={
+                            mobileSidebarOpen ? "Close sidebar" : "Open sidebar"
+                        }
                         onClick={() => setMobileSidebarOpen((v) => !v)}
-                        className={`lg:hidden fixed top-[4rem] 
-							right-[max(0.75rem,env(safe-area-inset-right))] 
-							z-50 inline-flex h-10 w-10 items-center justify-center 
-							rounded-xl border bg-black/20 dark:bg-white/10 backdrop-blur 
-							${mobileSidebarOpen ? "opacity-0 pointer-events-none" : ""}`}
+                        className="
+							lg:hidden fixed top-[4rem]
+							right-[max(0.75rem,env(safe-area-inset-right))]
+							z-[70] inline-flex h-10 w-10 items-center justify-center
+							rounded-xl border bg-black/25 dark:bg-white/10 backdrop-blur
+						"
                     >
+                        {/* hamburger */}
                         <svg
                             viewBox="0 0 24 24"
-                            className="h-6 w-6"
+                            className={`${
+                                mobileSidebarOpen ? "hidden" : "block"
+                            } h-6 w-6`}
                             fill="none"
                             stroke="currentColor"
                             strokeWidth={2}
@@ -336,6 +342,21 @@ export default function UI() {
                             aria-hidden="true"
                         >
                             <path d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+
+                        {/* close (X) */}
+                        <svg
+                            viewBox="0 0 24 24"
+                            className={`${
+                                mobileSidebarOpen ? "block" : "hidden"
+                            } h-6 w-6`}
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                            strokeLinecap="round"
+                            aria-hidden="true"
+                        >
+                            <path d="M6 6l12 12M6 18L18 6" />
                         </svg>
                     </button>
 
