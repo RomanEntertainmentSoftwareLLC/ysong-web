@@ -6,7 +6,7 @@ type Props = {
     userAcceptedAt?: string | null;
     userAcceptedVersion?: string | null;
     currentVersion?: string | null;
-    /** pass the signed-in user's id; leave undefined while loading, null if not signed in */
+    /** pass the signed-in user's id; undefined while loading, null if not signed in */
     userId?: string | null;
     /** optional hook for parent to refetch /auth/me after accept */
     onAccepted?: () => void;
@@ -23,36 +23,26 @@ export default function TosGate({
     const [mustAccept, setMustAccept] = useState(false);
     const [ready, setReady] = useState(false);
 
-    // Namespaced per TOS version and per user (or "anon" when no user)
+    // Namespaced per TOS version + per user (or "anon" before we know the user)
     const KEY = useMemo(() => {
         const ver = currentVersion || "v0";
         const uid = userId || "anon";
         return `ysong.tos.accepted.${ver}.${uid}`;
     }, [currentVersion, userId]);
 
-    // Decide whether to show the TOS modal.
     useEffect(() => {
-        // While loading user (userId === undefined), don't decide yet.
-        if (typeof userId === "undefined") {
-            setReady(false);
-            return;
-        }
+        // Decide immediately:
+        // - If we already know the user, trust the server fields.
+        // - Otherwise (loading or anon), rely on the local key.
+        const serverAccepted =
+            !!userId &&
+            !!userAcceptedAt &&
+            !!userAcceptedVersion &&
+            userAcceptedVersion === currentVersion;
 
-        // If signed in, server is the source of truth — ignore local flag.
-        if (userId) {
-            const acceptedByServer =
-                !!userAcceptedAt &&
-                !!userAcceptedVersion &&
-                userAcceptedVersion === currentVersion;
+        const localAccepted = localStorage.getItem(KEY) === "1";
 
-            setMustAccept(!acceptedByServer);
-            setReady(true);
-            return;
-        }
-
-        // Anonymous session: use the scoped localStorage key.
-        const acceptedLocal = localStorage.getItem(KEY) === "1";
-        setMustAccept(!acceptedLocal);
+        setMustAccept(!(serverAccepted || localAccepted));
         setReady(true);
     }, [userId, userAcceptedAt, userAcceptedVersion, currentVersion, KEY]);
 
@@ -60,18 +50,17 @@ export default function TosGate({
 
     async function onAccept() {
         try {
-            // If signed in, persist to server.
             if (userId) {
                 await apiPost("/auth/accept-tos", {});
             }
         } catch {
-            // Network hiccups are tolerated; local key still gates the UI.
+            // tolerate network hiccups; we'll still set the local flag
         }
 
-        // Persist local hint for the current scope (version + user/anon)
+        // Persist local hint for this scope (version + user/anon)
         localStorage.setItem(KEY, "1");
 
-        // Clean up any legacy anon keys so they can't mask future users.
+        // Clean up legacy anon flags so they don’t affect new users later
         try {
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i) || "";
@@ -80,20 +69,16 @@ export default function TosGate({
                     k.endsWith(".anon")
                 ) {
                     localStorage.removeItem(k);
-                    // adjust index since storage shrank
                     i = Math.max(-1, i - 1);
                 }
             }
-        } catch {
-            /* ignore */
-        }
+        } catch {}
 
         setMustAccept(false);
         onAccepted?.();
     }
 
     function onDecline() {
-        // Block app usage until they accept
         window.location.href = "/";
     }
 

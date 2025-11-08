@@ -23,7 +23,7 @@ import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
 import { ensureSaveChatsDefault } from "./lib/settings";
-import { apiGet } from "./lib/authApi";
+import { apiGet, apiPost } from "./lib/authApi";
 
 type CurrentUser = {
     id: string;
@@ -106,18 +106,25 @@ function App() {
         if (!currentUser?.id) return;
 
         const ver = currentUser.currentTosVersion || "v0";
-        const anonKey = `ysong.tos.accepted.${ver}.anon`;
         const userKey = `ysong.tos.accepted.${ver}.${currentUser.id}`;
 
-        const hadAnon = localStorage.getItem(anonKey) === "1";
-        const hasUser = localStorage.getItem(userKey) === "1";
+        const localAccepted = localStorage.getItem(userKey) === "1";
+        const serverAccepted =
+            !!currentUser.tosAcceptedAt &&
+            !!currentUser.tosAcceptedVersion &&
+            currentUser.tosAcceptedVersion === currentUser.currentTosVersion;
 
-        if (hadAnon && !hasUser) {
-            localStorage.setItem(userKey, "1");
-            // optional: clean up the anon flag so it doesn’t affect other logins
-            localStorage.removeItem(anonKey);
+        if (localAccepted && !serverAccepted) {
+            apiPost("/auth/accept-tos", {})
+                .then(() => refetchMe())
+                .catch(() => {});
         }
-    }, [currentUser?.id, currentUser?.currentTosVersion]);
+    }, [
+        currentUser?.id,
+        currentUser?.currentTosVersion,
+        currentUser?.tosAcceptedAt,
+        currentUser?.tosAcceptedVersion,
+    ]);
     // ---------------------------------------------------------------------------
 
     return (
