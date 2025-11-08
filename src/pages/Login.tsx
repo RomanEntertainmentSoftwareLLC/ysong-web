@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
+import { clearToken } from "../lib/authApi";
 
 type ApiUser = { id: string; email: string };
 
@@ -25,6 +26,11 @@ export default function Login() {
         try {
             setStatus("loading");
 
+            // Important: nuke any stale token before logging in again.
+            // If a bad token is still around, subsequent calls in this render
+            // cycle can pick it up.
+            clearToken();
+
             // Expecting { token, user: { id, email } }
             const resp = await apiPost<{ token: string; user: ApiUser }>(
                 "/auth/login",
@@ -34,10 +40,26 @@ export default function Login() {
                 }
             );
 
-            // Persist bearer for subsequent requests (authApi.ts reads it)
+            // Always replace the token we use everywhere
             localStorage.setItem("ys_token", resp.token);
+            // Clean up any legacy key you might have used in the past
+            localStorage.removeItem("ysong_auth_token");
 
-            navigate("/app");
+            // (Optional) sanity check: decode and log which uid we just received
+            try {
+                const payload = JSON.parse(atob(resp.token.split(".")[1]));
+                console.log(
+                    "Login payload uid:",
+                    payload?.uid,
+                    "email:",
+                    resp.user.email
+                );
+            } catch {}
+
+            // Hard redirect avoids any race with state that might still hold the old user
+            window.location.replace("/app");
+            // If you prefer SPA navigation, you can keep:
+            // navigate("/app", { replace: true });
         } catch (err: any) {
             setStatus("error");
             const code = String(err?.message ?? "request_failed");
@@ -46,6 +68,8 @@ export default function Login() {
                     ? "Email or password is incorrect."
                     : code === "email_unverified"
                     ? "Please verify your email first. Check your inbox (and spam)."
+                    : code === "unauthorized"
+                    ? "Your session expired. Please try again."
                     : code === "request_failed"
                     ? "Could not reach the server. Try again shortly."
                     : code === "server_error"
