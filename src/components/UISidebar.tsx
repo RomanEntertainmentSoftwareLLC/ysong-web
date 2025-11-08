@@ -42,11 +42,7 @@ export default function UISidebar({
     const [settingsOpen, setSettingsOpen] = useState(false);
 
     return (
-        <aside
-            className="h-full w-[15%] min-w-[220px] max-w-[320px] border-r
-                 border-neutral-200 dark:border-neutral-800 p-4 space-y-3
-                 flex flex-col min-h-0"
-        >
+        <aside className="h-full w-full p-4 space-y-3 flex flex-col min-h-0">
             {/* Header: account + settings (sticky) */}
             <div
                 className="sticky top-0 z-10 -mt-4 px-4 pt-4 pb-3
