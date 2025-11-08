@@ -316,14 +316,16 @@ export default function UI() {
                     <button
                         ref={menuBtnRef}
                         type="button"
-                        className="lg:hidden fixed left-3 top-[4rem] z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border
-									bg-black/20 dark:bg-white/10 backdrop-blur"
                         aria-controls="mobile-sidebar"
                         aria-haspopup="dialog"
                         aria-label="Open sidebar"
                         onClick={() => setMobileSidebarOpen((v) => !v)}
+                        className={`lg:hidden fixed top-[4rem] 
+							right-[max(0.75rem,env(safe-area-inset-right))] 
+							z-50 inline-flex h-10 w-10 items-center justify-center 
+							rounded-xl border bg-black/20 dark:bg-white/10 backdrop-blur 
+							${mobileSidebarOpen ? "opacity-0 pointer-events-none" : ""}`}
                     >
-                        {/* SVG hamburger = consistent on all devices */}
                         <svg
                             viewBox="0 0 24 24"
                             className="h-6 w-6"
