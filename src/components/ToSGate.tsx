@@ -6,8 +6,10 @@ type Props = {
     userAcceptedAt?: string | null;
     userAcceptedVersion?: string | null;
     currentVersion?: string | null;
-    userId?: string | null; // <- pass current user id so the local flag is per user
-    onAccepted?: () => void; // optional: e.g. refetch /auth/me after accept
+    /** pass the signed-in user's id; leave undefined while loading, null if not signed in */
+    userId?: string | null;
+    /** optional hook for parent to refetch /auth/me after accept */
+    onAccepted?: () => void;
 };
 
 export default function TosGate({
@@ -21,46 +23,77 @@ export default function TosGate({
     const [mustAccept, setMustAccept] = useState(false);
     const [ready, setReady] = useState(false);
 
-    // Key is namespaced by version AND userId so different users don’t block each other
+    // Namespaced per TOS version and per user (or "anon" when no user)
     const KEY = useMemo(() => {
         const ver = currentVersion || "v0";
         const uid = userId || "anon";
         return `ysong.tos.accepted.${ver}.${uid}`;
     }, [currentVersion, userId]);
 
+    // Decide whether to show the TOS modal.
     useEffect(() => {
-        // 1) Server says accepted (timestamp exists) AND version matches → we’re good
-        const acceptedByServer =
-            !!userAcceptedAt &&
-            !!userAcceptedVersion &&
-            userAcceptedVersion === currentVersion;
+        // While loading user (userId === undefined), don't decide yet.
+        if (typeof userId === "undefined") {
+            setReady(false);
+            return;
+        }
 
-        // 2) If not confirmed by server yet, we allow a local fast-path
+        // If signed in, server is the source of truth — ignore local flag.
+        if (userId) {
+            const acceptedByServer =
+                !!userAcceptedAt &&
+                !!userAcceptedVersion &&
+                userAcceptedVersion === currentVersion;
+
+            setMustAccept(!acceptedByServer);
+            setReady(true);
+            return;
+        }
+
+        // Anonymous session: use the scoped localStorage key.
         const acceptedLocal = localStorage.getItem(KEY) === "1";
-
-        setMustAccept(!(acceptedByServer || acceptedLocal));
+        setMustAccept(!acceptedLocal);
         setReady(true);
-    }, [KEY, userAcceptedAt, userAcceptedVersion, currentVersion]);
+    }, [userId, userAcceptedAt, userAcceptedVersion, currentVersion, KEY]);
 
     if (!ready) return <>{children}</>;
 
     async function onAccept() {
         try {
-            // Persist on server (includes auth token automatically via apiPost)
-            await apiPost("/auth/accept-tos", {});
+            // If signed in, persist to server.
+            if (userId) {
+                await apiPost("/auth/accept-tos", {});
+            }
         } catch {
-            // even if the network hiccups, still set local so the user can proceed;
-            // server will be updated next time we can reach it
+            // Network hiccups are tolerated; local key still gates the UI.
         }
-        localStorage.setItem(KEY, "1");
-        setMustAccept(false);
 
-        // Optional: let the parent refetch /auth/me so UI shows fresh values
+        // Persist local hint for the current scope (version + user/anon)
+        localStorage.setItem(KEY, "1");
+
+        // Clean up any legacy anon keys so they can't mask future users.
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i) || "";
+                if (
+                    k.startsWith("ysong.tos.accepted.") &&
+                    k.endsWith(".anon")
+                ) {
+                    localStorage.removeItem(k);
+                    // adjust index since storage shrank
+                    i = Math.max(-1, i - 1);
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+
+        setMustAccept(false);
         onAccepted?.();
     }
 
     function onDecline() {
-        // Kick them out of the app area until they accept
+        // Block app usage until they accept
         window.location.href = "/";
     }
 
