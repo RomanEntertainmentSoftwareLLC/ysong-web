@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, clearToken } from "../lib/authApi";
-import { getSaveChatsFlag } from "../lib/settings"; // ← NEW
+import { getSaveChatsFlag } from "../lib/settings";
 import UISidebar, { type Chat } from "../components/UISidebar";
 
 type ChatMessage = {
     role: "user" | "assistant";
     text: string;
-    attachments?: { name: string; size: number; type: string }[]; // local-only metadata
-    token?: string; // typing placeholder token
+    attachments?: { name: string; size: number; type: string }[];
+    token?: string;
 };
 
 export default function UI() {
@@ -34,11 +34,11 @@ export default function UI() {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    // --- autoscroll refs ---
+    // autoscroll
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
-    // --- MOBILE: sidebar drawer state ---
+    // mobile drawer
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
     function scrollToBottom(smooth = true) {
@@ -65,9 +65,9 @@ export default function UI() {
             .catch(() => {});
     }, []);
 
-    // 🔒 Hydrate chats from server ONLY if "Save to cloud" is ON
+    // Hydrate chats when "Save to cloud" is ON
     useEffect(() => {
-        if (!getSaveChatsFlag()) return; // flag OFF ➜ stay local-only
+        if (!getSaveChatsFlag()) return;
         apiGet<{ chats: Chat[] }>("/api/chats")
             .then((data) => {
                 if (!data?.chats || !Array.isArray(data.chats)) return;
@@ -84,13 +84,13 @@ export default function UI() {
         scrollToBottom(true);
     }, [activeId, active.messages.length]);
 
-    // MOBILE: close drawer when active chat changes (user tapped a chat)
+    // close drawer when a chat is selected
     useEffect(() => {
         if (mobileSidebarOpen) setMobileSidebarOpen(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeId]);
 
-    // MOBILE: close drawer on Escape
+    // close drawer on Escape
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") setMobileSidebarOpen(false);
@@ -100,7 +100,6 @@ export default function UI() {
     }, []);
 
     function newChat() {
-        // Local-only creation for now; when you flip saving ON, we’ll add POST /api/chats
         const id = crypto.randomUUID();
         const chat: Chat = { id, title: "", messages: [] as any };
         setChats([chat, ...chats]);
@@ -108,23 +107,20 @@ export default function UI() {
         scrollToBottom(false);
     }
 
-    // ---------- [+] picker handlers ----------
+    // file picker
     function triggerPicker() {
         fileInputRef.current?.click();
     }
-
     function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
-        const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024); // 50MB UI guard
+        const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024);
         setPendingFiles((prev) => [...prev, ...filtered]);
-        e.currentTarget.value = ""; // allow re-picking same files later
+        e.currentTarget.value = "";
     }
-
     function removeAttachment(i: number) {
         setPendingFiles((prev) => prev.filter((_, idx) => idx !== i));
     }
-    // ----------------------------------------
 
     async function send() {
         if (!input.trim() && pendingFiles.length === 0) return;
@@ -142,14 +138,13 @@ export default function UI() {
         setInput("");
         setPendingFiles([]);
 
-        // snapshot
         const currentChatId = activeId;
         const baseMsgs = (
             (chats.find((c) => c.id === currentChatId)
                 ?.messages as ChatMessage[]) || []
         ).map((m) => ({ role: m.role, content: m.text }));
 
-        // show user msg immediately
+        // optimistic user message
         setChats((prev) =>
             prev.map((c) =>
                 c.id === currentChatId
@@ -173,7 +168,7 @@ export default function UI() {
         );
         scrollToBottom(false);
 
-        // optimistic typing bubble
+        // typing bubble
         const typingToken = `__typing_${crypto.randomUUID()}__`;
         setChats((prev) =>
             prev.map((c) =>
@@ -254,7 +249,6 @@ export default function UI() {
     }
 
     async function logout() {
-        // No server call needed — we’re token-based
         try {
             clearToken();
         } finally {
@@ -262,29 +256,26 @@ export default function UI() {
         }
     }
 
+    // A11y: keep aria-expanded accurate without triggering the static linter
     const menuBtnRef = useRef<HTMLButtonElement>(null);
     useEffect(() => {
         const el = menuBtnRef.current;
         if (!el) return;
         el.setAttribute("aria-expanded", mobileSidebarOpen ? "true" : "false");
-        // label text stays static via aria-labelledby; no need to set aria-label here anymore
     }, [mobileSidebarOpen]);
 
     return (
         <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
-            {/* MOBILE: Hamburger (inside this region so it's below the global header) */}
+            {/* Mobile hamburger (hidden on >= lg) */}
             <button
                 ref={menuBtnRef}
                 type="button"
                 className="lg:hidden absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-lg border"
                 aria-controls="mobile-sidebar"
                 aria-haspopup="dialog"
-                aria-labelledby="mobile-menu-label"
+                aria-label="Menu"
                 onClick={() => setMobileSidebarOpen((v) => !v)}
             >
-                <span id="mobile-menu-label" className="sr-only">
-                    Menu
-                </span>
                 <span
                     aria-hidden="true"
                     className="block h-[2px] w-5 bg-current"
@@ -299,7 +290,7 @@ export default function UI() {
                 />
             </button>
 
-            {/* Desktop sidebar */}
+            {/* Desktop sidebar (>= lg) */}
             <div className="hidden lg:block shrink-0 w-[280px] border-r border-neutral-200 dark:border-neutral-800">
                 <UISidebar
                     chats={chats as any}
@@ -311,12 +302,13 @@ export default function UI() {
                 />
             </div>
 
-            {/* Mobile drawer sidebar */}
+            {/* Mobile drawer (< lg) */}
             <div
                 className={`lg:hidden fixed inset-0 z-40 ${
                     mobileSidebarOpen ? "" : "pointer-events-none"
                 }`}
             >
+                {/* overlay */}
                 <div
                     className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
                         mobileSidebarOpen ? "opacity-100" : "opacity-0"
@@ -324,16 +316,17 @@ export default function UI() {
                     aria-hidden="true"
                     onClick={() => setMobileSidebarOpen(false)}
                 />
+                {/* panel */}
                 <div
                     id="mobile-sidebar"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="mobile-sidebar-title"
                     className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
                         mobileSidebarOpen
                             ? "translate-x-0"
                             : "-translate-x-full"
                     }`}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="mobile-sidebar-title"
                 >
                     <h2 id="mobile-sidebar-title" className="sr-only">
                         Sidebar
@@ -372,12 +365,12 @@ export default function UI() {
                                     >
                                         <div
                                             className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
-                                            ${
-                                                m.role === "user"
-                                                    ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                                                    : "bg-neutral-100 dark:bg-neutral-900"
-                                            }
-                                            max-w-[85%] sm:max-w-[70%]`}
+                      ${
+                          m.role === "user"
+                              ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                              : "bg-neutral-100 dark:bg-neutral-900"
+                      }
+                      max-w-[85%] sm:max-w-[70%]`}
                                         >
                                             {m.text}
                                             {m.attachments &&
@@ -409,7 +402,6 @@ export default function UI() {
                                 )
                             )}
 
-                            {/* anchor for autoscroll */}
                             <div ref={bottomRef} />
 
                             {(active.messages as any).length === 0 && (
@@ -423,7 +415,7 @@ export default function UI() {
 
                 {/* Composer */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800">
-                    {/* chips for pending attachments */}
+                    {/* pending attachments */}
                     {pendingFiles.length > 0 && (
                         <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 flex flex-wrap gap-2">
                             {pendingFiles.map((f, idx) => (
@@ -449,12 +441,10 @@ export default function UI() {
 
                     <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4 pb-[env(safe-area-inset-bottom)]">
                         <div className="flex items-center gap-2">
-                            {/* Visually hidden label for the file input */}
                             <label htmlFor="filePicker" className="sr-only">
                                 Add files
                             </label>
 
-                            {/* [+] button that triggers the hidden input */}
                             <button
                                 type="button"
                                 onClick={triggerPicker}
@@ -465,7 +455,6 @@ export default function UI() {
                                 +
                             </button>
 
-                            {/* Hidden file input with an id that matches the label */}
                             <input
                                 id="filePicker"
                                 ref={fileInputRef}
@@ -476,7 +465,6 @@ export default function UI() {
                                 className="hidden"
                             />
 
-                            {/* Text box */}
                             <input
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -484,9 +472,7 @@ export default function UI() {
                                 placeholder={`Message ${
                                     import.meta.env.VITE_APP_NAME
                                 }…`}
-                                className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700
-									bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none
-									focus:ring-2 focus:ring-neutral-500/40"
+                                className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-neutral-500/40"
                             />
 
                             <button
