@@ -236,11 +236,12 @@ export default function UI() {
     }
 
     async function logout() {
+        // No server call needed — we’re token-based
         try {
-            await apiPost("/auth/logout", {});
-        } catch {}
-        clearToken();
-        nav("/login");
+            clearToken();
+        } finally {
+            window.location.replace("/login");
+        }
     }
 
     return (

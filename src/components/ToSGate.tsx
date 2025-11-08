@@ -32,23 +32,33 @@ export default function TosGate({
     }, [currentVersion, userId]);
 
     useEffect(() => {
-        // Decide immediately:
-        // - If we already know the user, trust the server fields.
-        // - Otherwise (loading or anon), rely on the local key.
-        const serverAccepted =
-            !!userId &&
-            !!userAcceptedAt &&
-            !!userAcceptedVersion &&
-            userAcceptedVersion === currentVersion;
+        // If we have an auth token but still don't know who the user is,
+        // defer any decision to avoid the flash.
+        const hasToken =
+            typeof window !== "undefined" && !!localStorage.getItem("ys_token");
 
-        const localAccepted = localStorage.getItem(KEY) === "1";
+        // Undefined => still loading user (parent hasn’t decided yet)
+        // Null + hasToken => logged-in but user not fetched yet
+        if (typeof userId === "undefined" || (userId === null && hasToken)) {
+            setReady(false);
+            return;
+        }
 
-        // **Key change**:
-        // - If signed in (userId truthy): only the server decides.
-        // - If not signed in / not loaded yet: use the local hint.
-        const accepted = userId ? serverAccepted : localAccepted;
+        // Signed-in: rely on server
+        if (userId) {
+            const acceptedByServer =
+                !!userAcceptedAt &&
+                !!userAcceptedVersion &&
+                userAcceptedVersion === currentVersion;
 
-        setMustAccept(!accepted);
+            setMustAccept(!acceptedByServer);
+            setReady(true);
+            return;
+        }
+
+        // Anonymous: use local flag
+        const acceptedLocal = localStorage.getItem(KEY) === "1";
+        setMustAccept(!acceptedLocal);
         setReady(true);
     }, [userId, userAcceptedAt, userAcceptedVersion, currentVersion, KEY]);
 
