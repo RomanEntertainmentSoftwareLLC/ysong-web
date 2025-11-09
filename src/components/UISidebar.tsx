@@ -45,9 +45,15 @@ export default function UISidebar({
         <aside className="h-full w-full p-4 space-y-3 flex flex-col min-h-0">
             {/* Header: account + settings (sticky) */}
             <div
-                className="sticky top-0 z-10 -mt-4 px-4 pt-4 pb-3
-                   bg-white/90 dark:bg-neutral-950/90 backdrop-blur
-                   border-b border-neutral-200 dark:border-neutral-800 rounded-t-lg"
+                className="
+					sticky top-0 z-10
+					mt-0 lg:-mt-4                /* don't shove it up on mobile */
+					pl-4 pr-12 lg:pr-4           /* space on the right for the mobile close button */
+					pt-[max(1rem,env(safe-area-inset-top))] pb-3  /* comfy + safe-area friendly */
+					bg-white/90 dark:bg-neutral-950/90 backdrop-blur
+					border-b border-neutral-200 dark:border-neutral-800
+					lg:rounded-t-lg
+				"
             >
                 <div className="text-[10px] uppercase tracking-wide opacity-60">
                     Signed in as
