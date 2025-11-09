@@ -384,7 +384,7 @@ export default function UI() {
 
                     {/* MOBILE: slide-in drawer */}
                     <div
-                        className={`lg:hidden fixed inset-0 z-40 ${
+                        className={`lg:hidden fixed left-0 right-0 top-[4rem] bottom-0 z-40 ${
                             mobileSidebarOpen ? "" : "pointer-events-none"
                         }`}
                     >
