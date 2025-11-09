@@ -3,8 +3,6 @@ import { Routes, Route, Outlet, useLocation } from "react-router-dom";
 
 import Mobile from "./Mobile";
 import Desktop from "./Desktop";
-import "./App.css";
-
 import Navbar from "./components/NavBar";
 import UINavbar from "./components/UINavBar";
 
