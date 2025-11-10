@@ -82,8 +82,8 @@ export default function UINavbar({
                     </a>
                 </div>
 
-                {/* Right: theme toggle + (optional) user menu */}
                 <div className="flex items-center gap-1 sm:gap-2">
+                    {/* Right: theme toggle + (optional) user menu 
                     <button
                         type="button"
                         onClick={toggleDark}
@@ -96,7 +96,7 @@ export default function UINavbar({
                         className="inline-flex items-center justify-center rounded-lg px-2.5 py-2"
                     >
                         <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
-                    </button>
+                    </button>*/}
 
                     {meEmail && onLogout && (
                         <div className="relative">

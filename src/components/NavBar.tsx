@@ -58,7 +58,7 @@ export default function Navbar() {
                         Create account
                     </button>
 
-                    {/* Theme toggle */}
+                    {/* Theme toggle 
                     <button
                         type="button"
                         onClick={toggleDark}
@@ -71,7 +71,7 @@ export default function Navbar() {
                         className="inline-flex items-center justify-center rounded-lg px-2.5 py-2"
                     >
                         <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
-                    </button>
+                    </button>*/}
                 </div>
 
                 {/* If the website is in mobile mode...*/}

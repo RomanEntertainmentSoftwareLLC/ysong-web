@@ -90,6 +90,14 @@ export default function UISidebar({
     });
     const anchorElRef = useRef<HTMLElement | null>(null);
 
+    const GAP_BETWEEN_BUTTONS = 4;
+    const NUMBER_OF_CHAT_INSTANCES_VISIBLE = 3;
+    const CHAT_INSTANCE_BUTTON_HEIGHT = 44;
+
+    const maxHeight =
+        NUMBER_OF_CHAT_INSTANCES_VISIBLE * CHAT_INSTANCE_BUTTON_HEIGHT +
+        (NUMBER_OF_CHAT_INSTANCES_VISIBLE - 1) * GAP_BETWEEN_BUTTONS;
+
     function positionMenu(el: HTMLElement) {
         const rect = el.getBoundingClientRect();
         const MENU_W = 176; // approx width of the menu
@@ -183,9 +191,9 @@ export default function UISidebar({
                 </button>
             </div>
 
-            {/* Chat listbox: up to 5 visible rows */}
+            {/* Chat listbox: up to 3 visible rows */}
             <div className="mt-2">
-                <div className="max-h-[232px] overflow-y-auto pr-1">
+                <div className="overflow-y-auto pr-1" style={{ maxHeight }}>
                     <div className="space-y-1">
                         {chats.map((c) => {
                             const raw = chatLabel(c);

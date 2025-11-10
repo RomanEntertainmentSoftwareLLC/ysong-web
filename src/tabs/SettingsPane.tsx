@@ -1,23 +1,26 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../ThemeContext";
+import { fetchUserSettings, updateUserSettings } from "../lib/userPrefsApi";
+
+/* ---------------- Entry ---------------- */
 
 export default function SettingsPane({ tab }: { tab: any }) {
     return <SettingsCore />;
 }
 
-// ---------------- Types & constants ----------------
+/* ---------------- Types & constants ---------------- */
 
-type Theme = "system" | "light" | "dark";
+type Theme = "light" | "dark";
 
 type AppSettings = {
-    theme: Theme;
-    saveNewChatsToCloud: boolean;
-    showTimestamps: boolean;
-    compactMode: boolean;
+    theme: Theme; // server-backed
+    saveNewChatsToCloud: boolean; // server-backed
+    showTimestamps: boolean; // local only
+    compactMode: boolean; // local only
 };
 
 const DEFAULTS: AppSettings = {
-    theme: "system",
+    theme: "dark",
     saveNewChatsToCloud: false,
     showTimestamps: true,
     compactMode: false,
@@ -41,34 +44,7 @@ function writeSettings(s: AppSettings) {
     } catch {}
 }
 
-// ---------------- Theme sync hook ----------------
-
-function useThemeSync(theme: Theme) {
-    const mqlRef = useRef<MediaQueryList | null>(null);
-    useEffect(() => {
-        const root = document.documentElement;
-        const apply = () => {
-            const systemDark = window.matchMedia?.(
-                "(prefers-color-scheme: dark)"
-            )?.matches;
-            const isDark =
-                theme === "dark" || (theme === "system" && systemDark);
-            root.classList.toggle("dark", !!isDark);
-            (root.style as any).colorScheme = isDark ? "dark" : "light";
-        };
-        apply();
-
-        if (theme === "system") {
-            const mql = window.matchMedia("(prefers-color-scheme: dark)");
-            mqlRef.current = mql;
-            const handler = () => apply();
-            mql.addEventListener("change", handler);
-            return () => mql.removeEventListener("change", handler);
-        }
-    }, [theme]);
-}
-
-// ---------------- UI helpers ----------------
+/* ---------------- UI helpers ---------------- */
 
 function Section({
     title,
@@ -170,59 +146,91 @@ function SmallSwitch({
                 onChange={(e) => onChange(e.currentTarget.checked)}
                 aria-label={ariaLabel}
             />
-            {/* Sibling of input (the track). We use an arbitrary selector to target its child knob */}
             <span
                 className="
-			relative w-10 h-6 rounded-full bg-neutral-300 transition-colors
-			peer-checked:bg-indigo-600
-			[&>span]:transition-transform
-			peer-checked:[&>span]:translate-x-4
-			"
+          relative w-10 h-6 rounded-full bg-neutral-300 transition-colors
+          peer-checked:bg-indigo-600
+          [&>span]:transition-transform
+          peer-checked:[&>span]:translate-x-4
+        "
                 aria-hidden
             >
-                {/* Child knob (gets translated via the parent’s arbitrary selector) */}
                 <span className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow" />
             </span>
         </label>
     );
 }
 
-// ---------------- Main ----------------
+/* ---------------- Main ---------------- */
 
 function SettingsCore() {
     const [settings, setSettings] = useState<AppSettings>(() => readSettings());
-    const [copied, setCopied] = useState(false);
+    const [loadedFromServer, setLoadedFromServer] = useState(false);
 
+    // ThemeContext boolean
+    const { dark, toggleDark } = useTheme();
+
+    // Load server-backed settings once and sync ThemeContext
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const s = await fetchUserSettings(); // { saveChats, theme }
+                if (cancelled) return;
+                setSettings((prev) => ({
+                    ...prev,
+                    saveNewChatsToCloud: !!s.saveChats,
+                    theme: (s.theme ?? "system") as Theme,
+                }));
+
+                // Sync the boolean ThemeContext with server value
+                const shouldBeDark = (s.theme ?? "system") === "dark";
+                if (shouldBeDark !== dark) toggleDark();
+            } catch {
+                // keep local defaults on error
+            } finally {
+                if (!cancelled) setLoadedFromServer(true);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Always mirror full settings to localStorage + notify same-tab listeners
     useEffect(() => {
         writeSettings(settings);
-        // notify same-tab listeners (ChatPane) immediately
         window.dispatchEvent(
             new CustomEvent("ysong:settings", { detail: settings })
         );
     }, [settings]);
 
+    // Debounced save of server-backed fields to Neon
+    useEffect(() => {
+        if (!loadedFromServer) return;
+        const t = setTimeout(() => {
+            updateUserSettings({
+                saveChats: settings.saveNewChatsToCloud,
+                // Map our UI (we only expose a dark toggle) to server's tri-state
+                theme: settings.theme === "dark" ? "dark" : "system",
+            }).catch(() => {});
+        }, 400);
+        return () => clearTimeout(t);
+    }, [loadedFromServer, settings.saveNewChatsToCloud, settings.theme]);
+
+    // Build meta (unchanged)
     const build = useMemo(() => {
         const env: any = (import.meta as any).env || {};
         const sha = env.VITE_BUILD_SHA || "dev";
         const time = env.VITE_BUILD_TIME || new Date().toISOString();
         const mode = env.MODE || "development";
-        const api = env.VITE_API_BASE_URL || "(unset)";
+        const api = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "(unset)";
         return { sha, time, mode, api } as const;
     }, []);
 
-    const copyMeta = async () => {
-        try {
-            await navigator.clipboard.writeText(
-                `mode=${build.mode}\nsha=${build.sha}\nbuild=${build.time}\napi=${build.api}`
-            );
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-        } catch {}
-    };
-
     return (
         <div className="h-full flex flex-col">
-            {/* self-contained scroller like ChatPane */}
             <div
                 className="flex-1 min-h-0 overflow-y-auto"
                 style={{ scrollbarGutter: "stable both-edges" } as any}
@@ -250,7 +258,16 @@ function SettingsCore() {
                         title="Appearance"
                         subtitle="Choose how YSong looks on your device."
                     >
-                        <DarkModeRow />
+                        <DarkModeRow
+                            dark={dark}
+                            onToggle={(v) => {
+                                if (v !== dark) toggleDark();
+                                setSettings((s) => ({
+                                    ...s,
+                                    theme: v ? "dark" : "light",
+                                }));
+                            }}
+                        />
                     </Section>
 
                     <Section
@@ -321,7 +338,13 @@ function SettingsCore() {
                         title="About"
                         subtitle="Build details useful for debugging and support."
                     >
-                        {/* …leave your KV + Copy buttons here … */}
+                        {/* keep your KV items / copy here if you want */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <KV label="Mode" value={build.mode} />
+                            <KV label="API Base" value={build.api} />
+                            <KV label="Build SHA" value={build.sha} />
+                            <KV label="Build Time" value={build.time} />
+                        </div>
                     </Section>
 
                     <div className="flex items-center justify-between pt-2">
@@ -341,6 +364,8 @@ function SettingsCore() {
         </div>
     );
 }
+
+/* ---------------- Small bits ---------------- */
 
 function KV({
     label,
@@ -390,8 +415,13 @@ function CopyButton({ text }: { text: string }) {
     );
 }
 
-function DarkModeRow() {
-    const { dark, toggleDark } = useTheme();
+function DarkModeRow({
+    dark,
+    onToggle,
+}: {
+    dark: boolean;
+    onToggle: (v: boolean) => void;
+}) {
     return (
         <Row
             label="Dark mode"
@@ -402,10 +432,7 @@ function DarkModeRow() {
                     id="settings-dark"
                     ariaLabel="Dark mode"
                     checked={dark}
-                    onChange={(v) => {
-                        // Only toggle if the desired state differs
-                        if (v !== dark) toggleDark();
-                    }}
+                    onChange={onToggle}
                     title={
                         dark ? "Switch to light mode" : "Switch to dark mode"
                     }

@@ -6,7 +6,7 @@ import {
     type Dispatch,
     type SetStateAction,
 } from "react";
-import { apiGet, clearToken } from "../lib/authApi";
+import { apiGet, apiPost, clearToken } from "../lib/authApi";
 import { getSaveChatsFlag } from "../lib/settings";
 import UISidebar, { type Chat } from "../components/UISidebar";
 import {
@@ -14,6 +14,7 @@ import {
     TabBar,
     TabContentHost,
     useTabManager,
+    type TabRecord,
     type TabType,
     type TabRendererProps,
 } from "../tabs/core";
@@ -66,22 +67,55 @@ function useEnsureWelcomeChat(setChats: Dispatch<SetStateAction<Chat[]>>) {
 
 /* Opens a chat tab on first load if none are open */
 function BootTabs({
+    me,
     chats,
     ensureChat,
 }: {
+    me: { email: string } | null;
     chats: Chat[];
     ensureChat: () => string;
 }) {
-    const { tabs, openTab } = useTabManager();
-    const didBoot = useRef(false);
+    const { tabs, openTab, activateTab, hydrated } = useTabManager();
+    const did = useRef(false);
 
     useEffect(() => {
-        if (didBoot.current) return;
-        didBoot.current = true;
+        if (!hydrated) return; // wait for localStorage restore
+        if (did.current) return; // idempotent
+        if (tabs.length > 0) return; // something was restored locally
+        if (!me) return; // wait for /auth/me to finish
 
-        const chatId = chats[0]?.id ?? ensureChat(); // create only on first mount
-        openTab({ type: "chat", title: "New Chat", payload: { chatId } });
-    }, []); // <- empty deps; ref prevents StrictMode double-run
+        did.current = true;
+
+        (async () => {
+            // 1) try server layout
+            try {
+                const data = await apiGet<{
+                    tabs: TabRecord[];
+                    activeId: string | null;
+                }>("/api/ui/layout");
+
+                if (Array.isArray(data?.tabs) && data.tabs.length) {
+                    for (const t of data.tabs) {
+                        openTab({
+                            id: t.id,
+                            type: t.type as TabType,
+                            title: t.title,
+                            pinned: !!t.pinned,
+                            payload: t.payload ?? null,
+                        });
+                    }
+                    if (data.activeId) activateTab(data.activeId);
+                    return;
+                }
+            } catch {
+                /* ignore and fall back */
+            }
+
+            // 2) fall back to a welcome chat
+            const chatId = chats[0]?.id ?? ensureChat();
+            openTab({ type: "chat", title: "New Chat", payload: { chatId } });
+        })();
+    }, [hydrated, tabs.length, me, chats, ensureChat, openTab, activateTab]);
 
     return null;
 }
@@ -152,6 +186,20 @@ export default function UI() {
             body.style.overflow = prevBody || "";
         };
     }, [mobileSidebarOpen]);
+
+    function PersistLayout() {
+        const { tabs, activeId, hydrated } = useTabManager();
+
+        useEffect(() => {
+            if (!hydrated) return; // don’t write the empty pre-hydrate state
+            const t = setTimeout(() => {
+                apiPost("/api/ui/layout", { tabs, activeId }).catch(() => {});
+            }, 500);
+            return () => clearTimeout(t);
+        }, [hydrated, tabs, activeId]);
+
+        return null;
+    }
 
     async function logout() {
         try {
@@ -325,7 +373,8 @@ export default function UI() {
             </div>
 
             {/* auto-open first Chat tab */}
-            <BootTabs chats={chats} ensureChat={ensureWelcomeChat} />
+            <BootTabs me={me} chats={chats} ensureChat={ensureWelcomeChat} />
+            <PersistLayout />
         </TabManagerProvider>
     );
 }

@@ -50,6 +50,7 @@ type Ctx = {
     updateTab: (id: string, patch: Partial<TabRecord>) => void;
     togglePin: (id: string) => void;
     reorderTab: (dragId: string, overId: string, place: DropPlace) => void;
+    hydrated: boolean;
 };
 
 const TabCtx = createContext<Ctx | null>(null);
@@ -80,35 +81,40 @@ const LS_ACTIVE = "ysong.activeTabId";
 export function TabManagerProvider({ children }: { children: ReactNode }) {
     const [tabs, setTabs] = useState<TabRecord[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
+    const [hydrated, setHydrated] = useState(false);
 
     // Restore from localStorage (if available)
     useEffect(() => {
         try {
             const raw = localStorage.getItem(LS_TABS);
-            if (!raw) return;
-            const restored = JSON.parse(raw) as TabRecord[];
-            const safe = restored.filter((t) => ALL_TYPES.includes(t.type));
-            setTabs(safe);
-            const savedActive = localStorage.getItem(LS_ACTIVE);
-            if (savedActive && safe.some((t) => t.id === savedActive)) {
-                setActiveId(savedActive);
-            } else if (safe[0]) {
-                setActiveId(safe[0].id);
+            if (raw) {
+                const restored = JSON.parse(raw) as TabRecord[];
+                const safe = restored.filter((t) => ALL_TYPES.includes(t.type));
+                setTabs(safe);
+                const savedActive = localStorage.getItem(LS_ACTIVE);
+                if (savedActive && safe.some((t) => t.id === savedActive)) {
+                    setActiveId(savedActive);
+                } else if (safe[0]) {
+                    setActiveId(safe[0].id);
+                }
             }
         } catch {
-            // ignore
+            /* ignore */
+        } finally {
+            setHydrated(true);
         }
     }, []);
 
     // Persist to localStorage
     useEffect(() => {
         try {
+            if (!hydrated) return;
             localStorage.setItem(LS_TABS, JSON.stringify(tabs));
             localStorage.setItem(LS_ACTIVE, activeId ?? "");
         } catch {
             // ignore
         }
-    }, [tabs, activeId]);
+    }, [hydrated, tabs, activeId]);
 
     const openTab: Ctx["openTab"] = (spec) => {
         const id = spec.id ?? crypto.randomUUID();
@@ -235,8 +241,9 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
             updateTab,
             togglePin,
             reorderTab,
+            hydrated,
         }),
-        [tabs, activeId]
+        [tabs, activeId, hydrated]
     );
 
     return <TabCtx.Provider value={value}>{children}</TabCtx.Provider>;
@@ -248,13 +255,12 @@ export function TabBar() {
     const { tabs, activeId, activateTab, closeTab, togglePin, reorderTab } =
         useTabManager();
 
-    if (tabs.length === 0) return null;
-
-    // DnD state
+    // hooks must run on every render
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [over, setOver] = useState<{ id: string; side: DropPlace } | null>(
         null
     );
+    const barRef = useRef<HTMLDivElement | null>(null);
 
     const onDragStart = useCallback((id: string, e: React.DragEvent) => {
         setDraggingId(id);
@@ -291,14 +297,6 @@ export function TabBar() {
         setOver(null);
     }, []);
 
-    // Keep pinned on left
-    const pinned = tabs.filter((t) => t.pinned);
-    const unpinned = tabs.filter((t) => !t.pinned);
-    const ordered = [...pinned, ...unpinned];
-
-    // Auto-scroll & natural wheel scrolling
-    const barRef = useRef<HTMLDivElement | null>(null);
-
     useEffect(() => {
         const el = barRef.current?.querySelector<HTMLElement>(
             '[data-active="true"]'
@@ -310,12 +308,19 @@ export function TabBar() {
         });
     }, [activeId, tabs.length]);
 
+    // you can still bail out of rendering *after* all hooks ran
+    if (tabs.length === 0) {
+        return (
+            <div className="px-2 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md" />
+        );
+    }
+
+    const pinned = tabs.filter((t) => t.pinned);
+    const unpinned = tabs.filter((t) => !t.pinned);
+    const ordered = [...pinned, ...unpinned];
+
     return (
-        <div
-            className="px-2 border-b bg-white/75 dark:bg-neutral-950/60
-                 border-neutral-200 dark:border-neutral-800
-                 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md"
-        >
+        <div className="px-2 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md">
             <div
                 ref={barRef}
                 className="flex gap-1 items-end overflow-x-auto no-scrollbar py-2"
@@ -344,24 +349,19 @@ export function TabBar() {
                             onDragEnd={onDragEnd}
                             onMouseDown={(e) => {
                                 if (e.button === 1) {
-                                    // middle-click closes
                                     e.preventDefault();
                                     closeTab(t.id);
                                 }
                             }}
-                            className={`relative group rounded-lg border select-none
-                  ${
-                      isActive
-                          ? "bg-white text-neutral-900 border-neutral-300 " +
-                            "dark:bg-neutral-900 dark:text-white dark:border-neutral-700"
-                          : "bg-white/85 text-neutral-700 hover:bg-neutral-50 border-neutral-300 " +
-                            "dark:bg-neutral-900/70 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:border-neutral-800"
-                  }`}
+                            className={`relative group rounded-lg border select-none ${
+                                isActive
+                                    ? "bg-white text-neutral-900 border-neutral-300 dark:bg-neutral-900 dark:text-white dark:border-neutral-700"
+                                    : "bg-white/85 text-neutral-700 hover:bg-neutral-50 border-neutral-300 dark:bg-neutral-900/70 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:border-neutral-800"
+                            }`}
                             role="button"
                             onClick={() => activateTab(t.id)}
                             title={t.title}
                         >
-                            {/* drop indicators */}
                             {showLeft && (
                                 <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[2px] bg-indigo-500 rounded-sm" />
                             )}
@@ -373,8 +373,6 @@ export function TabBar() {
                                 <span className="truncate max-w-[22ch]">
                                     {t.title}
                                 </span>
-
-                                {/* pin toggle */}
                                 <button
                                     type="button"
                                     className={`opacity-70 hover:opacity-100 transition ${
@@ -388,7 +386,6 @@ export function TabBar() {
                                         togglePin(t.id);
                                     }}
                                 >
-                                    {/* pushpin icon */}
                                     <svg
                                         width="14"
                                         height="14"
@@ -405,8 +402,6 @@ export function TabBar() {
                                         <path d="M7 15l2 2" />
                                     </svg>
                                 </button>
-
-                                {/* close */}
                                 <button
                                     type="button"
                                     className="opacity-60 hover:opacity-100 text-neutral-500 dark:text-neutral-400"
@@ -420,7 +415,6 @@ export function TabBar() {
                                 </button>
                             </div>
 
-                            {/* active underline */}
                             {isActive && (
                                 <div className="h-[2px] w-full bg-indigo-600 dark:bg-indigo-400 rounded-b-lg" />
                             )}
