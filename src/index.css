@@ -88,12 +88,11 @@ input {
 }
 
 html,
-body,
-#root {
-    height: 100%;
+body {
     width: 100%;
 }
 #root {
+    min-height: 100%;
     max-width: none;
     margin: 0;
     padding: 0;

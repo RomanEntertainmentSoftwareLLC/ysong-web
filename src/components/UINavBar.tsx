@@ -23,7 +23,7 @@ export default function UINavbar({
     onLogout,
     onToggleSidebar,
 }: Props) {
-    const { dark, toggleDark } = useTheme();
+    const { dark } = useTheme();
     const [menuOpen, setMenuOpen] = useState(false);
     const menuBtnRef = useRef<HTMLButtonElement>(null);
 

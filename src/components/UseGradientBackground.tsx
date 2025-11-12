@@ -11,7 +11,6 @@ export default function UseGradientBackground() {
             : "linear-gradient(180deg, rgb(108,112,118) 0%, rgb(242,246,252) 100%)";
 
         document.body.style.background = bg;
-
         document.body.style.color = dark ? "rgb(245,245,245)" : "rgb(17,17,17)";
     }, [dark]);
     return null;
