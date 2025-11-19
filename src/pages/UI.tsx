@@ -70,53 +70,89 @@ function BootTabs({
     chats,
     ensureChat,
     chatsHydrated,
+    onLayoutHydrated,
 }: {
     me: { email: string } | null;
     chats: Chat[];
     ensureChat: () => string;
     chatsHydrated: boolean;
+    onLayoutHydrated: () => void;
 }) {
-    const { tabs, openTab, activateTab, hydrated } = useTabManager();
+    const { tabs, openTab, activateTab } = useTabManager();
     const did = useRef(false);
 
     useEffect(() => {
-        if (!hydrated) return; // wait for localStorage restore
-        if (!chatsHydrated) return; // wait for /api/chats (or explicit "no chats")
+        if (!chatsHydrated) return; // wait for settings + chats
         if (!me) return; // need user info
         if (did.current) return; // idempotent
-        if (tabs.length > 0) return; // something was restored locally
+
+        // If tabs already exist (edge case), just mark layout as ready.
+        if (tabs.length > 0) {
+            did.current = true;
+            onLayoutHydrated();
+            return;
+        }
 
         did.current = true;
 
         (async () => {
+            let restored = false;
+
             try {
                 const data = await apiGet<{ tabs?: any[]; activeId?: string }>(
                     "/api/ui/layout"
                 );
 
                 if (data?.tabs && data.tabs.length > 0) {
-                    data.tabs.forEach((t) => openTab(t));
-                    if (data.activeId) activateTab(data.activeId);
-                    return;
+                    // Only restore chat tabs whose chatId actually exists in Neon
+                    const knownChatIds = new Set(chats.map((c) => c.id));
+
+                    const filteredTabs = (data.tabs as any[]).filter((t) => {
+                        if (t.type !== "chat") return true;
+                        const chatId = t.payload?.chatId;
+                        return chatId && knownChatIds.has(chatId);
+                    });
+
+                    if (filteredTabs.length > 0) {
+                        filteredTabs.forEach((t) => openTab(t as any));
+
+                        let activeId = data.activeId;
+                        if (
+                            !activeId ||
+                            !filteredTabs.some((t) => t.id === activeId)
+                        ) {
+                            activeId = filteredTabs[0].id;
+                        }
+                        if (activeId) activateTab(activeId);
+                        restored = true;
+                    }
                 }
             } catch (err) {
                 console.warn("Failed to restore tab layout", err);
             }
 
-            // 2) fall back to a welcome chat
-            const firstChatId = chats[0]?.id;
-            const chatId = firstChatId ?? ensureChat();
-            openTab({ type: "chat", title: "New Chat", payload: { chatId } });
+            if (!restored) {
+                // fall back to a welcome chat
+                const firstChatId = chats[0]?.id;
+                const chatId = firstChatId ?? ensureChat();
+                openTab({
+                    type: "chat",
+                    title: "New Chat",
+                    payload: { chatId },
+                });
+            }
+
+            onLayoutHydrated();
         })();
     }, [
-        hydrated,
         chatsHydrated,
-        tabs.length,
         me,
+        tabs.length,
         chats,
         ensureChat,
         openTab,
         activateTab,
+        onLayoutHydrated,
     ]);
 
     return null;
@@ -128,6 +164,7 @@ export default function UI() {
     const [chats, setChats] = useState<Chat[]>([]);
     const [chatsHydrated, setChatsHydrated] = useState(false);
     const [activeId, setActiveId] = useState("");
+    const [layoutHydrated, setLayoutHydrated] = useState(false);
 
     // responsive + mobile drawer
     const isLgUp = useMediaQuery("(min-width: 1024px)");
@@ -212,16 +249,16 @@ export default function UI() {
         };
     }, [mobileSidebarOpen]);
 
-    function PersistLayout() {
-        const { tabs, activeId, hydrated } = useTabManager();
+    function PersistLayout({ ready }: { ready: boolean }) {
+        const { tabs, activeId } = useTabManager();
 
         useEffect(() => {
-            if (!hydrated) return; // don’t write the empty pre-hydrate state
+            if (!ready) return; // don’t write until initial layout is known
             const t = setTimeout(() => {
                 apiPost("/api/ui/layout", { tabs, activeId }).catch(() => {});
             }, 500);
             return () => clearTimeout(t);
-        }, [hydrated, tabs, activeId]);
+        }, [ready, tabs, activeId]);
 
         return null;
     }
@@ -431,8 +468,9 @@ export default function UI() {
                 chats={chats}
                 ensureChat={ensureWelcomeChat}
                 chatsHydrated={chatsHydrated}
+                onLayoutHydrated={() => setLayoutHydrated(true)}
             />
-            <PersistLayout />
+            <PersistLayout ready={layoutHydrated} />
         </TabManagerProvider>
     );
 }

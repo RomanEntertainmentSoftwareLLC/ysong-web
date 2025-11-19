@@ -50,7 +50,6 @@ type Ctx = {
     updateTab: (id: string, patch: Partial<TabRecord>) => void;
     togglePin: (id: string) => void;
     reorderTab: (dragId: string, overId: string, place: DropPlace) => void;
-    hydrated: boolean;
 };
 
 const TabCtx = createContext<Ctx | null>(null);
@@ -64,57 +63,9 @@ export const useTabManager = (): Ctx => {
 
 /* --------------------------- Provider (state) --------------------------- */
 
-const ALL_TYPES: TabType[] = [
-    "chat",
-    "settings",
-    "daw",
-    "mixer",
-    "market",
-    "band",
-    "artwork",
-    "world",
-];
-
-const LS_TABS = "ysong.tabs";
-const LS_ACTIVE = "ysong.activeTabId";
-
 export function TabManagerProvider({ children }: { children: ReactNode }) {
     const [tabs, setTabs] = useState<TabRecord[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
-    const [hydrated, setHydrated] = useState(false);
-
-    // Restore from localStorage (if available)
-    useEffect(() => {
-        try {
-            const raw = localStorage.getItem(LS_TABS);
-            if (raw) {
-                const restored = JSON.parse(raw) as TabRecord[];
-                const safe = restored.filter((t) => ALL_TYPES.includes(t.type));
-                setTabs(safe);
-                const savedActive = localStorage.getItem(LS_ACTIVE);
-                if (savedActive && safe.some((t) => t.id === savedActive)) {
-                    setActiveId(savedActive);
-                } else if (safe[0]) {
-                    setActiveId(safe[0].id);
-                }
-            }
-        } catch {
-            /* ignore */
-        } finally {
-            setHydrated(true);
-        }
-    }, []);
-
-    // Persist to localStorage
-    useEffect(() => {
-        try {
-            if (!hydrated) return;
-            localStorage.setItem(LS_TABS, JSON.stringify(tabs));
-            localStorage.setItem(LS_ACTIVE, activeId ?? "");
-        } catch {
-            // ignore
-        }
-    }, [hydrated, tabs, activeId]);
 
     const openTab: Ctx["openTab"] = (spec) => {
         const id = spec.id ?? crypto.randomUUID();
@@ -241,9 +192,8 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
             updateTab,
             togglePin,
             reorderTab,
-            hydrated,
         }),
-        [tabs, activeId, hydrated]
+        [tabs, activeId]
     );
 
     return <TabCtx.Provider value={value}>{children}</TabCtx.Provider>;

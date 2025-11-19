@@ -20,7 +20,6 @@ import RequireAuth from "./components/RequireAuth";
 import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
-import { ensureSaveChatsDefault } from "./lib/settings";
 import { apiGet, apiPost } from "./lib/authApi";
 
 type CurrentUser = {
@@ -89,11 +88,6 @@ function App() {
 
         if (!token) return; // <- don't call /auth/me when logged out
         refetchMe();
-    }, []);
-
-    // Set your “save chats” default (OFF)
-    useEffect(() => {
-        ensureSaveChatsDefault(false);
     }, []);
 
     // ---- ToS anon → per-user key migration -----------------------------------

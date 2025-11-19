@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { getSaveChatsFlag, setSaveChatsFlag } from "../lib/settings";
 
 export type Chat = {
     id: string;

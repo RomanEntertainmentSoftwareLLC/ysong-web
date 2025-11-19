@@ -6,7 +6,6 @@ import {
     saveUserSettings,
     type UserSettingsResponse,
 } from "../lib/userPrefsApi";
-import { setSaveChatsFlag } from "../lib/settings";
 
 /* ---------------- Entry ---------------- */
 export default function SettingsPane() {
@@ -243,9 +242,6 @@ function SettingsCore() {
                 // sync ThemeContext with the stored theme
                 const shouldBeDark = next.theme === "dark";
                 if (shouldBeDark !== dark) toggleDark();
-
-                // keep legacy flag for UI that still looks at it
-                setSaveChatsFlag(next.saveNewChatsToCloud);
             } catch (err) {
                 console.error("fetchUserSettings failed", err);
                 // keep whatever we already had on error
@@ -281,9 +277,6 @@ function SettingsCore() {
             if (typeof window !== "undefined") {
                 window.__YS_SETTINGS = settings;
             }
-
-            // keep legacy flag in sync for the rest of the app
-            setSaveChatsFlag(settings.saveNewChatsToCloud);
         }, 250);
 
         return () => clearTimeout(t);
