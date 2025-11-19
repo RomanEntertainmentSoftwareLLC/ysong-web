@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
 import { clearToken } from "../lib/authApi";
 
@@ -9,7 +9,6 @@ export default function Login() {
     const [show, setShow] = useState(false);
     const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
-    const navigate = useNavigate();
 
     async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault();

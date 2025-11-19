@@ -1,13 +1,20 @@
 export const AUTH_BASE =
   import.meta.env.VITE_AUTH_API_URL ?? "https://api.ysong.ai";
 
+const TOKEN_KEY = "ys_token";
+const LEGACY_TOKEN_KEY = "ysong_auth_token";
+
 /* Read token from either key (old/new) */
 function readToken(): string | null {
-  return (
-    localStorage.getItem("ys_token") ||
-    localStorage.getItem("ysong_auth_token") || // legacy
-    null
-  );
+  try {
+    return (
+      localStorage.getItem(TOKEN_KEY) ||
+      localStorage.getItem(LEGACY_TOKEN_KEY) ||
+      null
+    );
+  } catch {
+    return null;
+  }
 }
 
 /** Build Authorization header */
@@ -16,12 +23,52 @@ function authHeader(): Record<string, string> {
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-async function handle401(res: Response) {
-  if (res.status === 401) {
-    // token missing/expired/invalid — clear and bounce to login
+/** Clear token (logout / reset) */
+export function clearToken() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {}
+}
+
+/**
+ * Shared error handler:
+ * - Reads JSON if possible
+ * - Handles token-related 401s (invalid/missing/unauthorized)
+ * - Throws an Error with a short string code (used in Login.tsx)
+ */
+async function handleError(res: Response): Promise<never> {
+  let errorCode = "request_failed";
+
+  try {
+    const data = await res.json().catch(() => null);
+    if (data && typeof data === "object" && "error" in data) {
+      errorCode = String((data as any).error);
+    }
+  } catch {
+    // keep default errorCode
+  }
+
+  // Token-related auth failure = nuke token & mark as unauthorized
+  if (
+    res.status === 401 &&
+    (errorCode === "invalid_token" ||
+      errorCode === "missing_token" ||
+      errorCode === "unauthorized")
+  ) {
     clearToken();
+
+    // Optional: if we're inside the app shell, force re-login
+    if (!window.location.pathname.startsWith("/login")) {
+      // Full reload to reset any in-memory state
+      window.location.replace("/login");
+    }
+
     throw new Error("unauthorized");
   }
+
+  // Otherwise, propagate the specific error code (e.g. invalid_credentials)
+  throw new Error(errorCode);
 }
 
 /** POST helper (JSON in, JSON out) */
@@ -35,19 +82,17 @@ export async function apiPost<T = unknown>(
       "Content-Type": "application/json",
       ...authHeader(),
     },
+    // `credentials: "include"` is only needed if you actually use cookies.
+    // You can keep it, but it's not required for pure JWT-in-header auth:
     credentials: "include",
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
-    await handle401(res);
-    let err = "request_failed";
-    try {
-      const j = await res.json();
-      err = (j as any)?.error ?? err;
-    } catch {}
-    throw new Error(err);
+    await handleError(res);
   }
+
+  // If you ever have 204/empty responses, guard here
   return (await res.json().catch(() => ({}))) as T;
 }
 
@@ -57,15 +102,10 @@ export async function apiGet<T = unknown>(path: string): Promise<T> {
     headers: { ...authHeader() },
     credentials: "include",
   });
-  if (!res.ok) {
-    await handle401(res);
-    throw new Error("request_failed");
-  }
-  return (await res.json().catch(() => ({}))) as T;
-}
 
-/** Clear token (logout) */
-export function clearToken() {
-  localStorage.removeItem("ys_token");
-  localStorage.removeItem("ysong_auth_token"); // legacy cleanup
+  if (!res.ok) {
+    await handleError(res);
+  }
+
+  return (await res.json().catch(() => ({}))) as T;
 }

@@ -5,7 +5,9 @@ import { getSaveChatsFlag, setSaveChatsFlag } from "../lib/settings";
 export type Chat = {
     id: string;
     title?: string; // optional
-    messages: { role: "user" | "assistant"; text: string }[];
+    // messages are optional because server /api/chats does not include them;
+    // when missing, treat as an empty array in the UI.
+    messages?: { role: "user" | "assistant"; text: string }[];
 };
 
 type ModuleType =
@@ -43,7 +45,9 @@ function truncate(s: string, max = 48) {
 function chatLabel(chat: Chat): string {
     const t = normalizeOneLine(chat.title ?? "");
     if (t) return t;
-    const last = chat.messages[chat.messages.length - 1]?.text ?? "";
+
+    const msgs = Array.isArray(chat.messages) ? chat.messages : [];
+    const last = msgs.length ? msgs[msgs.length - 1]?.text ?? "" : "";
     const normalized = normalizeOneLine(last);
     return normalized || "New chat";
 }
@@ -199,25 +203,6 @@ export default function UISidebar({
                             const raw = chatLabel(c);
                             const primary = truncate(raw, 48);
                             const isActive = c.id === activeId;
-
-                            const openRename = () => {
-                                const current = chatLabel(c);
-                                const name = window.prompt(
-                                    "Rename chat",
-                                    current
-                                );
-                                if (name && name.trim())
-                                    onRenameChat?.(c.id, name.trim());
-                                setMenuFor(null);
-                            };
-
-                            const openDelete = () => {
-                                const ok = window.confirm(
-                                    "Delete this chat? This cannot be undone."
-                                );
-                                if (ok) onDeleteChat?.(c.id);
-                                setMenuFor(null);
-                            };
 
                             return (
                                 <div key={c.id} className="group relative">
@@ -415,56 +400,5 @@ export default function UISidebar({
                     document.body
                 )}
         </aside>
-    );
-}
-
-/* (Optional legacy modal kept for reference; safe to delete if unused) */
-function SettingsModal({ onClose }: { onClose: () => void }) {
-    const [enabled, setEnabled] = useState(false);
-    useEffect(() => setEnabled(getSaveChatsFlag()), []);
-    return (
-        <div
-            role="dialog"
-            aria-modal
-            className="fixed inset-0 z-[1000] grid place-items-center bg-black/60 p-4"
-            onClick={onClose}
-            onKeyDown={(e) => e.key === "Escape" && onClose()}
-        >
-            <div
-                className="w-full max-w-md rounded-2xl bg-neutral-900 p-6"
-                onClick={(e) => e.stopPropagation()}
-            >
-                <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold">Settings</h2>
-                    <button
-                        onClick={onClose}
-                        className="rounded-md px-2 py-1 bg-neutral-800 hover:bg-neutral-700"
-                    >
-                        Close
-                    </button>
-                </div>
-                <div className="mt-4 space-y-5">
-                    <div>
-                        <div className="text-xs uppercase opacity-60 mb-1">
-                            Chat
-                        </div>
-                        <label className="flex items-center justify-between gap-4">
-                            <span className="text-sm">
-                                Save new chats to cloud
-                            </span>
-                            <input
-                                type="checkbox"
-                                checked={enabled}
-                                onChange={(e) => {
-                                    const v = e.target.checked;
-                                    setEnabled(v);
-                                    setSaveChatsFlag(v);
-                                }}
-                            />
-                        </label>
-                    </div>
-                </div>
-            </div>
-        </div>
     );
 }

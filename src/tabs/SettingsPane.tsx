@@ -1,47 +1,57 @@
+// src/components/SettingsPane.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../ThemeContext";
-import { fetchUserSettings, updateUserSettings } from "../lib/userPrefsApi";
+import {
+    loadUserSettings,
+    saveUserSettings,
+    type UserSettingsResponse,
+} from "../lib/userPrefsApi";
+import { setSaveChatsFlag } from "../lib/settings";
 
 /* ---------------- Entry ---------------- */
-
-export default function SettingsPane({ tab }: { tab: any }) {
+export default function SettingsPane() {
     return <SettingsCore />;
 }
 
 /* ---------------- Types & constants ---------------- */
-
 type Theme = "light" | "dark";
 
 type AppSettings = {
-    theme: Theme; // server-backed
-    saveNewChatsToCloud: boolean; // server-backed
-    showTimestamps: boolean; // local only
-    compactMode: boolean; // local only
+    theme: Theme;
+    saveNewChatsToCloud: boolean;
+    showTimestamps: boolean;
+    compactMode: boolean;
 };
 
 const DEFAULTS: AppSettings = {
     theme: "dark",
-    saveNewChatsToCloud: false,
+    saveNewChatsToCloud: true,
     showTimestamps: true,
     compactMode: false,
 };
 
-const LS_KEY = "ysong.settings.v1";
+/* ---------- Global in-memory cache so settings survive tab switches ---------- */
 
-function readSettings(): AppSettings {
-    try {
-        const raw = localStorage.getItem(LS_KEY);
-        if (!raw) return { ...DEFAULTS };
-        return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) };
-    } catch {
-        return { ...DEFAULTS };
+let cachedSettings: AppSettings | null = null;
+let settingsFetchedFromServer = false;
+
+declare global {
+    interface Window {
+        __YS_SETTINGS?: AppSettings;
     }
 }
 
-function writeSettings(s: AppSettings) {
-    try {
-        localStorage.setItem(LS_KEY, JSON.stringify(s));
-    } catch {}
+function getInitialSettings(): AppSettings {
+    // 1) If UI.tsx already hydrated settings on login, use those.
+    if (typeof window !== "undefined" && window.__YS_SETTINGS) {
+        return window.__YS_SETTINGS;
+    }
+
+    // 2) If this tab already fetched settings once, reuse them.
+    if (cachedSettings) return cachedSettings;
+
+    // 3) Cold start: fall back to defaults until the server responds.
+    return DEFAULTS;
 }
 
 /* ---------------- UI helpers ---------------- */
@@ -164,62 +174,135 @@ function SmallSwitch({
 /* ---------------- Main ---------------- */
 
 function SettingsCore() {
-    const [settings, setSettings] = useState<AppSettings>(() => readSettings());
+    const [settings, setSettings] = useState<AppSettings>(() => {
+        const initial = getInitialSettings();
+        // keep cache + window in sync even on first mount
+        cachedSettings = initial;
+        if (typeof window !== "undefined") {
+            window.__YS_SETTINGS = initial;
+        }
+        return initial;
+    });
+
     const [loadedFromServer, setLoadedFromServer] = useState(false);
 
     // ThemeContext boolean
     const { dark, toggleDark } = useTheme();
 
-    // Load server-backed settings once and sync ThemeContext
+    // Helper: update React state + global cache in one go
+    const syncSettings = (updater: (prev: AppSettings) => AppSettings) => {
+        setSettings((prev) => {
+            const next = updater(prev);
+            cachedSettings = next;
+            if (typeof window !== "undefined") {
+                window.__YS_SETTINGS = next;
+            }
+            return next;
+        });
+    };
+
+    // ---------- Load from Neon on mount ----------
     useEffect(() => {
         let cancelled = false;
+
         (async () => {
             try {
-                const s = await fetchUserSettings(); // { saveChats, theme }
-                if (cancelled) return;
-                setSettings((prev) => ({
-                    ...prev,
-                    saveNewChatsToCloud: !!s.saveChats,
-                    theme: (s.theme ?? "system") as Theme,
-                }));
+                let next: AppSettings;
 
-                // Sync the boolean ThemeContext with server value
-                const shouldBeDark = (s.theme ?? "system") === "dark";
+                if (settingsFetchedFromServer && cachedSettings) {
+                    // We already fetched settings once in this tab → reuse them.
+                    next = cachedSettings;
+                } else {
+                    const s: UserSettingsResponse = await loadUserSettings();
+                    if (cancelled) return;
+
+                    next = {
+                        theme:
+                            (s.theme ?? "dark") === "light" ? "light" : "dark",
+                        saveNewChatsToCloud: s.saveChats ?? true,
+                        showTimestamps:
+                            s.showTimestamps === undefined
+                                ? true
+                                : !!s.showTimestamps,
+                        compactMode:
+                            s.compactMode === undefined
+                                ? false
+                                : !!s.compactMode,
+                    };
+
+                    // Persist to in-memory cache + window so other tabs/hooks see it
+                    cachedSettings = next;
+                    settingsFetchedFromServer = true;
+                    if (typeof window !== "undefined") {
+                        window.__YS_SETTINGS = next;
+                    }
+                }
+
+                setSettings(next);
+
+                // sync ThemeContext with the stored theme
+                const shouldBeDark = next.theme === "dark";
                 if (shouldBeDark !== dark) toggleDark();
-            } catch {
-                // keep local defaults on error
+
+                // keep legacy flag for UI that still looks at it
+                setSaveChatsFlag(next.saveNewChatsToCloud);
+            } catch (err) {
+                console.error("fetchUserSettings failed", err);
+                // keep whatever we already had on error
             } finally {
                 if (!cancelled) setLoadedFromServer(true);
             }
         })();
+
         return () => {
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Always mirror full settings to localStorage + notify same-tab listeners
+    // ---------- Save to Neon whenever settings change ----------
+
     useEffect(() => {
-        writeSettings(settings);
+        if (!loadedFromServer) return;
+
+        const t = setTimeout(() => {
+            // Push to server
+            saveUserSettings({
+                saveChats: settings.saveNewChatsToCloud,
+                theme: settings.theme,
+                showTimestamps: settings.showTimestamps,
+                compactMode: settings.compactMode,
+            }).catch((err) => {
+                console.error("updateUserSettings failed", err);
+            });
+
+            // Keep in-memory cache and global window copy in sync
+            cachedSettings = settings;
+            if (typeof window !== "undefined") {
+                window.__YS_SETTINGS = settings;
+            }
+
+            // keep legacy flag in sync for the rest of the app
+            setSaveChatsFlag(settings.saveNewChatsToCloud);
+        }, 250);
+
+        return () => clearTimeout(t);
+    }, [
+        loadedFromServer,
+        settings.saveNewChatsToCloud,
+        settings.theme,
+        settings.showTimestamps,
+        settings.compactMode,
+    ]);
+
+    // ---------- Broadcast to other tabs (ChatPane) ----------
+    useEffect(() => {
         window.dispatchEvent(
             new CustomEvent("ysong:settings", { detail: settings })
         );
     }, [settings]);
 
-    // Debounced save of server-backed fields to Neon
-    useEffect(() => {
-        if (!loadedFromServer) return;
-        const t = setTimeout(() => {
-            updateUserSettings({
-                saveChats: settings.saveNewChatsToCloud,
-                // Map our UI (we only expose a dark toggle) to server's tri-state
-                theme: settings.theme === "dark" ? "dark" : "system",
-            }).catch(() => {});
-        }, 400);
-        return () => clearTimeout(t);
-    }, [loadedFromServer, settings.saveNewChatsToCloud, settings.theme]);
-
-    // Build meta (unchanged)
+    // ---------- Build meta ----------
     const build = useMemo(() => {
         const env: any = (import.meta as any).env || {};
         const sha = env.VITE_BUILD_SHA || "dev";
@@ -229,6 +312,7 @@ function SettingsCore() {
         return { sha, time, mode, api } as const;
     }, []);
 
+    // ---------- Render ----------
     return (
         <div className="h-full flex flex-col">
             <div
@@ -262,7 +346,7 @@ function SettingsCore() {
                             dark={dark}
                             onToggle={(v) => {
                                 if (v !== dark) toggleDark();
-                                setSettings((s) => ({
+                                syncSettings((s) => ({
                                     ...s,
                                     theme: v ? "dark" : "light",
                                 }));
@@ -283,12 +367,23 @@ function SettingsCore() {
                                         id="settings-save-cloud"
                                         ariaLabel="Save new chats to cloud"
                                         checked={settings.saveNewChatsToCloud}
-                                        onChange={(v) =>
-                                            setSettings((s) => ({
+                                        onChange={(v) => {
+                                            // Update local React state + cache
+                                            syncSettings((s) => ({
                                                 ...s,
                                                 saveNewChatsToCloud: v,
-                                            }))
-                                        }
+                                            }));
+
+                                            // Immediately persist to Neon (like dark mode)
+                                            saveUserSettings({
+                                                saveChats: v,
+                                            }).catch((err) => {
+                                                console.error(
+                                                    "saveUserSettings(saveChats) failed",
+                                                    err
+                                                );
+                                            });
+                                        }}
                                     />
                                 }
                                 htmlFor="settings-save-cloud"
@@ -302,12 +397,23 @@ function SettingsCore() {
                                         id="settings-timestamps"
                                         ariaLabel="Show message timestamps"
                                         checked={settings.showTimestamps}
-                                        onChange={(v) =>
-                                            setSettings((s) => ({
+                                        onChange={(v) => {
+                                            // Update local React state + cache
+                                            syncSettings((s) => ({
                                                 ...s,
                                                 showTimestamps: v,
-                                            }))
-                                        }
+                                            }));
+
+                                            // Immediately persist to Neon
+                                            saveUserSettings({
+                                                showTimestamps: v,
+                                            }).catch((err) => {
+                                                console.error(
+                                                    "saveUserSettings(showTimestamps) failed",
+                                                    err
+                                                );
+                                            });
+                                        }}
                                     />
                                 }
                                 htmlFor="settings-timestamps"
@@ -321,12 +427,23 @@ function SettingsCore() {
                                         id="settings-compact"
                                         ariaLabel="Compact mode"
                                         checked={settings.compactMode}
-                                        onChange={(v) =>
-                                            setSettings((s) => ({
+                                        onChange={(v) => {
+                                            // Update local state + cache
+                                            syncSettings((s) => ({
                                                 ...s,
                                                 compactMode: v,
-                                            }))
-                                        }
+                                            }));
+
+                                            // Persist immediately
+                                            saveUserSettings({
+                                                compactMode: v,
+                                            }).catch((err) => {
+                                                console.error(
+                                                    "saveUserSettings(compactMode) failed",
+                                                    err
+                                                );
+                                            });
+                                        }}
                                     />
                                 }
                                 htmlFor="settings-compact"
@@ -338,7 +455,6 @@ function SettingsCore() {
                         title="About"
                         subtitle="Build details useful for debugging and support."
                     >
-                        {/* keep your KV items / copy here if you want */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <KV label="Mode" value={build.mode} />
                             <KV label="API Base" value={build.api} />
@@ -349,14 +465,16 @@ function SettingsCore() {
 
                     <div className="flex items-center justify-between pt-2">
                         <Button
-                            onClick={() => setSettings({ ...DEFAULTS })}
+                            onClick={() =>
+                                syncSettings(() => ({ ...DEFAULTS }))
+                            }
                             aria-label="Reset to defaults"
                             title="Reset to defaults"
                         >
                             Reset to defaults
                         </Button>
                         <span className="text-xs text-neutral-600 dark:text-neutral-400">
-                            v1 settings schema
+                            Neon-backed settings
                         </span>
                     </div>
                 </div>

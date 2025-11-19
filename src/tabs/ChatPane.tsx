@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { TabRecord } from "./core";
 import type { Chat } from "../components/UISidebar";
+import { fetchChatMessages, appendMessage } from "../lib/chatApi";
 
 type Props = {
     tab: TabRecord; // expects payload.chatId
@@ -20,18 +21,63 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     const showTimestamps = useShowTimestamps();
     const chatId = tab.payload?.chatId as string;
     const chat = chats.find((c) => c.id === chatId);
+    // messages can be missing when we only have the chat shell from /api/chats
+    const messageCount = chat?.messages?.length ?? 0;
 
     const [input, setInput] = useState("");
+
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
+    // ---- Load messages for this chat from Neon when the chat opens / changes ----
+    useEffect(() => {
+        if (!chatId) return;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const dbMessages = await fetchChatMessages(chatId);
+                if (cancelled) return;
+
+                setChats((prev) =>
+                    prev.map((c) =>
+                        c.id === chatId
+                            ? {
+                                  ...c,
+                                  messages: dbMessages.map((m) => ({
+                                      role: m.role,
+                                      text: m.content,
+                                      attachments: m.attachments ?? undefined,
+                                      ts: m.createdAt
+                                          ? new Date(m.createdAt).getTime()
+                                          : Date.now(),
+                                  })),
+                              }
+                            : c
+                    )
+                );
+            } catch (e: any) {
+                // 👇 NEW: ignore "chat_not_found" for empty/new chats
+                if (e?.message === "chat_not_found") {
+                    return;
+                }
+                console.error("Failed to load messages for chat", chatId, e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [chatId, setChats]);
+
+    // Keep scroll pinned to bottom when messages change
     useEffect(() => {
         const el = scrollerRef.current;
         if (el) el.scrollTop = el.scrollHeight;
-    }, [chatId, chat?.messages.length]);
+    }, [chatId, messageCount]);
 
     if (!chat) {
         return (
@@ -56,7 +102,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     }
 
     async function send() {
-        // Re-read the chat inside the function to satisfy TS
+        // Re-read the chat inside the function to satisfy TS & get latest messages
         const current = chats.find((c) => c.id === chatId);
         if (!current) return; // chat could have been removed
 
@@ -77,7 +123,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
         const typingToken = `__typing_${crypto.randomUUID()}__`;
 
-        // optimistic user + typing (stamp timestamps)
+        // Optimistic user message + typing bubble (with timestamps)
         setChats((prev) =>
             prev.map((c) =>
                 c.id === chatId
@@ -91,19 +137,21 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                   : text
                               : "New chat",
                           messages: [
-                              ...c.messages,
+                              ...(Array.isArray(c.messages)
+                                  ? (c.messages as any[])
+                                  : []),
                               {
                                   role: "user",
                                   text,
                                   attachments,
                                   ts: Date.now(),
-                              } as any,
+                              } as ChatMessage,
                               {
                                   role: "assistant",
                                   text: "…",
                                   token: typingToken,
                                   ts: Date.now(),
-                              } as any,
+                              } as ChatMessage,
                           ],
                       }
                     : c
@@ -111,6 +159,18 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         );
 
         try {
+            // 1) Persist the user message to Neon (fire-and-forget style)
+            try {
+                await appendMessage(chatId, {
+                    role: "user",
+                    content: text,
+                    attachments,
+                });
+            } catch (e) {
+                console.error("Failed to save user message to Neon", e);
+            }
+
+            // 2) Build the message history to send to the AI endpoint
             const baseMsgs = (current.messages ?? []).map((m: any) => ({
                 role: m.role,
                 content: m.text,
@@ -129,12 +189,26 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             const data = await res.json();
             const reply = data?.reply ?? "…";
 
+            // 3) Persist the assistant reply to Neon
+            try {
+                await appendMessage(chatId, {
+                    role: "assistant",
+                    content: reply,
+                });
+            } catch (e) {
+                console.error("Failed to save assistant message to Neon", e);
+            }
+
+            // 4) Replace the typing bubble with the final assistant reply
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === chatId
                         ? {
                               ...c,
-                              messages: (c.messages as any).map((m: any) =>
+                              messages: (Array.isArray(c.messages)
+                                  ? (c.messages as any[])
+                                  : []
+                              ).map((m: any) =>
                                   m.token === typingToken
                                       ? {
                                             role: "assistant",
@@ -148,12 +222,16 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 )
             );
         } catch {
+            // AI request failed → swap typing bubble with error message
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === chatId
                         ? {
                               ...c,
-                              messages: (c.messages as any).map((m: any) =>
+                              messages: (Array.isArray(c.messages)
+                                  ? (c.messages as any[])
+                                  : []
+                              ).map((m: any) =>
                                   m.token === typingToken
                                       ? {
                                             role: "assistant",
@@ -179,80 +257,79 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             >
                 <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-6 pb-4">
                     <div className="flex flex-col gap-4">
-                        {(chat.messages as unknown as ChatMessage[]).map(
-                            (m, i) => (
+                        {(Array.isArray(chat.messages)
+                            ? (chat.messages as unknown as ChatMessage[])
+                            : []
+                        ).map((m, i) => (
+                            <div
+                                key={i}
+                                className={`flex ${
+                                    m.role === "user"
+                                        ? "justify-end"
+                                        : "justify-start"
+                                }`}
+                            >
+                                {/* full-width row so % max-w is measured correctly */}
                                 <div
-                                    key={i}
-                                    className={`flex ${
+                                    className={`flex flex-col w-full ${
                                         m.role === "user"
-                                            ? "justify-end"
-                                            : "justify-start"
+                                            ? "items-end"
+                                            : "items-start"
                                     }`}
                                 >
-                                    {/* full-width row so % max-w is measured correctly */}
                                     <div
-                                        className={`flex flex-col w-full ${
-                                            m.role === "user"
-                                                ? "items-end"
-                                                : "items-start"
-                                        }`}
+                                        className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
+                                                ${
+                                                    m.role === "user"
+                                                        ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                                                        : "bg-neutral-100 dark:bg-neutral-900"
+                                                }
+                                                max-w-[85%] sm:max-w-[70%]`}
                                     >
-                                        <div
-                                            className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
-								${
-                                    m.role === "user"
-                                        ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                                        : "bg-neutral-100 dark:bg-neutral-900"
-                                }
-								max-w-[85%] sm:max-w-[70%]`}
-                                        >
-                                            {m.text}
-                                            {m.attachments &&
-                                                m.attachments.length > 0 && (
-                                                    <div className="mt-2 text-xs opacity-80">
-                                                        📎 Attachments:
-                                                        <ul className="mt-1 space-y-0.5">
-                                                            {m.attachments.map(
-                                                                (a, j) => (
-                                                                    <li
-                                                                        key={j}
-                                                                        className="truncate"
-                                                                    >
-                                                                        {a.name}{" "}
-                                                                        <span className="opacity-60">
-                                                                            (
-                                                                            {a.type ||
-                                                                                "file"}
-                                                                            )
-                                                                        </span>
-                                                                    </li>
-                                                                )
-                                                            )}
-                                                        </ul>
-                                                    </div>
-                                                )}
-                                        </div>
-
-                                        {showTimestamps && (
-                                            <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                                                <time
-                                                    dateTime={new Date(
-                                                        m.ts ?? Date.now()
-                                                    ).toISOString()}
-                                                    title={new Date(
-                                                        m.ts ?? Date.now()
-                                                    ).toLocaleString()}
-                                                >
-                                                    {formatTime(
-                                                        m.ts ?? Date.now()
-                                                    )}
-                                                </time>
-                                            </div>
-                                        )}
+                                        {m.text}
+                                        {m.attachments &&
+                                            m.attachments.length > 0 && (
+                                                <div className="mt-2 text-xs opacity-80">
+                                                    📎 Attachments:
+                                                    <ul className="mt-1 space-y-0.5">
+                                                        {m.attachments.map(
+                                                            (a, j) => (
+                                                                <li
+                                                                    key={j}
+                                                                    className="truncate"
+                                                                >
+                                                                    {a.name}{" "}
+                                                                    <span className="opacity-60">
+                                                                        (
+                                                                        {a.type ||
+                                                                            "file"}
+                                                                        )
+                                                                    </span>
+                                                                </li>
+                                                            )
+                                                        )}
+                                                    </ul>
+                                                </div>
+                                            )}
                                     </div>
+
+                                    {showTimestamps && (
+                                        <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                                            <time
+                                                dateTime={new Date(
+                                                    m.ts ?? Date.now()
+                                                ).toISOString()}
+                                                title={new Date(
+                                                    m.ts ?? Date.now()
+                                                ).toLocaleString()}
+                                            >
+                                                {formatTime(m.ts ?? Date.now())}
+                                            </time>
+                                        </div>
+                                    )}
                                 </div>
-                            )
-                        )}
+                            </div>
+                        ))}
 
                         <div ref={bottomRef} />
                     </div>
@@ -305,6 +382,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
                         <input
                             id={`filePicker-${chatId}`}
+                            name="files"
                             ref={fileInputRef}
                             type="file"
                             multiple
@@ -314,6 +392,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                         />
 
                         <input
+                            id={`chat-input-${chatId}`}
+                            name="message"
+                            autoComplete="off"
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === "Enter" && send()}
@@ -338,47 +419,27 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 }
 
 /* ---------- Settings integration ---------- */
-
 function useShowTimestamps() {
-    const read = () => {
-        try {
-            const raw = localStorage.getItem("ysong.settings.v1");
-            const obj = raw ? JSON.parse(raw) : {};
-            return obj.showTimestamps ?? true; // default true
-        } catch {
-            return true;
+    const [flag, setFlag] = useState<boolean>(() => {
+        if (typeof window !== "undefined" && (window as any).__YS_SETTINGS) {
+            return !!(window as any).__YS_SETTINGS.showTimestamps;
         }
-    };
-
-    const [flag, setFlag] = useState<boolean>(read);
+        // Fallback to default until we know better
+        return true;
+    });
 
     useEffect(() => {
-        // same-tab updates from SettingsPane (dispatches ysong:settings)
-        const onSettings = (e: Event) => {
-            const detail = (e as CustomEvent<any>).detail;
-            if (detail && typeof detail.showTimestamps === "boolean") {
-                setFlag(!!detail.showTimestamps);
+        const onSettings = (ev: Event) => {
+            if (!(ev instanceof CustomEvent)) return;
+            const detail: any = ev.detail || {};
+            if (typeof detail.showTimestamps === "boolean") {
+                setFlag(detail.showTimestamps);
             }
         };
-        window.addEventListener("ysong:settings", onSettings as EventListener);
 
-        // cross-tab updates via localStorage
-        const onStorage = (e: StorageEvent) => {
-            if (e.key === "ysong.settings.v1" && e.newValue) {
-                try {
-                    const obj = JSON.parse(e.newValue);
-                    if ("showTimestamps" in obj) setFlag(!!obj.showTimestamps);
-                } catch {}
-            }
-        };
-        window.addEventListener("storage", onStorage);
-
+        window.addEventListener("ysong:settings", onSettings);
         return () => {
-            window.removeEventListener(
-                "ysong:settings",
-                onSettings as EventListener
-            );
-            window.removeEventListener("storage", onStorage);
+            window.removeEventListener("ysong:settings", onSettings);
         };
     }, []);
 

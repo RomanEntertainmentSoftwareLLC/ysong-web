@@ -7,14 +7,13 @@ import {
     type SetStateAction,
 } from "react";
 import { apiGet, apiPost, clearToken } from "../lib/authApi";
-import { getSaveChatsFlag } from "../lib/settings";
+import { loadUserSettings } from "../lib/userPrefsApi";
 import UISidebar, { type Chat } from "../components/UISidebar";
 import {
     TabManagerProvider,
     TabBar,
     TabContentHost,
     useTabManager,
-    type TabRecord,
     type TabType,
     type TabRendererProps,
 } from "../tabs/core";
@@ -70,52 +69,55 @@ function BootTabs({
     me,
     chats,
     ensureChat,
+    chatsHydrated,
 }: {
     me: { email: string } | null;
     chats: Chat[];
     ensureChat: () => string;
+    chatsHydrated: boolean;
 }) {
     const { tabs, openTab, activateTab, hydrated } = useTabManager();
     const did = useRef(false);
 
     useEffect(() => {
         if (!hydrated) return; // wait for localStorage restore
+        if (!chatsHydrated) return; // wait for /api/chats (or explicit "no chats")
+        if (!me) return; // need user info
         if (did.current) return; // idempotent
         if (tabs.length > 0) return; // something was restored locally
-        if (!me) return; // wait for /auth/me to finish
 
         did.current = true;
 
         (async () => {
-            // 1) try server layout
             try {
-                const data = await apiGet<{
-                    tabs: TabRecord[];
-                    activeId: string | null;
-                }>("/api/ui/layout");
+                const data = await apiGet<{ tabs?: any[]; activeId?: string }>(
+                    "/api/ui/layout"
+                );
 
-                if (Array.isArray(data?.tabs) && data.tabs.length) {
-                    for (const t of data.tabs) {
-                        openTab({
-                            id: t.id,
-                            type: t.type as TabType,
-                            title: t.title,
-                            pinned: !!t.pinned,
-                            payload: t.payload ?? null,
-                        });
-                    }
+                if (data?.tabs && data.tabs.length > 0) {
+                    data.tabs.forEach((t) => openTab(t));
                     if (data.activeId) activateTab(data.activeId);
                     return;
                 }
-            } catch {
-                /* ignore and fall back */
+            } catch (err) {
+                console.warn("Failed to restore tab layout", err);
             }
 
             // 2) fall back to a welcome chat
-            const chatId = chats[0]?.id ?? ensureChat();
+            const firstChatId = chats[0]?.id;
+            const chatId = firstChatId ?? ensureChat();
             openTab({ type: "chat", title: "New Chat", payload: { chatId } });
         })();
-    }, [hydrated, tabs.length, me, chats, ensureChat, openTab, activateTab]);
+    }, [
+        hydrated,
+        chatsHydrated,
+        tabs.length,
+        me,
+        chats,
+        ensureChat,
+        openTab,
+        activateTab,
+    ]);
 
     return null;
 }
@@ -123,14 +125,9 @@ function BootTabs({
 export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);
 
-    const [chats, setChats] = useState<Chat[]>([
-        {
-            id: "1",
-            title: "",
-            messages: [{ role: "assistant", text: WELCOME }] as any[],
-        },
-    ]);
-    const [activeId, setActiveId] = useState("1");
+    const [chats, setChats] = useState<Chat[]>([]);
+    const [chatsHydrated, setChatsHydrated] = useState(false);
+    const [activeId, setActiveId] = useState("");
 
     // responsive + mobile drawer
     const isLgUp = useMediaQuery("(min-width: 1024px)");
@@ -144,16 +141,44 @@ export default function UI() {
             .catch(() => {});
     }, []);
 
-    // Hydrate chats when "Save to cloud" is ON
+    // Hydrate chats when "Save to cloud" is ON (Neon-backed via /api/settings)
     useEffect(() => {
-        if (!getSaveChatsFlag()) return;
-        apiGet<{ chats: Chat[] }>("/api/chats")
-            .then((data) => {
-                if (!data?.chats || !Array.isArray(data.chats)) return;
-                setChats(data.chats);
-                if (data.chats.length) setActiveId(data.chats[0].id);
-            })
-            .catch(() => {});
+        let cancelled = false;
+
+        (async () => {
+            try {
+                // 1) Ask server for settings (Neon)
+                const settings = await loadUserSettings();
+                if (cancelled) return;
+
+                // If user has saveChats turned off on the server, we are done
+                if (!settings?.saveChats) {
+                    setChatsHydrated(true);
+                    return;
+                }
+
+                // 2) If saveChats is true, pull chats from cloud
+                const data = await apiGet<{ chats: Chat[] }>("/api/chats");
+                if (cancelled) return;
+
+                if (data?.chats && Array.isArray(data.chats)) {
+                    setChats(data.chats);
+                    if (data.chats.length > 0) {
+                        setActiveId(data.chats[0].id);
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to hydrate settings/chats", err);
+            } finally {
+                if (!cancelled) {
+                    setChatsHydrated(true);
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     // --- mobile drawer UX ---
@@ -204,6 +229,14 @@ export default function UI() {
     async function logout() {
         try {
             clearToken();
+            // Also clear any tab layout stored in this browser so we start clean
+            try {
+                localStorage.removeItem("ysong.tabs");
+                localStorage.removeItem("ysong.activeTabId");
+            } catch {
+                // non-fatal; just log and move on
+                console.warn("Failed to clear UI layout from localStorage");
+            }
         } finally {
             window.location.replace("/login");
         }
@@ -211,16 +244,17 @@ export default function UI() {
 
     /* ----------------------------- Tab registry ----------------------------- */
     const registry = {
-        chat: ({ tab }: TabRendererProps) => (
-            <ChatPane tab={tab} chats={chats} setChats={setChats} />
-        ),
-        settings: ({ tab }: TabRendererProps) => <SettingsPane tab={tab} />,
-        daw: () => <Stub title="DAW" />,
-        mixer: () => <Stub title="Mixer" />,
-        market: () => <Stub title="Marketplace" />,
-        band: () => <Stub title="Band Creation" />,
-        artwork: () => <Stub title="Artwork Editor" />,
-        world: () => <Stub title="YSong World" />,
+        // IMPORTANT: use the actual components here so their identity is stable.
+        chat: ChatPane,
+        settings: SettingsPane,
+
+        // These are lightweight stubs; leaving them as trivial components is fine.
+        daw: (_props: TabRendererProps) => <Stub title="DAW" />,
+        mixer: (_props: TabRendererProps) => <Stub title="Mixer" />,
+        market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
+        band: (_props: TabRendererProps) => <Stub title="Band Creation" />,
+        artwork: (_props: TabRendererProps) => <Stub title="Artwork Editor" />,
+        world: (_props: TabRendererProps) => <Stub title="YSong World" />,
     } as const;
 
     /* Bridge so UISidebar buttons open/activate tabs */
@@ -238,8 +272,10 @@ export default function UI() {
         const smartTitle = (c: Chat) => {
             const fromTitle = (c.title ?? "").trim();
             if (fromTitle) return fromTitle.slice(0, 48);
+
+            const msgs = Array.isArray(c.messages) ? c.messages : [];
             const fromUser =
-                c.messages.find((m: any) => m.role === "user")?.text ?? "";
+                msgs.find((m: any) => m.role === "user")?.text ?? "";
             return (fromUser || "New Chat").slice(0, 48);
         };
 
@@ -299,14 +335,27 @@ export default function UI() {
         };
 
         const handleDeleteChat = (chatId: string) => {
+            // snapshot for optional rollback
+            const previousChats = p.chats;
+
+            // 🔹 Optimistic UI update
             p.setChats((prev) => prev.filter((c) => c.id !== chatId));
+
             if (p.activeId === chatId) {
-                const next = p.chats.find((c) => c.id !== chatId);
+                const next = previousChats.find((c) => c.id !== chatId);
                 p.setActiveId(next ? next.id : "");
             }
+
             tabs.filter(
                 (t) => t.type === "chat" && t.payload?.chatId === chatId
             ).forEach((t) => closeTab(t.id));
+
+            // 🔹 Tell the server to delete from Neon
+            apiPost("/api/chats/delete", { chatId }).catch((err) => {
+                console.error("Failed to delete chat on server", err);
+                // If you want strict consistency, uncomment this rollback:
+                // p.setChats(previousChats);
+            });
         };
 
         return (
@@ -343,6 +392,7 @@ export default function UI() {
                 )}
 
                 {/* Mobile hamburger + drawer */}
+                {/* Note to Self, move this MobileDrawer inside the UINav bar. It is covering the tabs. */}
                 {!isLgUp && (
                     <>
                         <MobileHamburger
@@ -368,12 +418,20 @@ export default function UI() {
                 {/* Main: Tab bar + active tab */}
                 <main className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
                     <TabBar />
-                    <TabContentHost registry={registry} />
+                    <TabContentHost
+                        registry={registry}
+                        extraProps={{ chats, setChats }}
+                    />
                 </main>
             </div>
 
             {/* auto-open first Chat tab */}
-            <BootTabs me={me} chats={chats} ensureChat={ensureWelcomeChat} />
+            <BootTabs
+                me={me}
+                chats={chats}
+                ensureChat={ensureWelcomeChat}
+                chatsHydrated={chatsHydrated}
+            />
             <PersistLayout />
         </TabManagerProvider>
     );

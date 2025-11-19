@@ -5,7 +5,7 @@ import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 
 export default function Navbar() {
-    const { dark, toggleDark } = useTheme();
+    const { dark } = useTheme();
     const [open, setOpen] = useState(false);
     const btnRef = useRef<HTMLButtonElement>(null);
     const navigate = useNavigate();
@@ -138,7 +138,7 @@ export default function Navbar() {
                         Create account
                     </button>
 
-                    <button
+                    {/*<button
                         type="button"
                         onClick={() => {
                             toggleDark();
@@ -147,7 +147,7 @@ export default function Navbar() {
                         className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2"
                     >
                         {dark ? "☀️ Light mode" : "🌙 Dark mode"}
-                    </button>
+                    </button>*/}
                 </div>
             </div>
         </header>

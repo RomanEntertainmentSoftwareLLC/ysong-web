@@ -37,7 +37,7 @@ type DropPlace = "before" | "after";
 export type TabRendererProps = { tab: TabRecord };
 
 /** Internal registry type used by TabContentHost */
-type Registry = Record<TabType, ComponentType<TabRendererProps>>;
+type Registry = Record<TabType, ComponentType<any>>;
 
 /* ----------------------------- Context API ------------------------------ */
 
@@ -358,7 +358,18 @@ export function TabBar() {
                                     ? "bg-white text-neutral-900 border-neutral-300 dark:bg-neutral-900 dark:text-white dark:border-neutral-700"
                                     : "bg-white/85 text-neutral-700 hover:bg-neutral-50 border-neutral-300 dark:bg-neutral-900/70 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:border-neutral-800"
                             }`}
-                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                                // Activate with Enter or Space for keyboard users
+                                if (
+                                    e.key === "Enter" ||
+                                    e.key === " " ||
+                                    e.key === "Spacebar"
+                                ) {
+                                    e.preventDefault();
+                                    activateTab(t.id);
+                                }
+                            }}
                             onClick={() => activateTab(t.id)}
                             title={t.title}
                         >
@@ -426,14 +437,23 @@ export function TabBar() {
     );
 }
 
-export function TabContentHost({ registry }: { registry: Registry }) {
+export function TabContentHost({
+    registry,
+    extraProps,
+}: {
+    registry: Registry;
+    extraProps?: Record<string, any>;
+}) {
     const { tabs, activeId } = useTabManager();
     const tab = tabs.find((t) => t.id === activeId) ?? null;
     if (!tab) return null;
+
     const C = registry[tab.type];
+    const props = { tab, ...(extraProps ?? {}) };
+
     return (
         <div className="flex-1 min-h-0">
-            <C tab={tab} />
+            <C {...props} />
         </div>
     );
 }
