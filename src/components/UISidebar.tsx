@@ -3,10 +3,13 @@ import { createPortal } from "react-dom";
 
 export type Chat = {
     id: string;
-    title?: string; // optional
-    // messages are optional because server /api/chats does not include them;
-    // when missing, treat as an empty array in the UI.
-    messages?: { role: "user" | "assistant"; text: string }[];
+    title?: string;
+    messages?: {
+        role: "user" | "assistant";
+        text: string;
+        ts?: number;
+        attachments?: any;
+    }[];
 };
 
 type ModuleType =

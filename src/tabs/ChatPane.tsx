@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TabRecord } from "./core";
 import type { Chat } from "../components/UISidebar";
 import { fetchChatMessages, appendMessage } from "../lib/chatApi";
+import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
 
 type Props = {
     tab: TabRecord; // expects payload.chatId
@@ -14,7 +15,7 @@ type ChatMessage = {
     text: string;
     attachments?: { name: string; size: number; type: string }[];
     token?: string;
-    ts?: number; // ← timestamp (ms)
+    ts?: number; // timestamp (ms)
 };
 
 export default function ChatPane({ tab, chats, setChats }: Props) {
@@ -28,9 +29,19 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
+
+    // Auto-resize textarea
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+
+        el.style.height = "0px";
+        el.style.height = el.scrollHeight + "px";
+    }, [input]);
 
     // ---- Load messages for this chat from Neon when the chat opens / changes ----
     useEffect(() => {
@@ -60,7 +71,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                     )
                 );
             } catch (e: any) {
-                // 👇 NEW: ignore "chat_not_found" for empty/new chats
+                // ignore "chat_not_found" for empty/new chats
                 if (e?.message === "chat_not_found") {
                     return;
                 }
@@ -90,6 +101,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     function triggerPicker() {
         fileInputRef.current?.click();
     }
+
     function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
@@ -97,6 +109,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         setPendingFiles((prev) => [...prev, ...filtered]);
         e.currentTarget.value = "";
     }
+
     function removeAttachment(i: number) {
         setPendingFiles((prev) => prev.filter((_, idx) => idx !== i));
     }
@@ -180,11 +193,14 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    messages: baseMsgs.concat([
+                    messages: [
+                        { role: "system", content: YSONG_SYSTEM_PROMPT },
+                        ...baseMsgs,
                         { role: "user", content: text },
-                    ]),
+                    ],
                 }),
             });
+
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             const reply = data?.reply ?? "…";
@@ -279,12 +295,12 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                 >
                                     <div
                                         className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
-                                                ${
-                                                    m.role === "user"
-                                                        ? "bg-neutral-700 text-white dark:bg-neutral-800"
-                                                        : "bg-neutral-100 dark:bg-neutral-900"
-                                                }
-                                                max-w-[85%] sm:max-w-[70%]`}
+                                            ${
+                                                m.role === "user"
+                                                    ? "bg-neutral-700 text-white dark:bg-neutral-800"
+                                                    : "bg-neutral-100 dark:bg-neutral-900"
+                                            }
+                                            max-w-[85%] sm:max-w-[70%]`}
                                     >
                                         {m.text}
                                         {m.attachments &&
@@ -313,17 +329,17 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                             )}
                                     </div>
 
-                                    {showTimestamps && (
+                                    {showTimestamps && m.ts != null && (
                                         <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
                                             <time
                                                 dateTime={new Date(
-                                                    m.ts ?? Date.now()
+                                                    m.ts
                                                 ).toISOString()}
                                                 title={new Date(
-                                                    m.ts ?? Date.now()
+                                                    m.ts
                                                 ).toLocaleString()}
                                             >
-                                                {formatTime(m.ts ?? Date.now())}
+                                                {formatTime(m.ts)}
                                             </time>
                                         </div>
                                     )}
@@ -338,31 +354,79 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
             {/* composer */}
             <div className="border-t border-neutral-200 dark:border-neutral-800">
+                {/* Attachment chips (only if there are pending files) */}
                 {pendingFiles.length > 0 && (
-                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 flex flex-wrap gap-2">
-                        {pendingFiles.map((f, idx) => (
-                            <span
-                                key={idx}
-                                className="inline-flex items-center gap-2 text-xs px-2 py-1 rounded-full border border-neutral-300 dark:border-neutral-700"
-                            >
-                                <span className="truncate max-w-[14rem]">
-                                    {f.name}
-                                </span>
-                                <button
-                                    onClick={() => removeAttachment(idx)}
-                                    className="opacity-70 hover:opacity-100"
-                                    aria-label={`Remove ${f.name}`}
-                                    title="Remove"
+                    <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 flex flex-wrap gap-3">
+                        {pendingFiles.map((f, idx) => {
+                            const isAudio = f.type.startsWith("audio/");
+                            const sizeMB = (f.size / (1024 * 1024)).toFixed(1);
+
+                            return (
+                                <div
+                                    key={idx}
+                                    className="flex items-center gap-3 rounded-2xl border border-neutral-300 bg-neutral-50/90 px-3 py-2 text-xs sm:text-sm shadow-sm
+                                        dark:border-neutral-700 dark:bg-neutral-900/70"
                                 >
-                                    ✕
-                                </button>
-                            </span>
-                        ))}
+                                    {/* Icon + mini waveform for audio */}
+                                    <div className="flex flex-col items-center justify-center">
+                                        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-50">
+                                            {isAudio ? "🎵" : "📎"}
+                                        </div>
+                                        {isAudio && (
+                                            <div className="mt-1 flex h-4 items-end gap-[2px] text-[0]">
+                                                {Array.from({ length: 12 }).map(
+                                                    (_, barIdx) => (
+                                                        <span
+                                                            key={barIdx}
+                                                            className="flex-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80"
+                                                            style={{
+                                                                height: `${
+                                                                    4 +
+                                                                    ((barIdx *
+                                                                        7) %
+                                                                        10)
+                                                                }px`,
+                                                            }}
+                                                        />
+                                                    )
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* File meta */}
+                                    <div className="min-w-0 flex flex-col">
+                                        <span className="truncate max-w-[10rem] font-medium">
+                                            {f.name}
+                                        </span>
+                                        <span className="mt-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                                            {isAudio
+                                                ? "Audio file"
+                                                : "Attachment"}{" "}
+                                            · {sizeMB} MB
+                                        </span>
+                                    </div>
+
+                                    {/* Remove button */}
+                                    <button
+                                        type="button"
+                                        onClick={() => removeAttachment(idx)}
+                                        className="ml-1 rounded-full px-2 text-xs opacity-60 hover:bg-neutral-200 hover:opacity-100 dark:hover:bg-neutral-700"
+                                        aria-label={`Remove ${f.name}`}
+                                        title="Remove"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
 
+                {/* Main input bar (always visible) */}
                 <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4 pb-[env(safe-area-inset-bottom)]">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center">
+                        {/* Screen-reader label for the hidden file input */}
                         <label
                             htmlFor={`filePicker-${chatId}`}
                             className="sr-only"
@@ -370,47 +434,66 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                             Add files
                         </label>
 
-                        <button
-                            type="button"
-                            onClick={triggerPicker}
-                            className="shrink-0 h-10 w-10 rounded-lg border flex items-center justify-center"
-                            title="Add files"
-                            aria-label="Add files"
-                        >
-                            +
-                        </button>
+                        {/* Unified pill */}
+                        <div className="flex w-full items-center gap-1 rounded-2xl border border-neutral-300 bg-neutral-50/80 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900/60">
+                            {/* Upload / [+] button */}
+                            <button
+                                type="button"
+                                onClick={triggerPicker}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-transparent text-neutral-500 hover:bg-neutral-200/60 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-700/60 dark:hover:text-neutral-50"
+                                title="Add files"
+                                aria-label="Add files"
+                            >
+                                +
+                            </button>
 
-                        <input
-                            id={`filePicker-${chatId}`}
-                            name="files"
-                            ref={fileInputRef}
-                            type="file"
-                            multiple
-                            onChange={onPickFiles}
-                            accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
-                            className="hidden"
-                        />
+                            {/* Hidden file input */}
+                            <input
+                                id={`filePicker-${chatId}`}
+                                name="files"
+                                ref={fileInputRef}
+                                type="file"
+                                multiple
+                                onChange={onPickFiles}
+                                accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
+                                className="hidden"
+                            />
 
-                        <input
-                            id={`chat-input-${chatId}`}
-                            name="message"
-                            autoComplete="off"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && send()}
-                            placeholder={`Message ${
-                                import.meta.env.VITE_APP_NAME
-                            }…`}
-                            className="flex-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-neutral-500/40"
-                        />
+                            {/* Text input (multi-line, auto-growing) */}
+                            <textarea
+                                id={`chat-input-${chatId}`}
+                                name="message"
+                                ref={textareaRef}
+                                value={input}
+                                rows={1}
+                                autoComplete="off"
+                                onChange={(e) => setInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && !e.shiftKey) {
+                                        e.preventDefault(); // prevent a newline
+                                        send();
+                                    }
+                                }}
+                                placeholder={`Message ${
+                                    import.meta.env.VITE_APP_NAME
+                                }…`}
+                                className="flex-1 bg-transparent border-0 px-2 py-1 text-sm sm:text-base
+                                    leading-relaxed resize-none overflow-y-auto max-h-40
+                                    focus:outline-none focus:ring-0"
+                            />
 
-                        <button
-                            onClick={send}
-                            className="px-4 py-2 rounded-lg border"
-                            aria-label="Send message"
-                        >
-                            Send
-                        </button>
+                            {/* Send button */}
+                            <button
+                                type="button"
+                                onClick={send}
+                                disabled={
+                                    !input.trim() && pendingFiles.length === 0
+                                }
+                                className="inline-flex h-8 items-center justify-center rounded-xl px-3 text-sm font-medium bg-neutral-900 text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+                            >
+                                Send
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>

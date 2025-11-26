@@ -19,10 +19,7 @@ import {
 } from "../tabs/core";
 import ChatPane from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
-
-const WELCOME = `Welcome to ${
-    import.meta.env.VITE_APP_NAME
-}! Ask me anything music related.`;
+import { YSONG_WELCOME } from "../lib/ysongPersona";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -56,7 +53,9 @@ function useEnsureWelcomeChat(setChats: Dispatch<SetStateAction<Chat[]>>) {
             const seed: Chat = {
                 id,
                 title: "",
-                messages: [{ role: "assistant", text: WELCOME }],
+                messages: [
+                    { role: "assistant", text: YSONG_WELCOME, ts: Date.now() },
+                ],
             };
             return [seed].concat(current);
         });
@@ -334,7 +333,9 @@ export default function UI() {
                 const newChat: Chat = {
                     id,
                     title: "",
-                    messages: [{ role: "assistant", text: WELCOME }] as any[],
+                    messages: [
+                        { role: "assistant", text: YSONG_WELCOME },
+                    ] as any[],
                 };
                 p.setChats((current) => [newChat, ...current]);
                 openTab({
