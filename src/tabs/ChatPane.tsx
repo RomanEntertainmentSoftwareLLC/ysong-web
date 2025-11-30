@@ -18,6 +18,32 @@ type ChatMessage = {
     ts?: number; // timestamp (ms)
 };
 
+function sanitizeEmDashesToSentences(text: string): string {
+    if (!text) return text;
+
+    let out = text;
+
+    // Case 1: middle-of-sentence clause, like "nice — this feels..."
+    // Turn: "<char><spaces>—<spaces><letter>"
+    // Into: "<char>. <CapitalLetter>"
+    out = out.replace(
+        /(\S)\s*\u2014\s*([A-Za-z])/g,
+        (_match, before, after) => {
+            return `${before}. ${String(after).toUpperCase()}`;
+        }
+    );
+
+    // Case 2: leftover em dashes (we did not catch a following letter).
+    // Example: "He paused — and then" (where "and" might be lowercased or
+    // weird punctuation around it). As a last resort, just break the clause.
+    out = out.replace(/\s*\u2014\s*/g, ". ");
+
+    // Optionally handle en dash too, if you are paranoid:
+    // out = out.replace(/\s*\u2013\s*/g, ". ");
+
+    return out;
+}
+
 export default function ChatPane({ tab, chats, setChats }: Props) {
     const showTimestamps = useShowTimestamps();
     const chatId = tab.payload?.chatId as string;
@@ -31,8 +57,15 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+    const [autoTitleRequested, setAutoTitleRequested] = useState(false);
+
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        // reset flag when switching to a different chat
+        setAutoTitleRequested(false);
+    }, [chatId]);
 
     // Auto-resize textarea
     useEffect(() => {
@@ -60,7 +93,12 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                   ...c,
                                   messages: dbMessages.map((m) => ({
                                       role: m.role,
-                                      text: m.content,
+                                      text:
+                                          m.role === "assistant"
+                                              ? sanitizeEmDashesToSentences(
+                                                    m.content
+                                                )
+                                              : m.content,
                                       attachments: m.attachments ?? undefined,
                                       ts: m.createdAt
                                           ? new Date(m.createdAt).getTime()
@@ -89,6 +127,95 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         const el = scrollerRef.current;
         if (el) el.scrollTop = el.scrollHeight;
     }, [chatId, messageCount]);
+
+    // Auto-generate a short chat title once per chat (ChatGPT-style)
+    useEffect(() => {
+        const current = chats.find((c) => c.id === chatId);
+        if (!current) return;
+
+        // Already named (by user or previous run) → do nothing
+        if (current.title && current.title.trim().length > 0) return;
+
+        // Need at least one user + one assistant message before titling
+        const msgs = Array.isArray(current.messages) ? current.messages : [];
+        const hasUser = msgs.some((m) => m.role === "user");
+        const hasAssistant = msgs.some((m) => m.role === "assistant");
+        if (!hasUser || !hasAssistant) return;
+
+        // Prevent multiple simultaneous calls
+        if (autoTitleRequested) return;
+        setAutoTitleRequested(true);
+
+        (async () => {
+            try {
+                // Take the first few turns as a summary snippet
+                const snippet = msgs
+                    .slice(0, 8)
+                    .map((m) => {
+                        const speaker =
+                            m.role === "user" ? "User" : "Assistant";
+                        return `${speaker}: ${m.text}`;
+                    })
+                    .join("\n");
+
+                const res = await fetch("https://api.ysong.ai/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        messages: [
+                            {
+                                role: "system",
+                                content:
+                                    "You name chat conversations. Given a short transcript, respond with a very short title (3 to 6 words). No quotes, no emojis, no trailing period.",
+                            },
+                            {
+                                role: "user",
+                                content:
+                                    "Write a concise title for this chat:\n\n" +
+                                    snippet,
+                            },
+                        ],
+                    }),
+                });
+
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                let title = (data?.reply ?? "").trim();
+
+                // Basic cleanup
+                title = title.replace(/^["']|["']$/g, "");
+                if (title.length > 60) title = title.slice(0, 59) + "…";
+                if (!title) return;
+
+                // 1) Update chats in React state (local)
+                setChats((prev) =>
+                    prev.map((c) => (c.id === chatId ? { ...c, title } : c))
+                );
+
+                // 2) OPTIONAL: persist to backend so /api/chats returns the title
+                try {
+                    // Swap this for however you store the token
+                    const token = localStorage.getItem("ysong_token");
+                    if (token) {
+                        await fetch("/api/chats/rename", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                Authorization: `Bearer ${token}`,
+                            },
+                            body: JSON.stringify({ chatId, title }),
+                        });
+                    }
+                } catch (err) {
+                    console.warn("Failed to persist chat title", err);
+                }
+            } catch (err) {
+                console.error("Failed to auto-title chat", err);
+            } finally {
+                setAutoTitleRequested(false);
+            }
+        })();
+    }, [chatId, chats, setChats, autoTitleRequested]);
 
     if (!chat) {
         return (
@@ -142,13 +269,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 c.id === chatId
                     ? {
                           ...c,
-                          title: c.title?.trim()
-                              ? c.title
-                              : text
-                              ? text.length > 48
-                                  ? text.slice(0, 47) + "…"
-                                  : text
-                              : "New chat",
+                          // don’t touch c.title here
                           messages: [
                               ...(Array.isArray(c.messages)
                                   ? (c.messages as any[])
@@ -203,7 +324,8 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            const reply = data?.reply ?? "…";
+            const rawReply = data?.reply ?? "…";
+            const reply = sanitizeEmDashesToSentences(rawReply);
 
             // 3) Persist the assistant reply to Neon
             try {
@@ -293,8 +415,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                             : "items-start"
                                     }`}
                                 >
+                                    {/* Chat bubbles here */}
                                     <div
-                                        className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm
+                                        className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm whitespace-pre-wrap
                                             ${
                                                 m.role === "user"
                                                     ? "bg-neutral-700 text-white dark:bg-neutral-800"

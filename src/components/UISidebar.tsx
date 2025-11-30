@@ -47,11 +47,7 @@ function truncate(s: string, max = 48) {
 function chatLabel(chat: Chat): string {
     const t = normalizeOneLine(chat.title ?? "");
     if (t) return t;
-
-    const msgs = Array.isArray(chat.messages) ? chat.messages : [];
-    const last = msgs.length ? msgs[msgs.length - 1]?.text ?? "" : "";
-    const normalized = normalizeOneLine(last);
-    return normalized || "New chat";
+    return "New chat";
 }
 
 /* simple menu item */
