@@ -20,6 +20,7 @@ import {
 import ChatPane from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
 import { YSONG_WELCOME } from "../lib/ysongPersona";
+import AssetDrawer from "../components/AssetDrawer";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -462,6 +463,8 @@ export default function UI() {
                     />
                 </main>
             </div>
+
+            <AssetDrawer />
 
             {/* auto-open first Chat tab */}
             <BootTabs

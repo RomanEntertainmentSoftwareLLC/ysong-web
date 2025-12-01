@@ -547,7 +547,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 )}
 
                 {/* Main input bar (always visible) */}
-                <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4 pb-[env(safe-area-inset-bottom)]">
+                <div className="mx-auto w-full max-w-[720px] px-4 sm:px-6 py-4 pb-[env(safe-area-inset-bottom)] mb-10">
                     <div className="flex items-center">
                         {/* Screen-reader label for the hidden file input */}
                         <label
