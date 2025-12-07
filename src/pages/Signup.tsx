@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
+import { YSButton } from "../components/YSButton";
 
 export default function Signup() {
     const [show, setShow] = useState(false);
@@ -131,7 +132,7 @@ export default function Signup() {
                          bg-white dark:bg-neutral-900 px-3 py-2 pr-10
                          focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
-                        <button
+                        <YSButton
                             type="button"
                             onClick={() => setShow((v) => !v)}
                             className="absolute inset-y-0 right-0 px-3 text-sm opacity-70 hover:opacity-100"
@@ -140,7 +141,7 @@ export default function Signup() {
                             }
                         >
                             {show ? "🙈" : "👁️"}
-                        </button>
+                        </YSButton>
                     </div>
                     <p className="mt-1 text-xs opacity-70">
                         Use 8+ characters.
@@ -177,7 +178,7 @@ export default function Signup() {
                     )}
                 </div>
 
-                <button
+                <YSButton
                     type="submit"
                     disabled={status === "loading"}
                     className="w-full px-4 py-2 text-sm font-semibold rounded-lg border
@@ -186,7 +187,7 @@ export default function Signup() {
              focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
                 >
                     {status === "loading" ? "Creating…" : "Create account"}
-                </button>
+                </YSButton>
 
                 {status === "done" && (
                     <div

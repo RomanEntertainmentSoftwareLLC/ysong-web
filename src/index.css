@@ -51,7 +51,7 @@ h1 {
     @apply text-5xl leading-tight font-extrabold;
 }
 
-button {
+.ys-button {
     @apply inline-flex items-center justify-center rounded-lg font-medium
     text-black hover:text-black
     dark:text-neutral-100 dark:hover:text-black

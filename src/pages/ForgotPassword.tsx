@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import { apiPost } from "../lib/authApi";
+import { YSButton } from "../components/YSButton";
 
 export default function ForgotPassword() {
     const [email, setEmail] = useState("");
@@ -64,14 +65,14 @@ export default function ForgotPassword() {
                     />
                 </div>
 
-                <button
+                <YSButton
                     type="button"
                     onClick={onSubmit}
                     disabled={sending || !email}
                     className="w-full px-4 py-2 text-sm font-semibold rounded-lg border disabled:opacity-50"
                 >
                     {sending ? "Sending…" : "Email me a reset link"}
-                </button>
+                </YSButton>
 
                 {status === "ok" && (
                     <div className="rounded-md border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-900/20 p-3 text-sm">

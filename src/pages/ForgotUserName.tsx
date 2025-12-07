@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
+import { YSButton } from "../components/YSButton";
 
 export default function ForgotUserName() {
     const [email, setEmail] = useState("");
@@ -54,7 +55,7 @@ export default function ForgotUserName() {
                 )}
 
                 <div className="mt-4 flex items-center gap-2">
-                    <button
+                    <YSButton
                         type="button"
                         onClick={handleSend}
                         disabled={sending || !email}
@@ -62,7 +63,7 @@ export default function ForgotUserName() {
                        disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                         {sending ? "Sending…" : "Send username"}
-                    </button>
+                    </YSButton>
 
                     <Link
                         to="/login"

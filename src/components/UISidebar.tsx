@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { YSButton } from "./YSButton";
 
 export type Chat = {
     id: string;
@@ -61,14 +62,14 @@ function MenuItem({
     danger?: boolean;
 }) {
     return (
-        <button
+        <YSButton
             className={`w-full flex items-center px-3 py-2 text-left text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
                 danger ? "text-red-600 dark:text-red-400" : ""
             }`}
             onClick={onClick}
         >
             {children}
-        </button>
+        </YSButton>
     );
 }
 
@@ -166,7 +167,7 @@ export default function UISidebar({
                 </div>
                 <div className="mt-2 flex items-center gap-2">
                     {onLogout && (
-                        <button
+                        <YSButton
                             onClick={onLogout}
                             className="ml-auto text-sm px-3 py-1.5 whitespace-nowrap rounded-lg border
                         border-neutral-300 dark:border-neutral-700
@@ -174,7 +175,7 @@ export default function UISidebar({
                             title="Sign out"
                         >
                             Sign out
-                        </button>
+                        </YSButton>
                     )}
                 </div>
             </div>
@@ -182,7 +183,7 @@ export default function UISidebar({
             {/* Chats header row */}
             <div className="flex items-center justify-between mt-2">
                 <h2 className="font-semibold">Chat</h2>
-                <button
+                <YSButton
                     onClick={newChat}
                     className="text-sm px-2 py-1 rounded-lg border
                      border-neutral-300 dark:border-neutral-700
@@ -190,7 +191,7 @@ export default function UISidebar({
                     title="Start a new chat"
                 >
                     New
-                </button>
+                </YSButton>
             </div>
 
             {/* Chat listbox: up to 3 visible rows */}
@@ -205,7 +206,7 @@ export default function UISidebar({
                             return (
                                 <div key={c.id} className="group relative">
                                     {/* main row button */}
-                                    <button
+                                    <YSButton
                                         onClick={() =>
                                             onOpenChatTab
                                                 ? onOpenChatTab(c)
@@ -222,10 +223,10 @@ export default function UISidebar({
                                         <div className="truncate">
                                             {primary}
                                         </div>
-                                    </button>
+                                    </YSButton>
 
                                     {/* 3-dot trigger (no silhouette) */}
-                                    <button
+                                    <YSButton
                                         className={`absolute right-1 top-1/2 -translate-y-1/2
                                 opacity-0 group-hover:opacity-100 transition-opacity
                                 pointer-events-none group-hover:pointer-events-auto
@@ -266,7 +267,7 @@ export default function UISidebar({
                                             <circle cx="12" cy="12" r="2" />
                                             <circle cx="12" cy="19" r="2" />
                                         </svg>
-                                    </button>
+                                    </YSButton>
                                 </div>
                             );
                         })}
@@ -290,13 +291,13 @@ export default function UISidebar({
                             ["YSong World", "world"],
                         ] as [string, ModuleType][]
                     ).map(([label, type]) => (
-                        <button
+                        <YSButton
                             key={type}
                             onClick={() => onOpenModule?.(type)}
                             className="w-full text-left px-3 py-2 rounded-lg border hover:bg-neutral-50 dark:hover:bg-neutral-900"
                         >
                             {label}
-                        </button>
+                        </YSButton>
                     ))}
                 </div>
             </div>

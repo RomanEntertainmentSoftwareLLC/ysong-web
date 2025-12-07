@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiPost } from "../lib/authApi";
+import { YSButton } from "./YSButton";
 
 type Props = {
     children: React.ReactNode;
@@ -140,18 +141,18 @@ export default function TosGate({
                         </div>
 
                         <div className="mt-6 flex justify-end gap-3">
-                            <button
+                            <YSButton
                                 onClick={onDecline}
                                 className="rounded-xl px-4 py-2 bg-neutral-800"
                             >
                                 Decline
-                            </button>
-                            <button
+                            </YSButton>
+                            <YSButton
                                 onClick={onAccept}
                                 className="rounded-xl px-4 py-2 bg-white text-black font-semibold"
                             >
                                 I Accept
-                            </button>
+                            </YSButton>
                         </div>
                     </div>
                 </div>

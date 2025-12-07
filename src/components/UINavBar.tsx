@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTheme } from "../ThemeContext";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
-
+import { YSButton } from "./YSButton";
 type Props = {
     meEmail?: string | null;
     onLogout?: () => void;
@@ -47,7 +47,7 @@ export default function UINavbar({
                 {/* Left: logo (+ optional mobile sidebar toggle) */}
                 <div className="flex items-center gap-2">
                     {onToggleSidebar && (
-                        <button
+                        <YSButton
                             type="button"
                             onClick={onToggleSidebar}
                             className="sm:hidden inline-flex items-center justify-center rounded-lg p-2"
@@ -64,7 +64,7 @@ export default function UINavbar({
                             >
                                 <path d="M4 6h16M4 12h16M4 18h16" />
                             </svg>
-                        </button>
+                        </YSButton>
                     )}
 
                     <a href="/app" aria-label="YSong Home">
@@ -84,7 +84,7 @@ export default function UINavbar({
 
                 <div className="flex items-center gap-1 sm:gap-2">
                     {/* Right: theme toggle + (optional) user menu 
-                    <button
+                    <YSButton
                         type="button"
                         onClick={toggleDark}
                         aria-label={
@@ -96,11 +96,11 @@ export default function UINavbar({
                         className="inline-flex items-center justify-center rounded-lg px-2.5 py-2"
                     >
                         <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
-                    </button>*/}
+                    </YSButton>*/}
 
                     {meEmail && onLogout && (
                         <div className="relative">
-                            <button
+                            <YSButton
                                 ref={menuBtnRef}
                                 type="button"
                                 onClick={() => setMenuOpen((v) => !v)}
@@ -123,29 +123,30 @@ export default function UINavbar({
                                 >
                                     <path d="M6 9l6 6 6-6" />
                                 </svg>
-                            </button>
+                            </YSButton>
 
                             {/* menu */}
                             {menuOpen && (
                                 <div
                                     id="user-menu"
-                                    role="menu"
-                                    className="absolute right-0 mt-2 w-48 rounded-lg border bg-white dark:bg-neutral-950 
-                             border-neutral-200 dark:border-neutral-800 shadow-lg p-2"
+                                    // ❌ drop role="menu"
+                                    className="absolute right-0 mt-2 w-48 rounded-lg border bg-white dark:bg-neutral-900 dark:border-neutral-800 shadow-lg p-2"
                                 >
+                                    {/* purely visual label; screen readers will still read the text */}
                                     <div className="px-2 py-1 text-xs opacity-70 truncate">
                                         {meEmail}
                                     </div>
-                                    <button
+
+                                    <YSButton
                                         onClick={() => {
                                             setMenuOpen(false);
                                             onLogout();
                                         }}
-                                        className="mt-1 w-full text-left px-3 py-2 text-sm rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                                        role="menuitem"
+                                        className="mt-1 w-full text-left px-3 py-2 text-sm rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                                        type="button"
                                     >
                                         Sign out
-                                    </button>
+                                    </YSButton>
                                 </div>
                             )}
                         </div>

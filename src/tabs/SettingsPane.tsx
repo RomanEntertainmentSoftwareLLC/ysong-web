@@ -6,6 +6,7 @@ import {
     saveUserSettings,
     type UserSettingsResponse,
 } from "../lib/userPrefsApi";
+import { YSButton } from "../components/YSButton";
 
 /* ---------------- Entry ---------------- */
 export default function SettingsPane() {
@@ -114,7 +115,7 @@ function Row({
     );
 }
 
-function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+/*function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
     const { className = "", ...rest } = props;
     return (
         <button
@@ -127,7 +128,7 @@ function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
             }
         />
     );
-}
+}*/
 
 function SmallSwitch({
     checked,
@@ -457,7 +458,7 @@ function SettingsCore() {
                     </Section>
 
                     <div className="flex items-center justify-between pt-2">
-                        <Button
+                        <YSButton
                             onClick={() =>
                                 syncSettings(() => ({ ...DEFAULTS }))
                             }
@@ -465,7 +466,7 @@ function SettingsCore() {
                             title="Reset to defaults"
                         >
                             Reset to defaults
-                        </Button>
+                        </YSButton>
                         <span className="text-xs text-neutral-600 dark:text-neutral-400">
                             Neon-backed settings
                         </span>
@@ -505,7 +506,7 @@ function KV({
 function CopyButton({ text }: { text: string }) {
     const [ok, setOk] = useState(false);
     return (
-        <button
+        <YSButton
             className={`text-sm underline underline-offset-2 ${
                 ok
                     ? "text-green-600 dark:text-green-400"
@@ -522,7 +523,7 @@ function CopyButton({ text }: { text: string }) {
             aria-label="Copy value"
         >
             {ok ? "Copied" : "Copy"}
-        </button>
+        </YSButton>
     );
 }
 

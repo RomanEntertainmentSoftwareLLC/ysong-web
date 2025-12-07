@@ -1,0 +1,65 @@
+@reference "tailwindcss";
+
+/* ASSET / FILE PILL CONTAINER */
+.asset-pill {
+    @apply w-full flex items-center gap-3 rounded-2xl border px-3 py-2
+        text-xs sm:text-sm shadow-sm
+        /* light theme base */
+        bg-neutral-50 text-neutral-900 border-neutral-200;
+}
+
+/* dark theme override */
+.dark .asset-pill {
+    @apply bg-neutral-900 text-neutral-50 border-neutral-700;
+}
+
+/* hover states */
+.asset-pill:hover {
+    @apply bg-neutral-100;
+}
+
+.dark .asset-pill:hover {
+    @apply bg-neutral-800;
+}
+
+/* LEFT SIDE: ICON + MINI WAVEFORM */
+.asset-pill-icon-wrapper {
+    @apply flex flex-col items-center justify-center;
+}
+
+.asset-pill-icon-box {
+    @apply flex h-8 w-8 items-center justify-center rounded-xl
+        /* light theme: soft gray chip with purple note */
+        bg-neutral-200 text-violet-600;
+}
+
+.dark .asset-pill-icon-box {
+    /* dark theme: dark gray chip, softer purple note */
+    @apply bg-neutral-800 text-violet-300;
+}
+
+.asset-pill-wave {
+    @apply mt-1 flex h-4 items-end gap-[2px] text-[0];
+}
+
+.asset-pill-wave-bar {
+    @apply flex-1 rounded-full bg-violet-400/80;
+}
+
+.dark .asset-pill-wave-bar {
+    @apply bg-violet-300/80;
+}
+
+/* RIGHT SIDE: NAME + META */
+.asset-pill-text {
+    @apply min-w-0 flex-1;
+}
+
+.asset-pill-name {
+    @apply block truncate font-medium;
+}
+
+.asset-pill-meta {
+    @apply mt-0.5 block text-[10px] uppercase tracking-wide opacity-70
+        text-neutral-500 dark:text-neutral-400;
+}

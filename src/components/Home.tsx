@@ -4,6 +4,7 @@ import { useTheme } from "../ThemeContext";
 import { useNavigate } from "react-router-dom";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
+import { YSButton } from "./YSButton";
 
 export default function Home() {
     const { dark } = useTheme();
@@ -110,8 +111,11 @@ export default function Home() {
         defaultCount?: number;
     }) => {
         const [open, setOpen] = useState(false);
-        const shown = open ? items : items.slice(0, defaultCount);
-        const remaining = Math.max(0, items.length - shown.length);
+
+        const isExpandable = items.length > defaultCount;
+        const shown =
+            !isExpandable || open ? items : items.slice(0, defaultCount);
+        const remaining = isExpandable ? items.length - defaultCount : 0;
 
         return (
             <Reveal className="rounded-xl border p-4">
@@ -128,14 +132,14 @@ export default function Home() {
                     ))}
                 </ul>
 
-                {remaining > 0 && (
-                    <button
+                {isExpandable && (
+                    <YSButton
                         type="button"
-                        onClick={() => setOpen(!open)}
+                        onClick={() => setOpen((v) => !v)}
                         className="mt-3 text-xs px-2 py-1 rounded-md border hover:bg-neutral-100 dark:hover:bg-neutral-800"
                     >
                         {open ? "Show less" : `Show ${remaining} more`}
-                    </button>
+                    </YSButton>
                 )}
             </Reveal>
         );
@@ -239,13 +243,13 @@ export default function Home() {
             {/* CTA */}
             <section className="mt-10 sm:mt-12 mb-16 text-center">
                 <Reveal>
-                    <button
+                    <YSButton
                         type="button"
                         onClick={() => navigate("/signup")}
                         className="px-3 py-2 text-sm font-medium rounded-lg border"
                     >
                         Get started
-                    </button>
+                    </YSButton>
                 </Reveal>
             </section>
         </div>

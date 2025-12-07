@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
 import { clearToken } from "../lib/authApi";
+import { YSButton } from "../components/YSButton";
 
 type ApiUser = { id: string; email: string };
 
@@ -126,7 +127,7 @@ export default function Login() {
                 bg-white dark:bg-neutral-900
                 focus:outline-none focus:ring-2 focus:ring-sky-500"
                         />
-                        <button
+                        <YSButton
                             type="button"
                             onClick={() => setShow((v) => !v)}
                             className="absolute inset-y-0 right-0 px-3 text-sm opacity-70 hover:opacity-100"
@@ -135,11 +136,11 @@ export default function Login() {
                             }
                         >
                             {show ? "🙈" : "👁️"}
-                        </button>
+                        </YSButton>
                     </div>
                 </div>
 
-                <button
+                <YSButton
                     type="submit"
                     disabled={status === "loading"}
                     className="w-full px-4 py-2 text-sm font-semibold rounded-lg border
@@ -148,7 +149,7 @@ export default function Login() {
             focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-60"
                 >
                     {status === "loading" ? "Signing in…" : "Continue"}
-                </button>
+                </YSButton>
 
                 {status === "error" && (
                     <p className="text-sm text-rose-600" role="alert">

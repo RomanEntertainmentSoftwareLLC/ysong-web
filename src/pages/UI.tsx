@@ -21,6 +21,7 @@ import ChatPane from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
 import { YSONG_WELCOME } from "../lib/ysongPersona";
 import AssetDrawer from "../components/AssetDrawer";
+import { YSButton } from "../components/YSButton";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -504,7 +505,7 @@ function MobileHamburger({
     }, [open]);
 
     return (
-        <button
+        <YSButton
             ref={menuBtnRef}
             type="button"
             aria-controls="mobile-sidebar"
@@ -538,7 +539,7 @@ function MobileHamburger({
             >
                 <path d="M6 6l12 12M6 18L18 6" />
             </svg>
-        </button>
+        </YSButton>
     );
 }
 
@@ -577,7 +578,7 @@ function MobileDrawer({
                     <h2 id="mobile-sidebar-title" className="sr-only">
                         Sidebar
                     </h2>
-                    <button
+                    <YSButton
                         type="button"
                         aria-label="Close sidebar"
                         className="absolute right-3 top-3 h-9 w-9 inline-flex items-center justify-center rounded-lg border"
@@ -594,7 +595,7 @@ function MobileDrawer({
                         >
                             <path d="M6 6l12 12M6 18L18 6" />
                         </svg>
-                    </button>
+                    </YSButton>
 
                     <div className="h-full overflow-y-auto">{children}</div>
                 </div>

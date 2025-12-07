@@ -3,6 +3,8 @@ import type { TabRecord } from "./core";
 import type { Chat } from "../components/UISidebar";
 import { fetchChatMessages, appendMessage } from "../lib/chatApi";
 import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
+import { YSButton } from "../components/YSButton";
+import { FilePill } from "../components/FilePill";
 
 type Props = {
     tab: TabRecord; // expects payload.chatId
@@ -428,26 +430,51 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                         {m.text}
                                         {m.attachments &&
                                             m.attachments.length > 0 && (
-                                                <div className="mt-2 text-xs opacity-80">
-                                                    📎 Attachments:
-                                                    <ul className="mt-1 space-y-0.5">
-                                                        {m.attachments.map(
-                                                            (a, j) => (
-                                                                <li
-                                                                    key={j}
-                                                                    className="truncate"
-                                                                >
-                                                                    {a.name}{" "}
-                                                                    <span className="opacity-60">
-                                                                        (
-                                                                        {a.type ||
-                                                                            "file"}
-                                                                        )
-                                                                    </span>
-                                                                </li>
-                                                            )
-                                                        )}
-                                                    </ul>
+                                                <div className="mt-3 flex flex-wrap gap-3">
+                                                    {m.attachments.map(
+                                                        (att, j) => {
+                                                            const sizeMB =
+                                                                typeof att.size ===
+                                                                "number"
+                                                                    ? Number(
+                                                                          (
+                                                                              att.size /
+                                                                              (1024 *
+                                                                                  1024)
+                                                                          ).toFixed(
+                                                                              1
+                                                                          )
+                                                                      )
+                                                                    : 0;
+
+                                                            const pillType =
+                                                                typeof att.type ===
+                                                                    "string" &&
+                                                                att.type
+                                                                    .toLowerCase()
+                                                                    .startsWith(
+                                                                        "audio"
+                                                                    )
+                                                                    ? "audio"
+                                                                    : "file";
+
+                                                            return (
+                                                                <FilePill
+                                                                    key={`${i}-${j}-${att.name}`}
+                                                                    id={`${i}-${j}-${att.name}`}
+                                                                    name={
+                                                                        att.name
+                                                                    }
+                                                                    sizeMB={
+                                                                        sizeMB
+                                                                    }
+                                                                    type={
+                                                                        pillType
+                                                                    }
+                                                                />
+                                                            );
+                                                        }
+                                                    )}
                                                 </div>
                                             )}
                                     </div>
@@ -531,7 +558,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                     </div>
 
                                     {/* Remove button */}
-                                    <button
+                                    <YSButton
                                         type="button"
                                         onClick={() => removeAttachment(idx)}
                                         className="ml-1 rounded-full px-2 text-xs opacity-60 hover:bg-neutral-200 hover:opacity-100 dark:hover:bg-neutral-700"
@@ -539,7 +566,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                         title="Remove"
                                     >
                                         ✕
-                                    </button>
+                                    </YSButton>
                                 </div>
                             );
                         })}
@@ -560,7 +587,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                         {/* Unified pill */}
                         <div className="flex w-full items-center gap-1 rounded-2xl border border-neutral-300 bg-neutral-50/80 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900/60">
                             {/* Upload / [+] button */}
-                            <button
+                            <YSButton
                                 type="button"
                                 onClick={triggerPicker}
                                 className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-transparent text-neutral-500 hover:bg-neutral-200/60 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-700/60 dark:hover:text-neutral-50"
@@ -568,7 +595,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                 aria-label="Add files"
                             >
                                 +
-                            </button>
+                            </YSButton>
 
                             {/* Hidden file input */}
                             <input
@@ -606,7 +633,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                             />
 
                             {/* Send button */}
-                            <button
+                            <YSButton
                                 type="button"
                                 onClick={send}
                                 disabled={
@@ -615,7 +642,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                 className="inline-flex h-8 items-center justify-center rounded-xl px-3 text-sm font-medium bg-neutral-900 text-white disabled:cursor-not-allowed disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
                             >
                                 Send
-                            </button>
+                            </YSButton>
                         </div>
                     </div>
                 </div>

@@ -10,6 +10,7 @@ import React, {
     type ReactNode,
     type ComponentType,
 } from "react";
+import { YSButton } from "../components/YSButton";
 
 /* -------------------------------- Types --------------------------------- */
 
@@ -334,7 +335,7 @@ export function TabBar() {
                                 <span className="truncate max-w-[22ch]">
                                     {t.title}
                                 </span>
-                                <button
+                                <YSButton
                                     type="button"
                                     className={`opacity-70 hover:opacity-100 transition ${
                                         t.pinned
@@ -362,8 +363,8 @@ export function TabBar() {
                                         <path d="M15 7l2 2" />
                                         <path d="M7 15l2 2" />
                                     </svg>
-                                </button>
-                                <button
+                                </YSButton>
+                                <YSButton
                                     type="button"
                                     className="opacity-60 hover:opacity-100 text-neutral-500 dark:text-neutral-400"
                                     title="Close"
@@ -373,7 +374,7 @@ export function TabBar() {
                                     }}
                                 >
                                     ×
-                                </button>
+                                </YSButton>
                             </div>
 
                             {isActive && (

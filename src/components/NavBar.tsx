@@ -3,6 +3,7 @@ import { useTheme } from "../ThemeContext";
 import { useNavigate } from "react-router-dom";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
+import { YSButton } from "./YSButton";
 
 export default function Navbar() {
     const { dark } = useTheme();
@@ -42,24 +43,24 @@ export default function Navbar() {
                 {/* Right (desktop) */}
                 <div className="hidden sm:flex items-center gap-2">
                     {/* Login Button */}
-                    <button
+                    <YSButton
                         type="button"
                         onClick={() => navigate("/login")}
                         className="px-3 py-2 text-sm font-medium rounded-lg border"
                     >
                         Log in
-                    </button>
+                    </YSButton>
                     {/* Create Account Button*/}
-                    <button
+                    <YSButton
                         type="button"
                         onClick={() => navigate("/signup")}
                         className="px-3.5 py-2 text-sm font-medium rounded-lg border"
                     >
                         Create account
-                    </button>
+                    </YSButton>
 
                     {/* Theme toggle 
-                    <button
+                    <YSButton
                         type="button"
                         onClick={toggleDark}
                         aria-label={
@@ -71,13 +72,13 @@ export default function Navbar() {
                         className="inline-flex items-center justify-center rounded-lg px-2.5 py-2"
                     >
                         <span className="text-xl">{dark ? "☀️" : "🌙"}</span>
-                    </button>*/}
+                    </YSButton>*/}
                 </div>
 
                 {/* If the website is in mobile mode...*/}
                 {/* Mobile: hamburger */}
                 <div className="sm:hidden">
-                    <button
+                    <YSButton
                         id="mobile-menu-button"
                         ref={btnRef}
                         type="button"
@@ -107,7 +108,7 @@ export default function Navbar() {
                         >
                             <path d="M6 6l12 12M6 18L18 6" />
                         </svg>
-                    </button>
+                    </YSButton>
                 </div>
             </nav>
 
@@ -122,23 +123,23 @@ export default function Navbar() {
             >
                 <div className="mt-2 flex flex-col items-stretch gap-2">
                     {/* Mobile Login Button*/}
-                    <button
+                    <YSButton
                         type="button"
                         onClick={() => navigate("/login")}
                         className="px-3 py-2 text-sm font-medium rounded-lg border"
                     >
                         Log in
-                    </button>
+                    </YSButton>
                     {/* Mobile Create Account Button*/}
-                    <button
+                    <YSButton
                         type="button"
                         onClick={() => navigate("/signup")}
                         className="px-3.5 py-2 text-sm font-medium rounded-lg border"
                     >
                         Create account
-                    </button>
+                    </YSButton>
 
-                    {/*<button
+                    {/*<YSButton
                         type="button"
                         onClick={() => {
                             toggleDark();
@@ -147,7 +148,7 @@ export default function Navbar() {
                         className="mt-1 inline-flex items-center justify-center rounded-lg px-3 py-2"
                     >
                         {dark ? "☀️ Light mode" : "🌙 Dark mode"}
-                    </button>*/}
+                    </YSButton>*/}
                 </div>
             </div>
         </header>
