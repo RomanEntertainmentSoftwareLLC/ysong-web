@@ -6,6 +6,9 @@ import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
 import { YSButton } from "../components/YSButton";
 import { FilePill } from "../components/FilePill";
 
+const env = (import.meta as any).env || {};
+const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
+
 type Props = {
     tab: TabRecord; // expects payload.chatId
     chats: Chat[];
@@ -197,9 +200,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 // 2) OPTIONAL: persist to backend so /api/chats returns the title
                 try {
                     // Swap this for however you store the token
-                    const token = localStorage.getItem("ysong_token");
+                    const token = localStorage.getItem("ys_token");
                     if (token) {
-                        await fetch("/api/chats/rename", {
+                        await fetch(`${API_BASE}/api/chats/rename`, {
                             method: "POST",
                             headers: {
                                 "Content-Type": "application/json",
@@ -243,6 +246,59 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         setPendingFiles((prev) => prev.filter((_, idx) => idx !== i));
     }
 
+    async function uploadFiles(
+        files: File[]
+    ): Promise<{ name: string; size: number; type: string }[]> {
+        if (files.length === 0) return [];
+
+        // ✅ correct key: ys_token
+        const token = localStorage.getItem("ys_token");
+        if (!token) {
+            console.warn("No auth token found; cannot upload files.");
+            return [];
+        }
+
+        const uploaded: { name: string; size: number; type: string }[] = [];
+
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+
+            // ✅ send to the real API host, not 127.0.0.1:5173
+            const url = API_BASE ? `${API_BASE}/api/uploads` : `/api/uploads`;
+
+            console.log("UPLOAD →", url, file.name);
+
+            const res = await fetch(url, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                body: formData,
+            });
+
+            if (!res.ok) {
+                console.error(
+                    "Upload failed for file",
+                    file.name,
+                    res.status,
+                    res.statusText
+                );
+                throw new Error("upload_failed");
+            }
+
+            const json = await res.json();
+
+            uploaded.push({
+                name: json.filename ?? file.name,
+                size: json.size ?? file.size,
+                type: json.contentType ?? file.type,
+            });
+        }
+
+        return uploaded;
+    }
+
     async function send() {
         // Re-read the chat inside the function to satisfy TS & get latest messages
         const current = chats.find((c) => c.id === chatId);
@@ -251,17 +307,28 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         if (!input.trim() && pendingFiles.length === 0) return;
 
         const text = input.trim();
-        const attachments =
-            pendingFiles.length > 0
-                ? pendingFiles.map((f) => ({
-                      name: f.name,
-                      size: f.size,
-                      type: f.type,
-                  }))
-                : undefined;
+        const filesToUpload = [...pendingFiles];
 
+        // Clear UI input & pills immediately so it feels responsive
         setInput("");
         setPendingFiles([]);
+
+        let attachments:
+            | { name: string; size: number; type: string }[]
+            | undefined;
+
+        try {
+            if (filesToUpload.length > 0) {
+                const uploaded = await uploadFiles(filesToUpload);
+                attachments = uploaded.length > 0 ? uploaded : undefined;
+            }
+        } catch (e) {
+            console.error("Failed to upload files", e);
+            // restore text + attachments so user can retry
+            setInput(text);
+            setPendingFiles(filesToUpload);
+            return;
+        }
 
         const typingToken = `__typing_${crypto.randomUUID()}__`;
 
@@ -324,7 +391,11 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 }),
             });
 
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) {
+                console.error("AI call failed with status", res.status);
+                throw new Error("ai_failed");
+            }
+
             const data = await res.json();
             const rawReply = data?.reply ?? "…";
             const reply = sanitizeEmDashesToSentences(rawReply);
@@ -339,16 +410,13 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 console.error("Failed to save assistant message to Neon", e);
             }
 
-            // 4) Replace the typing bubble with the final assistant reply
+            // 4) Replace the typing bubble with the real assistant reply
             setChats((prev) =>
                 prev.map((c) =>
                     c.id === chatId
                         ? {
                               ...c,
-                              messages: (Array.isArray(c.messages)
-                                  ? (c.messages as any[])
-                                  : []
-                              ).map((m: any) =>
+                              messages: (c.messages ?? []).map((m: any) =>
                                   m.token === typingToken
                                       ? {
                                             role: "assistant",
@@ -361,29 +429,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                         : c
                 )
             );
-        } catch {
-            // AI request failed → swap typing bubble with error message
-            setChats((prev) =>
-                prev.map((c) =>
-                    c.id === chatId
-                        ? {
-                              ...c,
-                              messages: (Array.isArray(c.messages)
-                                  ? (c.messages as any[])
-                                  : []
-                              ).map((m: any) =>
-                                  m.token === typingToken
-                                      ? {
-                                            role: "assistant",
-                                            text: "⚠️ AI request failed.",
-                                            ts: Date.now(),
-                                        }
-                                      : m
-                              ),
-                          }
-                        : c
-                )
-            );
+        } catch (e) {
+            console.error("Chat send failed", e);
+            // Could show a toast / retry UI here later
         }
     }
 

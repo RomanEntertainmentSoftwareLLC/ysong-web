@@ -3,23 +3,8 @@ import "../styles/asset-drawer.css";
 import { YSButton } from "./YSButton";
 import { FilePill, type FileAsset } from "./FilePill";
 
-// Temporary mock data so the drawer isn't empty
-const MOCK_ASSETS: FileAsset[] = [
-    {
-        id: "1",
-        name: "Cybotron - Clear (Jose Remix).flac",
-        sizeMB: 11.3,
-        type: "audio",
-    },
-    { id: "2", name: "Drum Loop - 120 BPM.wav", sizeMB: 4.7, type: "audio" },
-    { id: "3", name: "Pad Atmosphere 01.wav", sizeMB: 7.1, type: "audio" },
-    { id: "4", name: "FX Riser Short.wav", sizeMB: 2.2, type: "audio" },
-    { id: "5", name: "Test.wav", sizeMB: 2.2, type: "audio" },
-    { id: "6", name: "Uh Huh.wav", sizeMB: 2.2, type: "audio" },
-    { id: "7", name: "Planet Rock Beat.wav", sizeMB: 2.2, type: "audio" },
-];
-
 export default function AssetDrawer() {
+    const [assets] = useState<FileAsset[]>([]);
     const [open, setOpen] = useState(false);
     const handleRef = useRef<HTMLButtonElement | null>(null);
 
@@ -73,7 +58,7 @@ export default function AssetDrawer() {
                     <div className="asset-drawer-scroll">
                         <div className="asset-drawer-inner">
                             <div className="asset-pill-grid">
-                                {MOCK_ASSETS.map((asset) => (
+                                {assets.map((asset) => (
                                     <FilePill key={asset.id} {...asset} />
                                 ))}
                             </div>
