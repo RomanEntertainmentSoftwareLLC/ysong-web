@@ -1,8 +1,15 @@
-export const AUTH_BASE =
+const AUTH_BASE_RAW =
   import.meta.env.VITE_AUTH_API_URL ?? "https://api.ysong.ai";
+
+export const AUTH_BASE = (AUTH_BASE_RAW || "").replace(/\/+$/, "");
 
 const TOKEN_KEY = "ys_token";
 const LEGACY_TOKEN_KEY = "ysong_auth_token";
+
+function joinUrl(base: string, path: string) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${p}`;
+}
 
 /* Read token from either key (old/new) */
 function readToken(): string | null {
@@ -76,7 +83,7 @@ export async function apiPost<T = unknown>(
   path: string,
   body: Record<string, any>
 ): Promise<T> {
-  const res = await fetch(`${AUTH_BASE}${path}`, {
+  const res = await fetch(joinUrl(AUTH_BASE, path), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -98,7 +105,7 @@ export async function apiPost<T = unknown>(
 
 /** GET helper (JSON out) */
 export async function apiGet<T = unknown>(path: string): Promise<T> {
-  const res = await fetch(`${AUTH_BASE}${path}`, {
+  const res = await fetch(joinUrl(AUTH_BASE, path), {
     headers: { ...authHeader() },
     credentials: "include",
   });

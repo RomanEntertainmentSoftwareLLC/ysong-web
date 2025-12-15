@@ -74,3 +74,45 @@
 .asset-pill-grid {
     @apply grid grid-cols-2 sm:grid-cols-3 gap-3;
 }
+
+/* header right-side actions */
+.asset-drawer-actions {
+    @apply flex items-center gap-2;
+}
+
+/* little hint text next to title */
+.asset-drawer-hint {
+    @apply ml-2 text-[10px] font-normal normal-case opacity-70;
+}
+
+/* plus button */
+.asset-drawer-add-btn {
+    @apply pointer-events-auto rounded-md w-8 h-8 flex items-center justify-center
+        text-sm border;
+}
+
+/* dropzone overlay */
+.asset-drawer-dropzone {
+    @apply relative;
+}
+
+.asset-drawer-dropoverlay {
+    @apply absolute inset-0 z-[5] flex items-center justify-center pointer-events-none;
+}
+
+.asset-drawer-dropcard {
+    @apply rounded-2xl border-2 border-dashed px-6 py-5 shadow-lg
+        bg-neutral-50/90 text-neutral-900 border-neutral-300;
+}
+
+.dark .asset-drawer-dropcard {
+    @apply bg-neutral-950/70 text-neutral-50 border-neutral-700;
+}
+
+.asset-drawer-dropcard-title {
+    @apply text-sm font-semibold;
+}
+
+.asset-drawer-dropcard-sub {
+    @apply text-xs opacity-70 mt-1;
+}

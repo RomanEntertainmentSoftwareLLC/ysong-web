@@ -1,65 +1,286 @@
-@reference "tailwindcss";
-
-/* ASSET / FILE PILL CONTAINER */
 .asset-pill {
-    @apply w-full flex items-center gap-3 rounded-2xl border px-3 py-2
-        text-xs sm:text-sm shadow-sm
-        /* light theme base */
-        bg-neutral-50 text-neutral-900 border-neutral-200;
+    width: 200px;
+    max-width: 200px;
+    position: relative;
+    overflow: visible;
+    font-family: inherit;
 }
 
-/* dark theme override */
-.dark .asset-pill {
-    @apply bg-neutral-900 text-neutral-50 border-neutral-700;
+/* Android-style toast (portal) showing full file name */
+.fp-toast-portal {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+    z-index: 9999;
+
+    max-width: 340px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.85);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 12px;
+    line-height: 1.15;
+    text-align: center;
+
+    /* allow long file names to wrap instead of ellipsis */
+    white-space: normal;
+    word-break: break-word;
+
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+    opacity: 1;
 }
 
-/* hover states */
-.asset-pill:hover {
-    @apply bg-neutral-100;
+.fp-toast-portal.above {
+    transform: translate(-50%, calc(-100% - 10px));
 }
 
-.dark .asset-pill:hover {
-    @apply bg-neutral-800;
+.fp-toast-portal.below {
+    transform: translate(-50%, 10px);
 }
 
-/* LEFT SIDE: ICON + MINI WAVEFORM */
-.asset-pill-icon-wrapper {
-    @apply flex flex-col items-center justify-center;
+.asset-pill-body {
+    position: relative;
+    height: 74px; /* slightly taller so text + controls never collide */
+    padding: 8px 10px 8px; /* no fake bottom reserve anymore */
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+    isolation: isolate;
+
+    transition: transform 120ms ease, box-shadow 120ms ease;
+
+    display: flex; /* ✅ key fix */
+    flex-direction: column; /* ✅ key fix */
+    gap: 6px;
 }
 
-.asset-pill-icon-box {
-    @apply flex h-8 w-8 items-center justify-center rounded-xl
-        /* light theme: soft gray chip with purple note */
-        bg-neutral-200 text-violet-600;
+/* subtle "pop" on hover (both audio + file) */
+.asset-pill:hover .asset-pill-body {
+    transform: translateY(-1px) scale(1.02);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
 }
 
-.dark .asset-pill-icon-box {
-    /* dark theme: dark gray chip, softer purple note */
-    @apply bg-neutral-800 text-violet-300;
+.asset-pill:active .asset-pill-body {
+    transform: translateY(0) scale(0.99);
 }
 
-.asset-pill-wave {
-    @apply mt-1 flex h-4 items-end gap-[2px] text-[0];
+/* highlight background */
+.asset-pill-body::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    background: linear-gradient(
+        135deg,
+        hsla(var(--fp-hue, 28), 90%, 55%, 0.95),
+        hsla(calc(var(--fp-hue, 28) + 38), 90%, 44%, 0.78)
+    );
+    z-index: 0;
 }
 
-.asset-pill-wave-bar {
-    @apply flex-1 rounded-full bg-violet-400/80;
+/* dark glass tint */
+.asset-pill-body::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0.55),
+        rgba(0, 0, 0, 0.7)
+    );
+    z-index: 0;
 }
 
-.dark .asset-pill-wave-bar {
-    @apply bg-violet-300/80;
+/* waveform placeholder */
+.fp-wave {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 10px;
+    opacity: 0.28;
+    z-index: 1;
+    pointer-events: none;
+
+    -webkit-mask-image: linear-gradient(
+        90deg,
+        transparent,
+        #000 12%,
+        #000 88%,
+        transparent
+    );
+    mask-image: linear-gradient(
+        90deg,
+        transparent,
+        #000 12%,
+        #000 88%,
+        transparent
+    );
 }
 
-/* RIGHT SIDE: NAME + META */
-.asset-pill-text {
-    @apply min-w-0 flex-1;
+.fp-wave-bar {
+    width: 2px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.7);
 }
 
-.asset-pill-name {
-    @apply block truncate font-medium;
+/* playhead */
+.fp-playhead {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    transform: translateX(-1px);
+    background: rgba(255, 255, 255, 0.75);
+    z-index: 2;
+    pointer-events: none;
+    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.35));
 }
 
-.asset-pill-meta {
-    @apply mt-0.5 block text-[10px] uppercase tracking-wide opacity-70
-        text-neutral-500 dark:text-neutral-400;
+/* meta sits above bg */
+.fp-meta,
+.fp-controls {
+    position: relative;
+    z-index: 3;
+}
+
+.fp-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.fp-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 13px;
+}
+
+.fp-more {
+    width: 20px;
+    height: 20px;
+    border-radius: 8px;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    opacity: 0.75;
+}
+
+.fp-more:hover {
+    background: rgba(255, 255, 255, 0.1);
+    opacity: 1;
+}
+
+.fp-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    margin-top: 2px;
+}
+
+.fp-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 1.15;
+    color: rgba(255, 255, 255, 0.95);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fp-size {
+    flex: 0 0 auto;
+    font-size: 10px;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.82);
+    white-space: nowrap;
+}
+
+/* ✅ Controls now push to bottom naturally */
+.fp-controls {
+    margin-top: auto; /* ✅ key fix */
+    display: flex;
+    justify-content: center;
+    gap: 7px;
+    padding-bottom: 2px;
+}
+
+.fp-ctl {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.3);
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+}
+
+.fp-ctl:hover {
+    background: rgba(0, 0, 0, 0.42);
+}
+
+.fp-ctl:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.fp-ctl-icon {
+    font-size: 11px;
+    line-height: 1;
+}
+
+/* menu (portal) */
+.asset-pill-menu {
+    min-width: 176px;
+    border-radius: 14px;
+    background: rgba(18, 18, 18, 0.98);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+    padding: 6px;
+    z-index: 9999;
+}
+
+.asset-pill-menu-item {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.92);
+    padding: 10px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.asset-pill-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.asset-pill-menu-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.asset-pill-menu-item.danger {
+    color: rgba(255, 120, 120, 0.95);
+}
+
+.asset-pill-body.is-audio {
+    cursor: pointer;
 }

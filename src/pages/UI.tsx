@@ -20,7 +20,7 @@ import {
 import ChatPane from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
 import { YSONG_WELCOME } from "../lib/ysongPersona";
-import AssetDrawer from "../components/AssetDrawer";
+import AssetDrawer, { type DrawerAsset } from "../components/AssetDrawer";
 import { YSButton } from "../components/YSButton";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
@@ -163,6 +163,18 @@ export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);
 
     const [chats, setChats] = useState<Chat[]>([]);
+    // Assets uploaded directly into the AssetDrawer (not tied to chat messages).
+    // These are still merged with chat-derived assets for display.
+    const ASSET_LS_KEY = "ysong.drawerAssets";
+    const [drawerAssets, setDrawerAssets] = useState<DrawerAsset[]>(() => {
+        try {
+            const raw = localStorage.getItem(ASSET_LS_KEY);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? (parsed as DrawerAsset[]) : [];
+        } catch {
+            return [];
+        }
+    });
     const [chatsHydrated, setChatsHydrated] = useState(false);
     const [activeId, setActiveId] = useState("");
     const [layoutHydrated, setLayoutHydrated] = useState(false);
@@ -178,6 +190,15 @@ export default function UI() {
             .then((u) => setMe({ email: u.user.email }))
             .catch(() => {});
     }, []);
+
+    // Persist drawer-only assets locally (until we move this to Neon).
+    useEffect(() => {
+        try {
+            localStorage.setItem(ASSET_LS_KEY, JSON.stringify(drawerAssets));
+        } catch {
+            // ignore
+        }
+    }, [drawerAssets]);
 
     // Hydrate chats when "Save to cloud" is ON (Neon-backed via /api/settings)
     useEffect(() => {
@@ -465,7 +486,12 @@ export default function UI() {
                 </main>
             </div>
 
-            <AssetDrawer />
+            <AssetDrawer
+                chats={chats}
+                setChats={setChats}
+                drawerAssets={drawerAssets}
+                setDrawerAssets={setDrawerAssets}
+            />
 
             {/* auto-open first Chat tab */}
             <BootTabs
