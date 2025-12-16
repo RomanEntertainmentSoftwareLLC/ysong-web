@@ -15,6 +15,50 @@ const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
 const API = (API_BASE || "").replace(/\/+$/, "");
 
+type SignedUrlMode = "play" | "download";
+
+/**
+ * Fetch a short-lived signed URL from the backend.
+ * Used to make private GCS objects playable/downloadable in the browser.
+ */
+async function fetchSignedUrl(objectKey: string, mode: SignedUrlMode = "play") {
+    const token = localStorage.getItem("ys_token");
+    if (!token) throw new Error("no_token");
+
+    const url = API
+        ? `${API}/api/uploads/signed-url`
+        : `/api/uploads/signed-url`;
+
+    const res = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ objectKey, mode }),
+    });
+
+    if (!res.ok) throw new Error(`signed_url_failed_${res.status}`);
+
+    const data = await res.json();
+
+    const signed =
+        typeof data?.url === "string"
+            ? data.url
+            : typeof data?.signedUrl === "string"
+            ? data.signedUrl
+            : "";
+
+    const expiresAt =
+        typeof data?.expiresAt === "number" && Number.isFinite(data.expiresAt)
+            ? data.expiresAt
+            : Date.now() + 55 * 60 * 1000;
+
+    if (!signed) throw new Error("signed_url_missing");
+
+    return { url: signed, expiresAt };
+}
+
 // Zero-width space: lets us save “empty” messages (file-only) without tripping
 // “missing_role_or_content” in storage/LLM pipelines.
 const ZWSP = "\u200B";
@@ -131,6 +175,29 @@ function sanitizeEmDashesToSentences(text: string): string {
     out = out.replace(/\s*\u2014\s*/g, ". ");
 
     return out;
+}
+
+function redactAssetSecrets(text: string): string {
+    if (!text) return text;
+
+    let out = text;
+
+    // Common leaks from internal asset metadata
+    out = out.replace(/^\s*objectKey:\s*.+$/gim, "");
+    out = out.replace(/user-uploads\/[\w\-./%]+/g, "[redacted]");
+    out = out.replace(
+        /https?:\/\/storage\.googleapis\.com\/[\w\-./%?=&]+/g,
+        "[redacted-url]"
+    );
+    out = out.replace(
+        /https?:\/\/[\w\-]+\.storage\.googleapis\.com\/[\w\-./%?=&]+/g,
+        "[redacted-url]"
+    );
+
+    // Tidy up extra blank lines caused by removals
+    out = out.replace(/\n{3,}/g, "\n\n");
+
+    return out.trim();
 }
 
 function fileKey(f: File) {
@@ -322,8 +389,7 @@ function parseUserAudioCommands(
     // Natural phrasing support:
     // "play X", "could you play X", "please play X", "can you pause", "seek 1:23", etc.
     const headRe =
-        /^\s*(?:(?:hey|yo|pls|please|could you|can you|would you|would ya|can ya)\s+)*\b(play|resume|pause|stop|seek)\b/i;
-
+        /^\s*(?:(?:ok|okay|alright|all right|hey|yo|pls|please|could you|can you|would you|would ya|can ya)\s+)*\b(play|resume|pause|stop|seek)\b/i;
     const m = t.match(headRe);
     if (!m) return null;
 
@@ -351,7 +417,16 @@ function parseUserAudioCommands(
     const stripFiller = (s: string) =>
         (s || "")
             .trim()
-            .replace(/^(?:me|some|of|that|this|the|a|an|please|pls)\b\s*/gi, "")
+            .replace(/^to\s+/i, "")
+            .replace(
+                /\b(?:for\s+me|please|pls|now|right\s+now|thanks|thank\s+you)\b/gi,
+                ""
+            )
+            .replace(
+                /^(?:me\s+)?(?:some\s+of\s+that|some|of|that|this|the|a|an)\b\s*/i,
+                ""
+            )
+            .replace(/\s{2,}/g, " ")
             .trim();
 
     // If they quote a filename, prefer it.
@@ -507,32 +582,29 @@ function extractAudioToolTags(text: string) {
     return { cleaned: cleaned.trim(), actions };
 }
 
-function buildAudioToolSystemMessage(assets: AudioAsset[]) {
-    const recent = assets.slice(0, 50);
-    const list = recent.length
-        ? recent.map((a) => `- ${a.name} (id: ${a.id})`).join("\n")
-        : "- (none)";
+function buildAudioToolSystemMessage(
+    audioAssets: Array<{ id: string; name: string }>
+) {
+    const list = audioAssets
+        .slice(0, 50)
+        .map((a) => `- ${a.name} (id: ${a.id})`)
+        .join("\n");
 
     return `
-AUDIO CONTROL (IN-APP)
-You can see the user's asset drawer because it is derived from chat attachments.
-Never reveal internal object keys or URLs in normal replies.
+	AUDIO CONTROL (IN-APP)
+	You can control playback by emitting tool tags. Do NOT print internal object keys or URLs in normal chat replies.
 
-CRITICAL
-- If you say you are playing, pausing, stopping, or seeking audio, you MUST include the matching tool tag.
-- If you do not include a tool tag, do not claim you performed playback.
+	Available audio assets (newest first):
+	${list || "(none)"}
 
-Available audio assets (newest first):
-${list}
-
-Tool tags (single line only):
-[[ys:audio.play id="..."]]
-[[ys:audio.resume id="..."]]
-[[ys:audio.pause]]
-[[ys:audio.stop]]
-[[ys:audio.seek seconds="90"]]
-[[ys:audio.seek pct="50"]]
-`.trim();
+	Tool tags:
+	[[ys:audio.play id="..."]]
+	[[ys:audio.pause]]
+	[[ys:audio.stop]]
+	[[ys:audio.seek id="..." seconds="42"]]
+	[[ys:audio.seek id="..." percent="0.5"]]
+	[[ys:audio.download id="..."]]
+	`.trim();
 }
 
 ({ tab, chats, setChats }: Props) => {
@@ -551,6 +623,9 @@ Tool tags (single line only):
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const signedUrlCacheRef = useRef<
+        Map<string, { url: string; expiresAt: number }>
+    >(new Map());
 
     const [autoTitleRequested, setAutoTitleRequested] = useState(false);
 
@@ -558,8 +633,50 @@ Tool tags (single line only):
     const bottomRef = useRef<HTMLDivElement | null>(null);
 
     // Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
+    // Also pre-warm signed "play" URLs in the background so prompt-play works without autoplay blocks.
     useEffect(() => {
-        audioController.registerAssets(collectAudioAssetsFromChats(chats));
+        const assets = collectAudioAssetsFromChats(chats);
+        audioController.registerAssets(assets);
+
+        let cancelled = false;
+
+        (async () => {
+            const newest = assets.slice(0, 12);
+            if (newest.length === 0) return;
+
+            const cache = signedUrlCacheRef.current;
+            const now = Date.now();
+
+            for (const a of newest) {
+                if (!a.objectKey) continue;
+
+                const cached = cache.get(a.objectKey);
+                if (cached && cached.expiresAt > now + 60_000) {
+                    audioController.registerAssets([
+                        { ...a, publicUrl: cached.url },
+                    ]);
+                    continue;
+                }
+
+                try {
+                    const signed = await fetchSignedUrl(a.objectKey, "play");
+                    if (cancelled) return;
+
+                    cache.set(a.objectKey, signed);
+
+                    // Re-register with signed URL so play() can be synchronous later.
+                    audioController.registerAssets([
+                        { ...a, publicUrl: signed.url },
+                    ]);
+                } catch {
+                    // ignore
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
     }, [chats]);
 
     useEffect(() => {
@@ -1251,7 +1368,7 @@ Tool tags (single line only):
             if (!res.ok) throw new Error(`ai_failed_${res.status}`);
             const data = await res.json();
 
-            const rawReply = data?.reply ?? "…";
+            const rawReply = redactAssetSecrets(data?.reply ?? "…");
 
             // Execute any audio tool tags the model emitted, then strip them from the visible reply.
             const { cleaned, actions } = extractAudioToolTags(rawReply);
