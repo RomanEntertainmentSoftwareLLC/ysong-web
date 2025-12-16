@@ -5,6 +5,11 @@ import { fetchChatMessages, appendMessage } from "../lib/chatApi";
 import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
 import { YSButton } from "../components/YSButton";
 import { FilePill } from "../components/FilePill";
+import {
+    audioController,
+    type AudioAsset,
+    type AudioTargetRef,
+} from "../components/AudioController";
 
 const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
@@ -164,7 +169,373 @@ function uploadAck(atts?: Attachment[]) {
     return `Got it. I received ${list.length} files: ${names}. Tell me what you want to do with them and I will help.`;
 }
 
-export default function ChatPane({ tab, chats, setChats }: Props) {
+type AudioAction =
+    | { kind: "play" | "resume"; ref: AudioTargetRef }
+    | { kind: "pause" | "stop"; ref?: AudioTargetRef }
+    | { kind: "seekFrac"; fraction: number; ref?: AudioTargetRef }
+    | { kind: "seekSeconds"; seconds: number; ref?: AudioTargetRef };
+
+const AUDIO_EXT_RE = /\.(mp3|wav|m4a|aac|ogg|flac|aiff|aif|alac|mp4)$/i;
+
+function isAudioAttachment(a?: Attachment) {
+    if (!a) return false;
+    const t = (a.type || "").toLowerCase();
+    if (t.startsWith("audio/")) return true;
+    if (typeof a.name === "string" && AUDIO_EXT_RE.test(a.name)) return true;
+    return false;
+}
+
+function collectAudioAssetsFromChats(
+    allChats: Chat[],
+    limit = 250
+): AudioAsset[] {
+    const out: AudioAsset[] = [];
+    const seen = new Set<string>();
+
+    // Iterate newest → oldest so “last” means most recent.
+    for (let ci = allChats.length - 1; ci >= 0; ci--) {
+        const c = allChats[ci];
+        const msgs = Array.isArray(c.messages) ? (c.messages as any[]) : [];
+        for (let mi = msgs.length - 1; mi >= 0; mi--) {
+            const m = msgs[mi];
+            const atts = Array.isArray(m.attachments) ? m.attachments : [];
+            for (const raw of atts) {
+                const a = normalizeAttachment(raw);
+                if (!isAudioAttachment(a)) continue;
+
+                const id =
+                    a.objectKey ??
+                    a.publicUrl ??
+                    (m.id ? `${m.id}:${a.name}` : `${a.name}:${a.size}`);
+
+                if (seen.has(id)) continue;
+                seen.add(id);
+
+                out.push({
+                    id,
+                    name: a.name,
+                    type: a.type,
+                    size: a.size,
+                    publicUrl: a.publicUrl,
+                    objectKey: a.objectKey,
+                });
+
+                if (out.length >= limit) return out;
+            }
+        }
+    }
+
+    return out;
+}
+
+function normalizeName(s: string) {
+    return (s || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/["'`]/g, "");
+}
+
+function bestMatchAsset(query: string | undefined, assets: AudioAsset[]) {
+    if (!assets.length) return;
+
+    const q = normalizeName(query || "");
+    if (!q || q === "last" || q === "latest" || q === "current") {
+        return assets[0]; // newest first
+    }
+
+    // Exact (case-insensitive) filename match.
+    const exact = assets.find((a) => normalizeName(a.name) === q);
+    if (exact) return exact;
+
+    // Match without extension (e.g. “drums” matches “drums.wav”)
+    const qNoExt = q.replace(/\.[a-z0-9]+$/i, "");
+    const noExtExact = assets.find(
+        (a) => normalizeName(a.name).replace(/\.[a-z0-9]+$/i, "") === qNoExt
+    );
+    if (noExtExact) return noExtExact;
+
+    // Substring match (unique only)
+    const hits = assets.filter((a) => normalizeName(a.name).includes(q));
+    if (hits.length === 1) return hits[0];
+
+    const hits2 = assets.filter((a) =>
+        normalizeName(a.name)
+            .replace(/\.[a-z0-9]+$/i, "")
+            .includes(qNoExt)
+    );
+    if (hits2.length === 1) return hits2[0];
+
+    return;
+}
+
+function parseTimeToSeconds(raw: string): number | undefined {
+    const s = (raw || "").trim().toLowerCase();
+    if (!s) return;
+
+    // 90%, 12.5%
+    const pct = s.match(/^([0-9]{1,3}(?:\.[0-9]+)?)\s*%$/);
+    if (pct) return; // handled elsewhere as fraction
+
+    // hh:mm:ss or mm:ss
+    const colon = s.match(/^([0-9]{1,2}):([0-9]{1,2})(?::([0-9]{1,2}))?$/);
+    if (colon) {
+        const a = Number(colon[1]);
+        const b = Number(colon[2]);
+        const c = colon[3] != null ? Number(colon[3]) : undefined;
+        if (
+            Number.isNaN(a) ||
+            Number.isNaN(b) ||
+            (c != null && Number.isNaN(c))
+        )
+            return;
+        return c == null ? a * 60 + b : a * 3600 + b * 60 + c;
+    }
+
+    // 1m30s, 2m, 45s, 1.5m
+    const mmss = s.match(
+        /^(?:(\d+(?:\.\d+)?)\s*h\s*)?(?:(\d+(?:\.\d+)?)\s*m\s*)?(?:(\d+(?:\.\d+)?)\s*s\s*)?$/
+    );
+    if (mmss) {
+        const h = mmss[1] ? Number(mmss[1]) : 0;
+        const m = mmss[2] ? Number(mmss[2]) : 0;
+        const sec = mmss[3] ? Number(mmss[3]) : 0;
+        if ([h, m, sec].some((n) => Number.isNaN(n))) return;
+        const total = h * 3600 + m * 60 + sec;
+        if (total > 0) return total;
+    }
+
+    // plain seconds number
+    const num = s.match(/^\d+(?:\.\d+)?$/);
+    if (num) return Number(s);
+
+    return;
+}
+
+function parseUserAudioCommands(
+    textRaw: string,
+    audioAssets: AudioAsset[]
+): AudioAction[] | null {
+    const t = (textRaw ?? "").trim();
+    if (!t) return null;
+
+    // Natural phrasing support:
+    // "play X", "could you play X", "please play X", "can you pause", "seek 1:23", etc.
+    const headRe =
+        /^\s*(?:(?:hey|yo|pls|please|could you|can you|would you|would ya|can ya)\s+)*\b(play|resume|pause|stop|seek)\b/i;
+
+    const m = t.match(headRe);
+    if (!m) return null;
+
+    const verb = String(m[1]).toLowerCase() as
+        | "play"
+        | "resume"
+        | "pause"
+        | "stop"
+        | "seek";
+
+    const tailRaw = t.slice(m[0].length).trim();
+
+    const newest = audioAssets[0];
+
+    const refFromAsset = (a?: AudioAsset): AudioTargetRef | undefined => {
+        if (!a) return;
+        return {
+            id: a.id,
+            name: a.name,
+            objectKey: a.objectKey,
+            publicUrl: a.publicUrl,
+        };
+    };
+
+    const stripFiller = (s: string) =>
+        (s || "")
+            .trim()
+            .replace(/^(?:me|some|of|that|this|the|a|an|please|pls)\b\s*/gi, "")
+            .trim();
+
+    // If they quote a filename, prefer it.
+    const quoted = t.match(/["'`]\s*([^"'`]+?)\s*["'`]/)?.[1];
+
+    if (verb === "pause") return [{ kind: "pause" }];
+    if (verb === "stop") return [{ kind: "stop" }];
+
+    if (verb === "play" || verb === "resume") {
+        const query = stripFiller(quoted ?? tailRaw);
+        const asset =
+            bestMatchAsset(query || "last", audioAssets) ?? newest ?? undefined;
+        if (!asset) return null;
+        return [{ kind: verb, ref: refFromAsset(asset)! }];
+    }
+
+    // seek parsing:
+    // - "seek 75%" / "seek to 75%"
+    // - "seek 1:23"
+    // - "seek 90s" / "seek 1m30s"
+    // If no file is specified, seek applies to the current track.
+    if (verb === "seek") {
+        let tail = tailRaw.replace(/^to\s+/i, "").trim();
+
+        // If they included a quoted filename, remove it from tail so we can parse time.
+        if (quoted) {
+            tail = tail.replace(/["'`]\s*([^"'`]+?)\s*["'`]/, "").trim();
+        }
+
+        // Percent seek
+        const pct = tail.match(/^([0-9]{1,3}(?:\.[0-9]+)?)\s*(?:%|percent)?$/i);
+        if (pct) {
+            const p = Math.max(0, Math.min(100, Number(pct[1])));
+            if (Number.isFinite(p)) {
+                const query = stripFiller(quoted ?? "");
+                const asset = query
+                    ? bestMatchAsset(query, audioAssets)
+                    : undefined;
+                return [
+                    {
+                        kind: "seekFrac",
+                        fraction: p / 100,
+                        ref: refFromAsset(asset),
+                    },
+                ];
+            }
+        }
+
+        // Time seek (seconds)
+        const secs = parseTimeToSeconds(tail);
+        if (typeof secs === "number" && Number.isFinite(secs)) {
+            const query = stripFiller(quoted ?? "");
+            const asset = query
+                ? bestMatchAsset(query, audioAssets)
+                : undefined;
+            return [
+                {
+                    kind: "seekSeconds",
+                    seconds: secs,
+                    ref: refFromAsset(asset),
+                },
+            ];
+        }
+
+        return null;
+    }
+
+    return null;
+}
+
+function parseTagAttrs(attrText: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    const re = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+))/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(attrText))) {
+        const key = m[1];
+        const val = m[2] ?? m[3] ?? m[4] ?? "";
+        out[key] = val;
+    }
+    return out;
+}
+
+function extractAudioToolTags(text: string) {
+    const actions: AudioAction[] = [];
+    if (!text) return { cleaned: text, actions };
+
+    const tagRe =
+        /\[\[ys:audio\.(play|resume|pause|stop|seek)\s*([^\]]*)\]\]/gi;
+
+    const cleaned = text.replace(tagRe, (_full, verbRaw, attrsRaw) => {
+        const verb = String(verbRaw).toLowerCase();
+        const attrs = parseTagAttrs(String(attrsRaw || ""));
+
+        const ref: AudioTargetRef = {
+            id: attrs.id,
+            objectKey: attrs.objectKey,
+            publicUrl: attrs.publicUrl,
+            name: attrs.name,
+        };
+
+        if (verb === "play" || verb === "resume") {
+            actions.push({ kind: verb as any, ref });
+            return "";
+        }
+
+        if (verb === "pause" || verb === "stop") {
+            actions.push({ kind: verb as any, ref });
+            return "";
+        }
+
+        if (verb === "seek") {
+            const pct = attrs.pct ?? attrs.percent;
+            if (pct) {
+                const p = Math.max(0, Math.min(100, Number(pct)));
+                if (Number.isFinite(p)) {
+                    // seek % applies to current track unless id supplied
+                    const currentId = audioController.getSnapshot().currentId;
+                    const useRef =
+                        ref.id || ref.objectKey || ref.publicUrl
+                            ? ref
+                            : { id: currentId };
+                    if (useRef?.id)
+                        actions.push({
+                            kind: "seekFrac",
+                            ref: useRef,
+                            fraction: p / 100,
+                        });
+                    return "";
+                }
+            }
+
+            const secStr = attrs.seconds ?? attrs.s ?? attrs.t ?? "";
+            const secs = parseTimeToSeconds(secStr);
+            if (typeof secs === "number" && Number.isFinite(secs)) {
+                const currentId = audioController.getSnapshot().currentId;
+                const useRef =
+                    ref.id || ref.objectKey || ref.publicUrl
+                        ? ref
+                        : { id: currentId };
+                if (useRef?.id)
+                    actions.push({
+                        kind: "seekSeconds",
+                        ref: useRef,
+                        seconds: secs,
+                    });
+                return "";
+            }
+        }
+
+        return "";
+    });
+
+    return { cleaned: cleaned.trim(), actions };
+}
+
+function buildAudioToolSystemMessage(assets: AudioAsset[]) {
+    const recent = assets.slice(0, 50);
+    const list = recent.length
+        ? recent.map((a) => `- ${a.name} (id: ${a.id})`).join("\n")
+        : "- (none)";
+
+    return `
+AUDIO CONTROL (IN-APP)
+You can see the user's asset drawer because it is derived from chat attachments.
+Never reveal internal object keys or URLs in normal replies.
+
+CRITICAL
+- If you say you are playing, pausing, stopping, or seeking audio, you MUST include the matching tool tag.
+- If you do not include a tool tag, do not claim you performed playback.
+
+Available audio assets (newest first):
+${list}
+
+Tool tags (single line only):
+[[ys:audio.play id="..."]]
+[[ys:audio.resume id="..."]]
+[[ys:audio.pause]]
+[[ys:audio.stop]]
+[[ys:audio.seek seconds="90"]]
+[[ys:audio.seek pct="50"]]
+`.trim();
+}
+
+({ tab, chats, setChats }: Props) => {
     const showTimestamps = useShowTimestamps();
     const chatId = tab.payload?.chatId as string;
     const chat = chats.find((c) => c.id === chatId);
@@ -185,6 +556,11 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
     const scrollerRef = useRef<HTMLDivElement | null>(null);
     const bottomRef = useRef<HTMLDivElement | null>(null);
+
+    // Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
+    useEffect(() => {
+        audioController.registerAssets(collectAudioAssetsFromChats(chats));
+    }, [chats]);
 
     useEffect(() => {
         setAutoTitleRequested(false);
@@ -587,6 +963,135 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         const hasText = text.length > 0;
         const filesToUpload = [...pendingFiles];
 
+        // Audio assets (newest first) for prompt-control + LLM context.
+        const audioAssets = collectAudioAssetsFromChats(chats);
+
+        // If this message is a “pure audio command” (no uploads), we can execute locally
+        // (the user experiences it as “AI via prompt” without UI changes).
+        const localAudioActions =
+            hasText && filesToUpload.length === 0
+                ? parseUserAudioCommands(text, audioAssets)
+                : null;
+
+        // ---- Local audio command path (no LLM call) ----
+        // Execute play/resume immediately (before awaits) to avoid autoplay blocks.
+        if (localAudioActions && localAudioActions.length > 0) {
+            setInput("");
+
+            // Ensure the controller has the latest registry
+            audioController.registerAssets(audioAssets);
+
+            const snap = audioController.getSnapshot();
+            const currentRef: AudioTargetRef | undefined = snap.currentId
+                ? { id: snap.currentId }
+                : undefined;
+
+            const ackParts: string[] = [];
+
+            for (const action of localAudioActions) {
+                try {
+                    if (action.kind === "play") {
+                        const a = audioController.getAsset(action.ref);
+                        ackParts.push(
+                            `Playing "${
+                                a?.name ?? action.ref.name ?? "audio"
+                            }".`
+                        );
+                        void audioController.play(action.ref);
+                    } else if (action.kind === "resume") {
+                        const a = audioController.getAsset(action.ref);
+                        ackParts.push(
+                            `Resuming "${
+                                a?.name ?? action.ref.name ?? "audio"
+                            }".`
+                        );
+                        void audioController.resume(action.ref);
+                    } else if (action.kind === "pause") {
+                        ackParts.push("Paused.");
+                        audioController.pause(action.ref ?? currentRef);
+                    } else if (action.kind === "stop") {
+                        ackParts.push("Stopped.");
+                        audioController.stop(action.ref ?? currentRef);
+                    } else if (action.kind === "seekSeconds") {
+                        const ref = action.ref ?? currentRef;
+                        if (!ref) {
+                            ackParts.push("No track is currently selected.");
+                        } else {
+                            ackParts.push(
+                                `Seeking to ${Math.round(action.seconds)}s.`
+                            );
+                            audioController.seekSeconds(ref, action.seconds);
+                        }
+                    } else if (action.kind === "seekFrac") {
+                        const ref = action.ref ?? currentRef;
+                        if (!ref) {
+                            ackParts.push("No track is currently selected.");
+                        } else {
+                            ackParts.push(
+                                `Seeking to ${Math.round(
+                                    action.fraction * 100
+                                )}%.`
+                            );
+                            audioController.seekFrac(ref, action.fraction);
+                        }
+                    }
+                } catch (err) {
+                    console.warn("Audio command failed", action, err);
+                    ackParts.push("Audio command failed.");
+                }
+            }
+
+            const assistantText = ackParts.join(" ") || "Done.";
+            const userTs = Date.now();
+
+            // Write the user line and the acknowledgement to the chat immediately.
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === chatId
+                        ? {
+                              ...c,
+                              messages: [
+                                  ...(c.messages ?? []),
+                                  {
+                                      role: "user",
+                                      text,
+                                      ts: userTs,
+                                  } as ChatMessage,
+                                  {
+                                      role: "assistant",
+                                      text: assistantText,
+                                      ts: Date.now(),
+                                  } as ChatMessage,
+                              ],
+                          }
+                        : c
+                )
+            );
+
+            // Persist best-effort (after audio already started)
+            (async () => {
+                try {
+                    await appendMessage(chatId, {
+                        role: "user",
+                        content: text,
+                    });
+                    await appendMessage(chatId, {
+                        role: "assistant",
+                        content: assistantText,
+                    });
+                } catch (e) {
+                    console.error(
+                        "Failed to persist audio command messages",
+                        e
+                    );
+                }
+            })();
+
+            return;
+        }
+
+        const shouldCallAI = hasText && !localAudioActions;
+
         setInput("");
 
         let attachments: Attachment[] | undefined;
@@ -615,7 +1120,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             });
         }
 
-        const typingToken = hasText
+        const typingToken = shouldCallAI
             ? `__typing_${globalThis.crypto.randomUUID()}__`
             : "";
 
@@ -639,7 +1144,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                                   attachments,
                                   ts: userTs,
                               } as ChatMessage,
-                              ...(hasText
+                              ...(shouldCallAI
                                   ? ([
                                         {
                                             role: "assistant",
@@ -718,6 +1223,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             return;
         }
 
+        // ---- LLM path ----
         try {
             const baseMsgs = (current.messages ?? []).map((m: any) => ({
                 role: m.role,
@@ -727,12 +1233,15 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                         : ZWSP,
             }));
 
+            const audioToolMsg = buildAudioToolSystemMessage(audioAssets);
+
             const res = await fetch("https://api.ysong.ai/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     messages: [
                         { role: "system", content: YSONG_SYSTEM_PROMPT },
+                        { role: "system", content: audioToolMsg },
                         ...baseMsgs,
                         { role: "user", content: text },
                     ],
@@ -743,7 +1252,55 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             const data = await res.json();
 
             const rawReply = data?.reply ?? "…";
-            const reply = sanitizeEmDashesToSentences(rawReply);
+
+            // Execute any audio tool tags the model emitted, then strip them from the visible reply.
+            const { cleaned, actions } = extractAudioToolTags(rawReply);
+
+            if (actions.length > 0) {
+                for (const action of actions) {
+                    try {
+                        if (action.kind === "play")
+                            await audioController.play(action.ref);
+                        else if (action.kind === "resume")
+                            await audioController.resume(action.ref);
+                        else if (action.kind === "pause")
+                            audioController.pause(action.ref);
+                        else if (action.kind === "stop")
+                            audioController.stop(action.ref);
+                        else if (action.kind === "seekSeconds") {
+                            const ref =
+                                action.ref ??
+                                (audioController.getSnapshot().currentId
+                                    ? {
+                                          id: audioController.getSnapshot()
+                                              .currentId!,
+                                      }
+                                    : undefined);
+                            if (ref)
+                                audioController.seekSeconds(
+                                    ref,
+                                    action.seconds
+                                );
+                        } else if (action.kind === "seekFrac") {
+                            const ref =
+                                action.ref ??
+                                (audioController.getSnapshot().currentId
+                                    ? {
+                                          id: audioController.getSnapshot()
+                                              .currentId!,
+                                      }
+                                    : undefined);
+                            if (ref)
+                                audioController.seekFrac(ref, action.fraction);
+                        }
+                    } catch (err) {
+                        console.warn("Audio tool tag failed", action, err);
+                    }
+                }
+            }
+
+            const rawVisible = cleaned || (actions.length ? "Done." : "…");
+            const reply = sanitizeEmDashesToSentences(rawVisible);
 
             try {
                 await appendMessage(chatId, {
@@ -795,7 +1352,6 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             );
         }
     }
-
     return (
         <div className="h-full flex flex-col">
             {/* messages */}
@@ -1113,7 +1669,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             </div>
         </div>
     );
-}
+};
 
 /* ---------- Settings integration ---------- */
 function useShowTimestamps() {
