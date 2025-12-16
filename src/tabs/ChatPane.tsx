@@ -607,7 +607,7 @@ function buildAudioToolSystemMessage(
 	`.trim();
 }
 
-({ tab, chats, setChats }: Props) => {
+export default function ChatPane({ tab, chats, setChats }: Props) {
     const showTimestamps = useShowTimestamps();
     const chatId = tab.payload?.chatId as string;
     const chat = chats.find((c) => c.id === chatId);
@@ -1786,7 +1786,7 @@ function buildAudioToolSystemMessage(
             </div>
         </div>
     );
-};
+}
 
 /* ---------- Settings integration ---------- */
 function useShowTimestamps() {
