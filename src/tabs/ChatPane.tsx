@@ -25,17 +25,16 @@ async function fetchSignedUrl(objectKey: string, mode: SignedUrlMode = "play") {
     const token = localStorage.getItem("ys_token");
     if (!token) throw new Error("no_token");
 
-    const url = API
+    const base = API
         ? `${API}/api/uploads/signed-url`
         : `/api/uploads/signed-url`;
+    const qs = new URLSearchParams({ objectKey, mode }).toString();
 
-    const res = await fetch(url, {
-        method: "POST",
+    const res = await fetch(`${base}?${qs}`, {
+        method: "GET",
         headers: {
-            "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ objectKey, mode }),
     });
 
     if (!res.ok) throw new Error(`signed_url_failed_${res.status}`);
@@ -602,7 +601,7 @@ function buildAudioToolSystemMessage(
 	[[ys:audio.pause]]
 	[[ys:audio.stop]]
 	[[ys:audio.seek id="..." seconds="42"]]
-	[[ys:audio.seek id="..." percent="0.5"]]
+	[[ys:audio.seek id="..." percent="50"]]
 	[[ys:audio.download id="..."]]
 	`.trim();
 }
@@ -627,6 +626,18 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         Map<string, { url: string; expiresAt: number }>
     >(new Map());
 
+    const hydrateAudioAssetsWithSignedUrls = (assets: AudioAsset[]) => {
+        const cache = signedUrlCacheRef.current;
+        const now = Date.now();
+        return assets.map((a) => {
+            if (!a.objectKey) return a;
+            const cached = cache.get(a.objectKey);
+            if (cached && cached.expiresAt > now + 60_000) {
+                return { ...a, publicUrl: cached.url };
+            }
+            return a;
+        });
+    };
     const [autoTitleRequested, setAutoTitleRequested] = useState(false);
 
     const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -635,13 +646,14 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     // Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
     // Also pre-warm signed "play" URLs in the background so prompt-play works without autoplay blocks.
     useEffect(() => {
-        const assets = collectAudioAssetsFromChats(chats);
+        const assetsRaw = collectAudioAssetsFromChats(chats);
+        const assets = hydrateAudioAssetsWithSignedUrls(assetsRaw);
         audioController.registerAssets(assets);
 
         let cancelled = false;
 
         (async () => {
-            const newest = assets.slice(0, 12);
+            const newest = assetsRaw.slice(0, 12);
             if (newest.length === 0) return;
 
             const cache = signedUrlCacheRef.current;
@@ -1096,7 +1108,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             setInput("");
 
             // Ensure the controller has the latest registry
-            audioController.registerAssets(audioAssets);
+            audioController.registerAssets(
+                hydrateAudioAssetsWithSignedUrls(audioAssets)
+            );
 
             const snap = audioController.getSnapshot();
             const currentRef: AudioTargetRef | undefined = snap.currentId
@@ -1368,10 +1382,10 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             if (!res.ok) throw new Error(`ai_failed_${res.status}`);
             const data = await res.json();
 
-            const rawReply = redactAssetSecrets(data?.reply ?? "…");
+            const modelReply = String(data?.reply ?? "…");
 
-            // Execute any audio tool tags the model emitted, then strip them from the visible reply.
-            const { cleaned, actions } = extractAudioToolTags(rawReply);
+            // Execute any audio tool tags (play/pause/stop/seek) emitted by the model
+            const { cleaned, actions } = extractAudioToolTags(modelReply);
 
             if (actions.length > 0) {
                 for (const action of actions) {

@@ -32,6 +32,14 @@ const GCS_BUCKET =
     env.VITE_GCS_BUCKET ||
     "";
 
+const DEV_AUDIO = !!(import.meta as any)?.env?.DEV;
+const dlog = (...args: any[]) => {
+    if (DEV_AUDIO) console.log(...args);
+};
+const dwarn = (...args: any[]) => {
+    if (DEV_AUDIO) console.warn(...args);
+};
+
 function gcsPublicUrlFromObjectKey(objectKey?: string): string | undefined {
     if (!objectKey || !GCS_BUCKET) return;
     const safe = objectKey.split("/").map(encodeURIComponent).join("/");
@@ -101,6 +109,7 @@ class AudioController {
     }
 
     private resolve(ref: AudioTargetRef): AudioAsset | undefined {
+        dlog("[AudioController] resolve", ref);
         if (!ref) return;
 
         if (ref.id && this.assets.has(ref.id)) return this.assets.get(ref.id);
@@ -140,6 +149,7 @@ class AudioController {
             }
         }
 
+        dwarn("[AudioController] resolve_miss", ref);
         return;
     }
 
@@ -175,8 +185,46 @@ class AudioController {
         });
 
         a.addEventListener("error", () => {
+            const err = (a as any).error;
+            dwarn("[AudioController] error", {
+                code: err?.code,
+                message: err?.message,
+                src: a.currentSrc,
+                readyState: a.readyState,
+                networkState: a.networkState,
+            });
             this.setState({ status: "error", error: "audio_error" });
         });
+
+        if (DEV_AUDIO && !(a as any).__ysDebugAttached) {
+            (a as any).__ysDebugAttached = true;
+            const logEvt = (ev: Event) =>
+                dlog("[AudioController] event", ev.type, {
+                    src: a.currentSrc,
+                    paused: a.paused,
+                    time: Number.isFinite(a.currentTime)
+                        ? a.currentTime
+                        : undefined,
+                    readyState: a.readyState,
+                    networkState: a.networkState,
+                    vol: a.volume,
+                    muted: a.muted,
+                });
+            [
+                "loadstart",
+                "loadeddata",
+                "canplay",
+                "canplaythrough",
+                "playing",
+                "pause",
+                "waiting",
+                "stalled",
+                "suspend",
+                "ended",
+                "abort",
+                "timeupdate",
+            ].forEach((t) => a.addEventListener(t, logEvt));
+        }
 
         this.audio = a;
         return a;
@@ -184,12 +232,20 @@ class AudioController {
 
     // ---- controls ----
     async play(ref: AudioTargetRef) {
+        dlog("[AudioController] play()", ref);
         const asset = this.resolve(ref);
         if (!asset) throw new Error("asset_not_found");
 
         const url =
             asset.publicUrl || gcsPublicUrlFromObjectKey(asset.objectKey);
         if (!url) throw new Error("missing_public_url");
+
+        dlog("[AudioController] play resolved", {
+            id: asset.id,
+            name: asset.name,
+            objectKey: asset.objectKey,
+            url: url?.slice?.(0, 120) ?? url,
+        });
 
         const audio = this.ensureAudio();
 
@@ -206,8 +262,18 @@ class AudioController {
             this.setState({ currentId: asset.id, error: undefined });
         }
 
-        await audio.play();
-        this.setState({ currentId: asset.id, status: "playing" });
+        try {
+            await audio.play();
+            this.setState({ currentId: asset.id, status: "playing" });
+        } catch (err: any) {
+            dwarn("[AudioController] audio.play() rejected", err);
+            this.setState({
+                currentId: asset.id,
+                status: "error",
+                error: err?.message || String(err),
+            });
+            throw err;
+        }
     }
 
     async resume(ref: AudioTargetRef) {
@@ -221,8 +287,24 @@ class AudioController {
         if (!isSame) return this.play(ref);
 
         if (audio.paused) {
-            await audio.play();
-            this.setState({ status: "playing" });
+            dlog("[AudioController] resume()", {
+                id: asset.id,
+                name: asset.name,
+                src: audio.currentSrc || audio.src,
+                paused: audio.paused,
+            });
+
+            try {
+                await audio.play();
+                this.setState({ status: "playing", error: undefined });
+            } catch (err: any) {
+                dwarn("[AudioController] resume audio.play() rejected", err);
+                this.setState({
+                    status: "error",
+                    error: err?.message || String(err),
+                });
+                throw err;
+            }
         }
     }
 
