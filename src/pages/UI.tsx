@@ -17,11 +17,11 @@ import {
     type TabType,
     type TabRendererProps,
 } from "../tabs/core";
-import ChatPane from "../tabs/ChatPane";
+import ChatPane, { YSONG_WELCOME } from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
-import { YSONG_WELCOME } from "../lib/ysongPersona";
-import AssetDrawer, { type DrawerAsset } from "../components/AssetDrawer";
+import AssetDrawer from "../components/AssetDrawer";
 import { YSButton } from "../components/YSButton";
+import type { DrawerAsset } from "../components/AssetDrawer";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -159,22 +159,32 @@ function BootTabs({
     return null;
 }
 
+function SyncActiveChatFromTabs({
+    activeChatId,
+    setActiveChatId,
+}: {
+    activeChatId: string;
+    setActiveChatId: (id: string) => void;
+}) {
+    const { tabs, activeId } = useTabManager();
+
+    useEffect(() => {
+        const t = tabs.find((x) => x.id === activeId);
+        const next =
+            t?.type === "chat" && t.payload?.chatId
+                ? String(t.payload.chatId)
+                : "";
+
+        if (next && next !== activeChatId) setActiveChatId(next);
+    }, [tabs, activeId, activeChatId, setActiveChatId]);
+
+    return null;
+}
+
 export default function UI() {
     const [me, setMe] = useState<{ email: string } | null>(null);
 
     const [chats, setChats] = useState<Chat[]>([]);
-    // Assets uploaded directly into the AssetDrawer (not tied to chat messages).
-    // These are still merged with chat-derived assets for display.
-    const ASSET_LS_KEY = "ysong.drawerAssets";
-    const [drawerAssets, setDrawerAssets] = useState<DrawerAsset[]>(() => {
-        try {
-            const raw = localStorage.getItem(ASSET_LS_KEY);
-            const parsed = raw ? JSON.parse(raw) : [];
-            return Array.isArray(parsed) ? (parsed as DrawerAsset[]) : [];
-        } catch {
-            return [];
-        }
-    });
     const [chatsHydrated, setChatsHydrated] = useState(false);
     const [activeId, setActiveId] = useState("");
     const [layoutHydrated, setLayoutHydrated] = useState(false);
@@ -190,15 +200,6 @@ export default function UI() {
             .then((u) => setMe({ email: u.user.email }))
             .catch(() => {});
     }, []);
-
-    // Persist drawer-only assets locally (until we move this to Neon).
-    useEffect(() => {
-        try {
-            localStorage.setItem(ASSET_LS_KEY, JSON.stringify(drawerAssets));
-        } catch {
-            // ignore
-        }
-    }, [drawerAssets]);
 
     // Hydrate chats when "Save to cloud" is ON (Neon-backed via /api/settings)
     useEffect(() => {
@@ -435,8 +436,14 @@ export default function UI() {
         );
     }
 
+    const [drawerAssets, setDrawerAssets] = useState<DrawerAsset[]>([]);
+
     return (
         <TabManagerProvider>
+            <SyncActiveChatFromTabs
+                activeChatId={activeId}
+                setActiveChatId={setActiveId}
+            />
             <div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
                 {/* Desktop sidebar */}
                 {isLgUp && (
@@ -491,6 +498,7 @@ export default function UI() {
                 setChats={setChats}
                 drawerAssets={drawerAssets}
                 setDrawerAssets={setDrawerAssets}
+                activeChatId={activeId}
             />
 
             {/* auto-open first Chat tab */}

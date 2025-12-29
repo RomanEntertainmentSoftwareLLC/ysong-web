@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { TabRecord } from "./core";
 import type { Chat } from "../components/UISidebar";
 import { fetchChatMessages, appendMessage } from "../lib/chatApi";
-import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
 import { YSButton } from "../components/YSButton";
 import { FilePill } from "../components/FilePill";
 import {
@@ -12,6 +11,11 @@ import {
 } from "../components/AudioController";
 
 const env = (import.meta as any).env || {};
+
+export const APP_NAME = env.VITE_APP_NAME ?? "YSong";
+
+export const YSONG_WELCOME = `Yo! I\'m ${APP_NAME}, your built-in studio buddy.\n\nI can help with lyrics, hooks, chords, arrangement, and production ideas. Upload a file if you want and tell me the vibe you\'re chasing.`;
+
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
 const API = (API_BASE || "").replace(/\/+$/, "");
 
@@ -199,6 +203,22 @@ function redactAssetSecrets(text: string): string {
     return out.trim();
 }
 
+function stripAudioCommandHints(text: string): string {
+    if (!text) return text;
+    let out = text;
+
+    // When playback is handled by the app, we don't want the assistant to instruct
+    // the user to type exact commands/filenames.
+    out = out.replace(
+        /^\s*(?:type|just\s+type|try\s+typing|you\s+can\s+type)\s*:?\s*play\b.*$/gim,
+        ""
+    );
+    out = out.replace(/^\s*play\s+"?.+"?\s+and\s+i'?ll\s+trigger\b.*$/gim, "");
+
+    out = out.replace(/\n{3,}/g, "\n\n");
+    return out.trim();
+}
+
 function fileKey(f: File) {
     return `${f.name}:${f.size}:${f.lastModified}`;
 }
@@ -280,8 +300,13 @@ function collectAudioAssetsFromChats(
                 out.push({
                     id,
                     name: a.name,
-                    type: a.type,
-                    size: a.size,
+                    type: "audio",
+                    sizeMB: a.size
+                        ? Math.max(
+                              0,
+                              Math.round((a.size / (1024 * 1024)) * 10) / 10
+                          )
+                        : 0,
                     publicUrl: a.publicUrl,
                     objectKey: a.objectKey,
                 });
@@ -295,20 +320,49 @@ function collectAudioAssetsFromChats(
 }
 
 function normalizeName(s: string) {
-    return (s || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .replace(/["'`]/g, "");
+    return (
+        (s || "")
+            .trim()
+            .toLowerCase()
+            // strip quote-like chars
+            .replace(/["'`]/g, "")
+            // normalize punctuation to spaces so queries like "Glass Alice?" still match
+            .replace(/[^\p{L}\p{N}\s.\-]/gu, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+    );
+}
+
+function pickRandomAsset(list: AudioAsset[], avoidId?: string) {
+    if (!list.length) return undefined;
+    if (list.length === 1) return list[0];
+
+    // Avoid repeating the last played track when possible.
+    const filtered = avoidId ? list.filter((a) => a.id !== avoidId) : list;
+    const pool = filtered.length ? filtered : list;
+    const idx = Math.floor(Math.random() * pool.length);
+    return pool[idx];
 }
 
 function bestMatchAsset(query: string | undefined, assets: AudioAsset[]) {
     if (!assets.length) return;
 
-    const q = normalizeName(query || "");
-    if (!q || q === "last" || q === "latest" || q === "current") {
+    const avoidId = audioController.getSnapshot().lastPlayedId;
+
+    const q0 = normalizeName(query || "");
+    if (!q0 || q0 === "last" || q0 === "latest" || q0 === "current") {
         return assets[0]; // newest first
     }
+
+    const wantsRandom =
+        /\b(random|shuffle|surprise|anything|any|whatever)\b/i.test(q0);
+    const cleaned = q0
+        .replace(/\b(random|shuffle|surprise|anything|any|whatever)\b/gi, " ")
+        .replace(/\b(song|track|music|band)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const q = cleaned || q0;
 
     // Exact (case-insensitive) filename match.
     const exact = assets.find((a) => normalizeName(a.name) === q);
@@ -321,16 +375,25 @@ function bestMatchAsset(query: string | undefined, assets: AudioAsset[]) {
     );
     if (noExtExact) return noExtExact;
 
-    // Substring match (unique only)
-    const hits = assets.filter((a) => normalizeName(a.name).includes(q));
+    // Substring matches
+    const hits = q
+        ? assets.filter((a) => normalizeName(a.name).includes(q))
+        : [];
     if (hits.length === 1) return hits[0];
+    if (hits.length > 1) return pickRandomAsset(hits, avoidId);
 
-    const hits2 = assets.filter((a) =>
-        normalizeName(a.name)
-            .replace(/\.[a-z0-9]+$/i, "")
-            .includes(qNoExt)
-    );
+    const hits2 = qNoExt
+        ? assets.filter((a) =>
+              normalizeName(a.name)
+                  .replace(/\.[a-z0-9]+$/i, "")
+                  .includes(qNoExt)
+          )
+        : [];
     if (hits2.length === 1) return hits2[0];
+    if (hits2.length > 1) return pickRandomAsset(hits2, avoidId);
+
+    // Explicit random request with no other match: pick from the whole list.
+    if (wantsRandom) return pickRandomAsset(assets, avoidId);
 
     return;
 }
@@ -421,10 +484,21 @@ function parseUserAudioCommands(
                 /\b(?:for\s+me|please|pls|now|right\s+now|thanks|thank\s+you)\b/gi,
                 ""
             )
+            // Generic words that shouldn't affect matching
             .replace(
-                /^(?:me\s+)?(?:some\s+of\s+that|some|of|that|this|the|a|an)\b\s*/i,
+                /\b(?:song|track|tune|audio|music|file|mp3|wav|m4a|flac)\b/gi,
                 ""
             )
+            .replace(/\b(?:random|any|something)\b/gi, "")
+            // Phrases users commonly add that shouldn't affect matching.
+            .replace(/\b(?:from|in)\s+(?:the\s+)?asset\s+drawer\b/gi, "")
+            .replace(/\b(?:from|in)\s+(?:the\s+)?drawer\b/gi, "")
+            .replace(/\b(?:from|in)\s+(?:the\s+)?assets\b/gi, "")
+            .replace(
+                /^(?:me\s+)?(?:some\s+of\s+that|some|something(?:\s+(?:by|from))?|of|that|this|the|a|an)\b\s*/i,
+                ""
+            )
+            .replace(/^by\s+/i, "")
             .replace(/\s{2,}/g, " ")
             .trim();
 
@@ -591,7 +665,14 @@ function buildAudioToolSystemMessage(
 
     return `
 	AUDIO CONTROL (IN-APP)
-	You can control playback by emitting tool tags. Do NOT print internal object keys or URLs in normal chat replies.
+	You can control playback directly.
+	- If the user asks to play a song, do NOT ask them to type a command or filename.
+	- Fuzzy match: if they mention any part of the title/artist, pick the closest match.
+	- Prefer short, human replies. Avoid quoting full filenames and avoid file extensions unless the user does.
+	- Do NOT print internal object keys or URLs in normal chat replies.
+	- If you emit tool tags, place them AFTER the natural reply, each on its own line.
+	- Never reply with only tool tags.
+	- If the user asks for a random song or random song by an artist/band, pick a random matching item.
 
 	Available audio assets (newest first):
 	${list || "(none)"}
@@ -601,9 +682,135 @@ function buildAudioToolSystemMessage(
 	[[ys:audio.pause]]
 	[[ys:audio.stop]]
 	[[ys:audio.seek id="..." seconds="42"]]
-	[[ys:audio.seek id="..." percent="50"]]
-	[[ys:audio.download id="..."]]
+	[[ys:audio.seek id="..." percent="0.5"]]
 	`.trim();
+}
+
+function fmtTime(seconds: number) {
+    const s = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = String(s % 60).padStart(2, "0");
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${ss}`;
+    return `${m}:${ss}`;
+}
+
+function pickOne<T>(arr: T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function friendlyTrackTitle(rawName: string) {
+    let base = (rawName || "").trim();
+    if (!base) return "";
+    // Strip extension
+    base = base.replace(/\.[a-z0-9]{1,6}$/i, "").trim();
+    // Heuristic: "Artist - Title" → show "Title"
+    const parts = base
+        .split(" - ")
+        .map((p) => p.trim())
+        .filter(Boolean);
+    if (parts.length >= 2) return parts[parts.length - 1];
+    return base;
+}
+
+function summarizeLocalAudioActions(
+    actions: AudioAction[],
+    assets: AudioAsset[]
+) {
+    if (!actions.length) return "";
+    const a0 = actions[0];
+
+    const resolveName = (ref?: AudioTargetRef) => {
+        const n0 = (ref?.name ?? "").trim();
+        if (n0) return n0;
+
+        const id = (ref?.id ?? "").trim();
+        if (id) {
+            const hit = assets.find((x) => x.id === id);
+            if (hit?.name) return hit.name;
+        }
+        return "";
+    };
+
+    if (a0.kind === "play" || a0.kind === "resume") {
+        const title = friendlyTrackTitle(resolveName(a0.ref));
+        return title ? `Now playing: ${title}.` : "Now playing.";
+    }
+
+    if (a0.kind === "pause") return "Playback paused.";
+    if (a0.kind === "stop") return "Playback stopped.";
+    if (a0.kind === "seekSeconds") return `Seeked to ${fmtTime(a0.seconds)}.`;
+    if (a0.kind === "seekFrac") {
+        const pct = Math.round(a0.fraction * 100);
+        return `Seeked to ${pct}%.`;
+    }
+
+    return "";
+}
+
+function fallbackAckForAudioActions(
+    actions: AudioAction[],
+    assets: AudioAsset[]
+) {
+    if (!actions.length) return "…";
+
+    const a0 = actions[0];
+
+    const resolveName = (ref?: AudioTargetRef) => {
+        const n0 = (ref?.name ?? "").trim();
+        if (n0) return n0;
+
+        const id = (ref?.id ?? "").trim();
+        if (id) {
+            const hit = assets.find((x) => x.id === id);
+            if (hit?.name) return hit.name;
+        }
+
+        return "";
+    };
+
+    if (a0.kind === "play" || a0.kind === "resume") {
+        const name = resolveName(a0.ref);
+        const title = friendlyTrackTitle(name);
+        const templates = name
+            ? [
+                  `Playing ${title || name}.`,
+                  `Alright — playing ${title || name}.`,
+                  `Queued up ${title || name}.`,
+                  `Spinning up ${title || name}.`,
+              ]
+            : [
+                  "Playing that now.",
+                  "Alright — playing it.",
+                  "Got it. Starting playback.",
+                  "Kicking it on now.",
+              ];
+        return pickOne(templates);
+    }
+
+    if (a0.kind === "pause")
+        return pickOne(["Paused.", "On pause.", "Pausing it."]);
+    if (a0.kind === "stop")
+        return pickOne(["Stopped.", "Stopping playback.", "Done — stopped."]);
+
+    if (a0.kind === "seekSeconds") {
+        return pickOne([
+            `Jumped to ${fmtTime(a0.seconds)}.`,
+            `Skipped to ${fmtTime(a0.seconds)}.`,
+            `Seeking to ${fmtTime(a0.seconds)}.`,
+        ]);
+    }
+
+    if (a0.kind === "seekFrac") {
+        const pct = Math.round(a0.fraction * 100);
+        return pickOne([
+            `Jumped to ${pct}%.`,
+            `Skipped to ${pct}%.`,
+            `Seeking to ${pct}%.`,
+        ]);
+    }
+
+    return "Done.";
 }
 
 export default function ChatPane({ tab, chats, setChats }: Props) {
@@ -626,18 +833,6 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         Map<string, { url: string; expiresAt: number }>
     >(new Map());
 
-    const hydrateAudioAssetsWithSignedUrls = (assets: AudioAsset[]) => {
-        const cache = signedUrlCacheRef.current;
-        const now = Date.now();
-        return assets.map((a) => {
-            if (!a.objectKey) return a;
-            const cached = cache.get(a.objectKey);
-            if (cached && cached.expiresAt > now + 60_000) {
-                return { ...a, publicUrl: cached.url };
-            }
-            return a;
-        });
-    };
     const [autoTitleRequested, setAutoTitleRequested] = useState(false);
 
     const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -646,14 +841,13 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     // Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
     // Also pre-warm signed "play" URLs in the background so prompt-play works without autoplay blocks.
     useEffect(() => {
-        const assetsRaw = collectAudioAssetsFromChats(chats);
-        const assets = hydrateAudioAssetsWithSignedUrls(assetsRaw);
+        const assets = collectAudioAssetsFromChats(chats);
         audioController.registerAssets(assets);
 
         let cancelled = false;
 
         (async () => {
-            const newest = assetsRaw.slice(0, 12);
+            const newest = assets.slice(0, 12);
             if (newest.length === 0) return;
 
             const cache = signedUrlCacheRef.current;
@@ -1102,126 +1296,47 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 ? parseUserAudioCommands(text, audioAssets)
                 : null;
 
-        // ---- Local audio command path (no LLM call) ----
-        // Execute play/resume immediately (before awaits) to avoid autoplay blocks.
-        if (localAudioActions && localAudioActions.length > 0) {
-            setInput("");
+        // Execute prompt-audio commands immediately (before awaits) to avoid
+        // autoplay blocks, but still let the LLM generate the reply text.
+        const preExecutedAudioActions =
+            localAudioActions && localAudioActions.length > 0
+                ? localAudioActions
+                : null;
 
+        if (preExecutedAudioActions) {
             // Ensure the controller has the latest registry
-            audioController.registerAssets(
-                hydrateAudioAssetsWithSignedUrls(audioAssets)
-            );
+            audioController.registerAssets(audioAssets);
 
             const snap = audioController.getSnapshot();
             const currentRef: AudioTargetRef | undefined = snap.currentId
                 ? { id: snap.currentId }
                 : undefined;
 
-            const ackParts: string[] = [];
-
-            for (const action of localAudioActions) {
+            for (const action of preExecutedAudioActions) {
                 try {
                     if (action.kind === "play") {
-                        const a = audioController.getAsset(action.ref);
-                        ackParts.push(
-                            `Playing "${
-                                a?.name ?? action.ref.name ?? "audio"
-                            }".`
-                        );
                         void audioController.play(action.ref);
                     } else if (action.kind === "resume") {
-                        const a = audioController.getAsset(action.ref);
-                        ackParts.push(
-                            `Resuming "${
-                                a?.name ?? action.ref.name ?? "audio"
-                            }".`
-                        );
                         void audioController.resume(action.ref);
                     } else if (action.kind === "pause") {
-                        ackParts.push("Paused.");
                         audioController.pause(action.ref ?? currentRef);
                     } else if (action.kind === "stop") {
-                        ackParts.push("Stopped.");
                         audioController.stop(action.ref ?? currentRef);
                     } else if (action.kind === "seekSeconds") {
                         const ref = action.ref ?? currentRef;
-                        if (!ref) {
-                            ackParts.push("No track is currently selected.");
-                        } else {
-                            ackParts.push(
-                                `Seeking to ${Math.round(action.seconds)}s.`
-                            );
+                        if (ref)
                             audioController.seekSeconds(ref, action.seconds);
-                        }
                     } else if (action.kind === "seekFrac") {
                         const ref = action.ref ?? currentRef;
-                        if (!ref) {
-                            ackParts.push("No track is currently selected.");
-                        } else {
-                            ackParts.push(
-                                `Seeking to ${Math.round(
-                                    action.fraction * 100
-                                )}%.`
-                            );
-                            audioController.seekFrac(ref, action.fraction);
-                        }
+                        if (ref) audioController.seekFrac(ref, action.fraction);
                     }
                 } catch (err) {
                     console.warn("Audio command failed", action, err);
-                    ackParts.push("Audio command failed.");
                 }
             }
-
-            const assistantText = ackParts.join(" ") || "Done.";
-            const userTs = Date.now();
-
-            // Write the user line and the acknowledgement to the chat immediately.
-            setChats((prev) =>
-                prev.map((c) =>
-                    c.id === chatId
-                        ? {
-                              ...c,
-                              messages: [
-                                  ...(c.messages ?? []),
-                                  {
-                                      role: "user",
-                                      text,
-                                      ts: userTs,
-                                  } as ChatMessage,
-                                  {
-                                      role: "assistant",
-                                      text: assistantText,
-                                      ts: Date.now(),
-                                  } as ChatMessage,
-                              ],
-                          }
-                        : c
-                )
-            );
-
-            // Persist best-effort (after audio already started)
-            (async () => {
-                try {
-                    await appendMessage(chatId, {
-                        role: "user",
-                        content: text,
-                    });
-                    await appendMessage(chatId, {
-                        role: "assistant",
-                        content: assistantText,
-                    });
-                } catch (e) {
-                    console.error(
-                        "Failed to persist audio command messages",
-                        e
-                    );
-                }
-            })();
-
-            return;
         }
 
-        const shouldCallAI = hasText && !localAudioActions;
+        const shouldCallAI = hasText;
 
         setInput("");
 
@@ -1366,13 +1481,23 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
             const audioToolMsg = buildAudioToolSystemMessage(audioAssets);
 
+            const alreadyHandledMsg = preExecutedAudioActions
+                ? `Playback note: the user's audio request was already executed by the app.
+${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
+- Do NOT emit any [[ys:audio.*]] tool tags.
+- Do NOT ask the user to type a command or a filename.
+- Keep the reply short, conversational, and avoid file extensions.`
+                : "";
+
             const res = await fetch("https://api.ysong.ai/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     messages: [
-                        { role: "system", content: YSONG_SYSTEM_PROMPT },
                         { role: "system", content: audioToolMsg },
+                        ...(alreadyHandledMsg
+                            ? [{ role: "system", content: alreadyHandledMsg }]
+                            : []),
                         ...baseMsgs,
                         { role: "user", content: text },
                     ],
@@ -1382,12 +1507,14 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             if (!res.ok) throw new Error(`ai_failed_${res.status}`);
             const data = await res.json();
 
-            const modelReply = String(data?.reply ?? "…");
+            const rawReply = redactAssetSecrets(data?.reply ?? "…");
 
-            // Execute any audio tool tags (play/pause/stop/seek) emitted by the model
-            const { cleaned, actions } = extractAudioToolTags(modelReply);
+            // Execute any audio tool tags the model emitted, then strip them from the visible reply.
+            const { cleaned, actions } = extractAudioToolTags(rawReply);
 
-            if (actions.length > 0) {
+            const shouldRunToolTags = !preExecutedAudioActions;
+
+            if (shouldRunToolTags && actions.length > 0) {
                 for (const action of actions) {
                     try {
                         if (action.kind === "play")
@@ -1430,7 +1557,14 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 }
             }
 
-            const rawVisible = cleaned || (actions.length ? "Done." : "…");
+            let rawVisible =
+                cleaned ||
+                (actions.length
+                    ? fallbackAckForAudioActions(actions, audioAssets)
+                    : "…");
+            if (preExecutedAudioActions?.length) {
+                rawVisible = stripAudioCommandHints(rawVisible);
+            }
             const reply = sanitizeEmDashesToSentences(rawVisible);
 
             try {

@@ -2,6 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "../styles/file-pill.css";
 
+import {
+    audioController,
+    useAudioControllerState,
+    type AudioAsset,
+} from "./AudioController";
+
 export type FileKind = "audio" | "file";
 
 export interface FilePillProps {
@@ -17,7 +23,9 @@ export interface FilePillProps {
     onDownload?: () => void;
 }
 
-type PlayState = "stopped" | "playing" | "paused";
+// Note: "loading" is a transient state while the shared AudioController is
+// resolving signed URLs + starting playback.
+type PlayState = "stopped" | "playing" | "paused" | "loading";
 
 const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
@@ -104,212 +112,123 @@ export function FilePill({
         placement: "above" | "below";
     } | null>(null);
 
-    // ---- Audio playback
-    const [playState, setPlayState] = useState<PlayState>("stopped");
-    const [playheadPct, setPlayheadPct] = useState(0);
-    const [curSec, setCurSec] = useState(0);
-    const [durSec, setDurSec] = useState<number | null>(null);
-    const audioRef = useRef<HTMLAudioElement | null>(null);
+    // ---- Audio playback (wired to shared AudioController)
+    const audioState = useAudioControllerState();
+    const isCurrent = isAudio && audioState.currentId === id;
+
+    // If the user scrubs while not playing, remember that seek so the next
+    // play starts from the chosen position.
+    const [standbySeekFrac, setStandbySeekFrac] = useState<number | null>(null);
     const queuedSeekFracRef = useRef<number | null>(null);
 
-    // signed-url cache
-    const playUrlRef = useRef<{ url: string; expiresAt: number } | null>(null);
+    // Keep the shared controller registry up-to-date so play() can resolve
+    // this pill by id.
+    useEffect(() => {
+        if (!isAudio) return;
+
+        const asset: AudioAsset = {
+            id,
+            name,
+            type: "audio",
+            sizeMB: Number.isFinite(sizeMB) ? sizeMB : 0,
+            publicUrl,
+            objectKey,
+        };
+
+        audioController.registerAssets([asset]);
+    }, [id, isAudio, name, objectKey, publicUrl, sizeMB]);
+
+    const playState: PlayState = !isAudio
+        ? "stopped"
+        : isCurrent
+        ? audioState.status === "playing"
+            ? "playing"
+            : audioState.status === "paused"
+            ? "paused"
+            : audioState.status === "loading"
+            ? "loading"
+            : "stopped"
+        : "stopped";
+
+    const durSec = isCurrent ? audioState.duration ?? null : null;
+    const curSec = isCurrent ? audioState.currentTime : 0;
+
+    const playheadPct = useMemo(() => {
+        if (isCurrent && durSec && durSec > 0) {
+            return Math.max(0, Math.min(1, curSec / durSec)) * 100;
+        }
+        if (standbySeekFrac != null) {
+            return Math.max(0, Math.min(1, standbySeekFrac)) * 100;
+        }
+        return 0;
+    }, [curSec, durSec, isCurrent, standbySeekFrac]);
 
     const canDelete = !!objectKey && !!onDelete;
     const canPlay = isAudio && (!!objectKey || !!publicUrl);
 
     const displaySize = Number.isFinite(sizeMB) ? sizeMB.toFixed(1) : "0.0";
 
-    const ensureAudio = (url: string) => {
-        if (audioRef.current && (audioRef.current as any).__ys_src === url) {
-            return audioRef.current;
-        }
-
-        // cleanup old one if src changed
-        if (audioRef.current) {
-            try {
-                audioRef.current.pause();
-            } catch {}
-            audioRef.current = null;
-        }
-
-        const a = new Audio(url);
-        (a as any).__ys_src = url;
-        a.preload = "metadata";
-
-        const onEnded = () => {
-            queuedSeekFracRef.current = null;
-            setPlayState("stopped");
-            setPlayheadPct(0);
-            setCurSec(0);
-        };
-
-        const onTime = () => {
-            if (!a.duration || !isFinite(a.duration)) return;
-            const pct =
-                Math.max(0, Math.min(1, a.currentTime / a.duration)) * 100;
-            setPlayheadPct(pct);
-            setCurSec(a.currentTime);
-            if (!durSec) setDurSec(a.duration);
-        };
-
-        const onMeta = () => {
-            if (!a.duration || !isFinite(a.duration)) return;
-            setDurSec(a.duration);
-        };
-
-        a.addEventListener("ended", onEnded);
-        a.addEventListener("timeupdate", onTime);
-        a.addEventListener("loadedmetadata", onMeta);
-        a.addEventListener("durationchange", onMeta);
-        (a as any).__ys_onEnded = onEnded;
-        (a as any).__ys_onTime = onTime;
-        (a as any).__ys_onMeta = onMeta;
-
-        audioRef.current = a;
-        return a;
-    };
-
-    const getPlayUrl = async (): Promise<string | null> => {
-        // Prefer signed URL from objectKey
-        if (objectKey) {
-            const cached = playUrlRef.current;
-            const freshEnough =
-                cached &&
-                cached.expiresAt &&
-                cached.expiresAt > Date.now() + 60_000; // 60s safety
-
-            if (freshEnough) return cached!.url;
-
-            const signed = await fetchSignedUrl(objectKey, "play");
-            playUrlRef.current = signed;
-            return signed.url;
-        }
-
-        // Fallback (dev or legacy)
-        return publicUrl || null;
-    };
-
-    useEffect(() => {
-        // if object changes, reset state
-        playUrlRef.current = null;
-        queuedSeekFracRef.current = null;
-        setPlayState("stopped");
-        setPlayheadPct(0);
-        setCurSec(0);
-        setDurSec(null);
-
-        const a = audioRef.current;
-        if (a) {
-            try {
-                a.pause();
-                a.currentTime = 0;
-            } catch {}
-            const onEnded = (a as any).__ys_onEnded;
-            const onTime = (a as any).__ys_onTime;
-            const onMeta = (a as any).__ys_onMeta;
-            if (onEnded) a.removeEventListener("ended", onEnded);
-            if (onTime) a.removeEventListener("timeupdate", onTime);
-            if (onMeta) {
-                a.removeEventListener("loadedmetadata", onMeta);
-                a.removeEventListener("durationchange", onMeta);
-            }
-        }
-        audioRef.current = null;
-    }, [publicUrl, objectKey]);
-
     const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
-
-    const waitForMetadata = (a: HTMLAudioElement) =>
-        new Promise<void>((resolve) => {
-            if (a.readyState >= 1) return resolve();
-            const done = () => resolve();
-            a.addEventListener("loadedmetadata", done, { once: true } as any);
-            a.addEventListener("durationchange", done, { once: true } as any);
-        });
 
     const seekToFraction = (frac: number) => {
         const f = clamp01(frac);
-
-        // Always remember the target so Play starts here even if we haven't loaded yet.
         queuedSeekFracRef.current = f;
+        setStandbySeekFrac(f);
 
-        // Move the visual bar immediately (works while stopped).
-        setPlayheadPct(f * 100);
-
-        const a = audioRef.current;
-        if (!a) return;
-
-        const apply = () => {
-            if (!a.duration || !isFinite(a.duration)) return;
-            a.currentTime = f * a.duration;
-            setCurSec(a.currentTime);
-            setDurSec(a.duration);
-        };
-
-        if (a.duration && isFinite(a.duration)) apply();
-        else a.addEventListener("loadedmetadata", apply, { once: true } as any);
+        // If this pill is the currently playing asset, seek immediately.
+        if (isCurrent) {
+            audioController.seekFrac({ id }, f);
+        }
     };
 
     const onPlayStop = async () => {
         if (!canPlay) return;
 
-        if (playState === "playing" || playState === "paused") {
-            const a = audioRef.current;
-            if (a) {
-                a.pause();
-                a.currentTime = 0;
-            }
+        // Stop if this pill is the current playing/paused item.
+        if (
+            isCurrent &&
+            (audioState.status === "playing" ||
+                audioState.status === "paused" ||
+                audioState.status === "loading")
+        ) {
+            audioController.stop({ id });
             queuedSeekFracRef.current = null;
-            setPlayState("stopped");
-            setPlayheadPct(0);
-            setCurSec(0);
+            setStandbySeekFrac(null);
             return;
         }
 
         try {
-            const url = await getPlayUrl();
-            if (!url) return;
+            const asset: AudioAsset = {
+                id,
+                name,
+                type: "audio",
+                sizeMB: Number.isFinite(sizeMB) ? sizeMB : 0,
+                publicUrl,
+                objectKey,
+            };
+            audioController.registerAssets([asset]);
 
-            const a = ensureAudio(url);
+            audioController.play({ id }); // user gesture → should be allowed
 
             const pending = queuedSeekFracRef.current;
             if (pending != null) {
-                await waitForMetadata(a);
-                if (a.duration && isFinite(a.duration)) {
-                    a.currentTime = pending * a.duration;
-                }
+                audioController.seekFrac({ id }, pending);
             }
-
-            await a.play(); // user gesture → should be allowed
-            setPlayState("playing");
         } catch (e) {
             console.warn("Audio play failed:", e);
-            setPlayState("stopped");
-            setPlayheadPct(0);
-            setCurSec(0);
         }
     };
 
     const onPauseResume = async () => {
-        if (!canPlay) return;
+        if (!canPlay || !isCurrent) return;
 
-        const a = audioRef.current;
-        if (!a) return;
-
-        if (playState === "playing") {
-            a.pause();
-            setPlayState("paused");
+        if (audioState.status === "playing") {
+            audioController.pause({ id });
             return;
         }
 
-        if (playState === "paused") {
-            try {
-                await a.play();
-                setPlayState("playing");
-            } catch (e) {
-                console.warn("Audio resume failed:", e);
-            }
+        if (audioState.status === "paused") {
+            audioController.resume({ id });
         }
     };
 

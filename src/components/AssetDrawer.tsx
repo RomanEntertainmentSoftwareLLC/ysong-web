@@ -5,24 +5,135 @@ import {
     useState,
     type ChangeEvent,
     type DragEvent,
-    type Dispatch,
-    type SetStateAction,
 } from "react";
 import "../styles/asset-drawer.css";
 import type { Chat } from "./UISidebar";
 import { YSButton } from "./YSButton";
 import { FilePill, type FileKind } from "./FilePill";
+import { audioController, type AudioAsset } from "./AudioController";
+import { appendMessage } from "../lib/chatApi";
 
+const ZWSP = "\u200B";
 const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
 const API = (API_BASE || "").replace(/\/+$/, "");
 
+type SignedUrlMode = "play" | "download";
+
+async function fetchSignedUrl(objectKey: string, mode: SignedUrlMode = "play") {
+    const token = localStorage.getItem("ys_token");
+    if (!token) throw new Error("no_token");
+
+    // Backend route: GET /api/uploads/signed-url?objectKey=...&mode=play|download
+    const base = API
+        ? API.replace(/\/+$/, "") + "/api/uploads/signed-url"
+        : "/api/uploads/signed-url";
+    const qs = new URLSearchParams({ objectKey, mode }).toString();
+
+    const res = await fetch(`${base}?${qs}`, {
+        method: "GET",
+        headers: {
+            Authorization: `Bearer ${token}`,
+        },
+    });
+
+    if (!res.ok) throw new Error(`signed_url_failed_${res.status}`);
+
+    const data = await res.json();
+
+    const signed =
+        typeof data?.url === "string"
+            ? data.url
+            : typeof data?.signedUrl === "string"
+            ? data.signedUrl
+            : "";
+
+    const expiresAt =
+        typeof data?.expiresAt === "number" && Number.isFinite(data.expiresAt)
+            ? data.expiresAt
+            : Date.now() + 55 * 60 * 1000;
+
+    if (!signed) throw new Error("signed_url_missing");
+
+    return { url: signed, expiresAt };
+}
+
+const AUDIO_EXT = /\.(mp3|wav|flac|m4a|aac|ogg|opus|aiff|aif|caf|wma)$/i;
+
+function isLikelySignedUrl(url?: string) {
+    if (!url) return false;
+    return /[?&]X-Goog-(Algorithm|Signature|Credential)=/i.test(url);
+}
+
+function needsSignedPlayUrl(url?: string) {
+    if (!url) return true;
+    if (isLikelySignedUrl(url)) return false;
+    try {
+        const u = new URL(url);
+        if (u.hostname === "storage.googleapis.com") return true;
+        if (u.hostname.endsWith(".storage.googleapis.com")) return true;
+    } catch {
+        return true;
+    }
+    return true;
+}
+
+function isAudioAttachment(a?: { name?: string; type?: string }) {
+    if (!a) return false;
+
+    const t = String(a.type || "").toLowerCase();
+    if (t.startsWith("audio/")) return true;
+
+    const name = String(a.name || "");
+    return AUDIO_EXT.test(name);
+}
+
+// For immediate playback, we keep *signed* play URLs in local UI state.
+// For Neon persistence, we strip signed URLs (they expire) and keep only objectKey + metadata.
+async function withSignedPlayUrls(
+    atts: Attachment[],
+    cache: Map<string, { url: string; expiresAt: number }>
+): Promise<Attachment[]> {
+    if (!atts.length) return atts;
+
+    const now = Date.now();
+
+    return await Promise.all(
+        atts.map(async (a) => {
+            if (!isAudioAttachment(a) || !a.objectKey) return a;
+
+            const cached = cache.get(a.objectKey);
+            if (cached && cached.expiresAt > now + 60_000) {
+                return { ...a, publicUrl: cached.url };
+            }
+
+            try {
+                const s = await fetchSignedUrl(a.objectKey, "play");
+                cache.set(a.objectKey, s);
+                return { ...a, publicUrl: s.url };
+            } catch {
+                return a;
+            }
+        })
+    );
+}
+
+function stripSignedUrlsForNeon(atts: Attachment[]): Attachment[] {
+    return atts.map((a) => ({
+        name: a.name,
+        size: a.size,
+        type: a.type,
+        objectKey: a.objectKey,
+    }));
+}
+
 /**
  * Asset records that can live in the drawer without needing a chat message.
  *
- * NOTE:
- *  - chat uploads still appear in the drawer (derived from chat message attachments)
- *  - drawer uploads do NOT create a chat message (so they do not render in ChatPane)
+ * NOTES:
+ *  - Chat uploads appear in the drawer (derived from chat message attachments).
+ *  - Drawer uploads ALSO post an attachment message to the *active chat* (if provided),
+ *    so the AI + prompt-audio controller can see/play them (same behavior as ChatPane [+]).
  */
 export type DrawerAsset = {
     id: string;
@@ -36,9 +147,10 @@ export type DrawerAsset = {
 
 type Props = {
     chats: Chat[];
-    setChats: Dispatch<SetStateAction<Chat[]>>;
+    setChats: React.Dispatch<React.SetStateAction<Chat[]>>;
     drawerAssets: DrawerAsset[];
-    setDrawerAssets: Dispatch<SetStateAction<DrawerAsset[]>>;
+    setDrawerAssets: React.Dispatch<React.SetStateAction<DrawerAsset[]>>;
+    activeChatId?: string;
 };
 
 type Attachment = {
@@ -51,6 +163,23 @@ type Attachment = {
 
 function fileKey(f: File) {
     return `${f.name}:${f.size}:${f.lastModified}`;
+}
+
+function fmtMB(bytes: number) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function uploadLabel(atts?: Attachment[]) {
+    const list = Array.isArray(atts) ? atts : [];
+    if (list.length === 0) return "Uploaded file(s).";
+
+    if (list.length === 1) {
+        const a = list[0];
+        return `Uploaded: ${a.name} (${fmtMB(a.size)})`;
+    }
+
+    const names = list.map((a) => a.name).join(", ");
+    return `Uploaded ${list.length} files: ${names}`;
 }
 
 function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
@@ -175,23 +304,29 @@ export default function AssetDrawer({
     setChats,
     drawerAssets,
     setDrawerAssets,
+    activeChatId,
 }: Props) {
     const [open, setOpen] = useState(false);
     const handleRef = useRef<HTMLButtonElement | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+    const signedUrlCacheRef = useRef<
+        Map<string, { url: string; expiresAt: number }>
+    >(new Map());
+
     const [isUploading, setIsUploading] = useState(false);
     const [progressByKey, setProgressByKey] = useState<Record<string, number>>(
         {}
     );
 
+    const [signedPlayUrlByKey, setSignedPlayUrlByKey] = useState<
+        Record<string, string>
+    >({});
+
     // drag overlay (avoid flicker with counter)
     const [dragActive, setDragActive] = useState(false);
     const dragCounter = useRef(0);
-
-    // NOTE: this drawer is global (not tied to any one chat).
-    // Uploads here should NOT create chat timeline messages.
 
     // Keep aria-expanded in sync with state
     useEffect(() => {
@@ -210,11 +345,6 @@ export default function AssetDrawer({
     }, [progressByKey]);
 
     const assets = useMemo(() => {
-        // Merge:
-        //  1) drawerAssets (uploaded directly into the drawer)
-        //  2) chat-derived assets (attachments on any chat message)
-        //
-        // Keyed by stable id so both surfaces share the same ids.
         const byId = new Map<string, DrawerAsset>();
 
         // 1) drawer-owned assets first
@@ -232,8 +362,18 @@ export default function AssetDrawer({
 
                 for (const raw of atts) {
                     const a = normalizeAttachment(raw);
+                    // IMPORTANT: Keep IDs consistent with ChatPane so that
+                    // prompt-play (AudioController.currentId) correctly lights
+                    // up the matching FilePill in the drawer.
+                    //
+                    // When we don't have an objectKey/publicUrl (legacy/file-only
+                    // metadata), ChatPane uses "<messageId>:<name>" if a message
+                    // id exists.
+                    const msgId = String((msg as any)?.id ?? "").trim();
                     const stableId =
-                        a.objectKey ?? a.publicUrl ?? `${a.name}:${a.size}`;
+                        a.objectKey ??
+                        a.publicUrl ??
+                        (msgId ? `${msgId}:${a.name}` : `${a.name}:${a.size}`);
 
                     const sizeMB = a.size
                         ? Number((a.size / (1024 * 1024)).toFixed(1))
@@ -257,7 +397,6 @@ export default function AssetDrawer({
                             addedAt: ts,
                         });
                     } else {
-                        // keep whichever has the newest timestamp
                         const nextAdded = Math.max(existing.addedAt ?? 0, ts);
                         if (nextAdded !== (existing.addedAt ?? 0)) {
                             byId.set(stableId, {
@@ -275,6 +414,81 @@ export default function AssetDrawer({
             (a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0)
         );
     }, [chats, drawerAssets]);
+
+    // --- Signed URL prefetch (play) ---
+    // Drawer + chat assets are in a private bucket, so FilePill needs a short-lived signed URL.
+    useEffect(() => {
+        let cancelled = false;
+
+        const cache = signedUrlCacheRef.current;
+        const now = Date.now();
+
+        const audioNeedingUrl = assets
+            .filter((a) => a.type === "audio" && !!a.objectKey)
+            .slice(0, 24);
+
+        (async () => {
+            for (const a of audioNeedingUrl) {
+                const key = a.objectKey!;
+
+                const existing = signedPlayUrlByKey[key];
+                if (existing && !needsSignedPlayUrl(existing)) continue;
+
+                const cached = cache.get(key);
+                if (cached && cached.expiresAt > now + 60_000) {
+                    if (cancelled) return;
+                    setSignedPlayUrlByKey((prev) =>
+                        prev[key] === cached.url
+                            ? prev
+                            : { ...prev, [key]: cached.url }
+                    );
+                    continue;
+                }
+
+                try {
+                    const signed = await fetchSignedUrl(key, "play");
+                    if (cancelled) return;
+                    cache.set(key, signed);
+                    setSignedPlayUrlByKey((prev) =>
+                        prev[key] === signed.url
+                            ? prev
+                            : { ...prev, [key]: signed.url }
+                    );
+                } catch {
+                    // ignore
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+        // intentionally not depending on signedPlayUrlByKey to avoid loops
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [assets]);
+
+    // Keep AudioController in sync so prompt-play can target drawer assets too.
+    useEffect(() => {
+        const audioAssets: AudioAsset[] = assets
+            .filter((a) => a.type === "audio")
+            .map((a) => {
+                const id = a.objectKey ?? a.publicUrl ?? a.id;
+                const playableUrl = a.objectKey
+                    ? signedPlayUrlByKey[a.objectKey] ?? a.publicUrl
+                    : a.publicUrl;
+
+                return {
+                    id,
+                    name: a.name,
+                    type: "audio",
+                    sizeMB: a.sizeMB ?? 0,
+                    publicUrl: playableUrl,
+                    objectKey: a.objectKey,
+                } satisfies AudioAsset;
+            });
+
+        audioController.registerAssets(audioAssets);
+    }, [assets, signedPlayUrlByKey]);
 
     async function uploadWithXHR(
         url: string,
@@ -349,10 +563,8 @@ export default function AssetDrawer({
         const filtered = files.filter((f) => f.size <= 50 * 1024 * 1024);
         if (!filtered.length) return;
 
-        // show drawer while we work
         setOpen(true);
 
-        // init progress map
         setProgressByKey((prev) => {
             const next = { ...prev };
             for (const f of filtered) next[fileKey(f)] = 0;
@@ -376,9 +588,89 @@ export default function AssetDrawer({
 
         if (!uploaded.length) return;
 
-        // Add to drawer-only state (so these do NOT render in the chat timeline)
+        // Pre-warm signed PLAY URLs for local UI playback (do NOT persist them).
+        const signedUploaded = await withSignedPlayUrls(
+            uploaded,
+            signedUrlCacheRef.current
+        );
+
+        // Cache signed urls for immediate FilePill playback in the drawer.
+        setSignedPlayUrlByKey((prev) => {
+            const next = { ...prev };
+            for (const a of signedUploaded) {
+                if (a.objectKey && a.publicUrl) next[a.objectKey] = a.publicUrl;
+            }
+            return next;
+        });
+
+        const uploadedPersist = stripSignedUrlsForNeon(signedUploaded);
+
         const now = Date.now();
-        const next: DrawerAsset[] = uploaded.map((u) => {
+
+        // Post to active chat (ChatPane [+] behavior)
+        if (activeChatId) {
+            // Capture the chat id at the moment the upload completes so we don't
+            // accidentally write to a different chat if the user switches tabs.
+            const targetChatId = activeChatId;
+            const userTs = now;
+            const attachments: Attachment[] = signedUploaded;
+
+            // optimistic UI
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === targetChatId
+                        ? {
+                              ...c,
+                              messages: [
+                                  ...(c.messages ?? []),
+                                  {
+                                      role: "user",
+                                      text: uploadLabel(attachments),
+                                      attachments,
+                                      ts: userTs,
+                                  } as any,
+                              ],
+                          }
+                        : c
+                )
+            );
+
+            // persist to Neon (best-effort)
+            appendMessage(targetChatId, {
+                role: "user",
+                content: ZWSP,
+                attachments: uploadedPersist,
+            })
+                .then((saved: any) => {
+                    if (!saved?.id) return;
+
+                    setChats((prev) =>
+                        prev.map((c) =>
+                            c.id === targetChatId
+                                ? {
+                                      ...c,
+                                      messages: (c.messages ?? []).map(
+                                          (m: any) =>
+                                              m.role === "user" &&
+                                              m.ts === userTs
+                                                  ? { ...m, id: saved.id }
+                                                  : m
+                                      ),
+                                  }
+                                : c
+                        )
+                    );
+                })
+                .catch((e: any) =>
+                    console.error(
+                        "AssetDrawer failed to persist upload message",
+                        e
+                    )
+                );
+        }
+
+        // Still add to drawer-owned state
+        const next: DrawerAsset[] = uploadedPersist.map((u) => {
             const id = u.objectKey ?? u.publicUrl ?? `${u.name}:${u.size}`;
             const kind: FileKind = u.type?.toLowerCase().startsWith("audio")
                 ? "audio"
@@ -391,7 +683,7 @@ export default function AssetDrawer({
                 name: u.name,
                 sizeMB,
                 type: kind,
-                publicUrl: u.publicUrl,
+                publicUrl: undefined,
                 objectKey: u.objectKey,
                 addedAt: now,
             };
@@ -435,12 +727,10 @@ export default function AssetDrawer({
             console.error("Delete from cloud failed", e);
         }
 
-        // Best-effort: detach from Neon messages that referenced it
         await Promise.all(
             messageIds.map((mid) => removeAttachmentFromMessage(mid, objectKey))
         );
 
-        // Update UI across all chats/messages
         setChats((prev) =>
             prev.map((c) => ({
                 ...c,
@@ -463,7 +753,6 @@ export default function AssetDrawer({
             }))
         );
 
-        // Also remove from drawer-owned assets
         setDrawerAssets((prev) =>
             (prev ?? []).filter((a) => a.objectKey !== objectKey)
         );
@@ -578,6 +867,7 @@ export default function AssetDrawer({
                             multiple
                             className="hidden"
                             onChange={onPickFiles}
+                            accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
                         />
                     </div>
 
@@ -612,7 +902,13 @@ export default function AssetDrawer({
                                         name={asset.name}
                                         sizeMB={asset.sizeMB}
                                         type={asset.type as any}
-                                        publicUrl={asset.publicUrl}
+                                        publicUrl={
+                                            asset.objectKey
+                                                ? signedPlayUrlByKey[
+                                                      asset.objectKey
+                                                  ] ?? asset.publicUrl
+                                                : asset.publicUrl
+                                        }
                                         objectKey={asset.objectKey}
                                         onDelete={
                                             asset.objectKey
