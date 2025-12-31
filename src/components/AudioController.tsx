@@ -26,6 +26,8 @@ export interface AudioState {
     error?: string;
     duration?: number;
     currentTime: number;
+    // Whether the *current* track is looping.
+    loop: boolean;
 }
 
 export type AudioTargetRef = Partial<
@@ -77,7 +79,7 @@ function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
 
 async function fetchSignedUrl(
     objectKey: string,
-    purpose: SignedUrlPurpose
+    purpose: SignedUrlPurpose,
 ): Promise<string> {
     const API = (import.meta as any).env?.VITE_AUTH_API_URL || "";
     const endpoint = API
@@ -134,16 +136,15 @@ export class AudioController {
     private byObjectKey = new Map<string, string>();
     private byPublicUrl = new Map<string, string>();
 
+    // Per-asset loop toggle (remembered even when switching tracks)
+    private loopById = new Map<string, boolean>();
+
     private audio?: HTMLAudioElement;
     private listeners = new Set<() => void>();
 
     // If a seek is requested before metadata is loaded, queue it and apply
     // once duration is known.
-    private pendingSeek?: {
-        id: string;
-        kind: "seconds" | "frac";
-        value: number;
-    };
+    private pendingSeek?: { id: string; kind: "seconds" | "frac"; value: number };
 
     private state: AudioState = {
         currentId: undefined,
@@ -152,7 +153,44 @@ export class AudioController {
         error: undefined,
         duration: undefined,
         currentTime: 0,
+        loop: false,
     };
+
+    // ---- Loop controls
+    isLoopEnabled(ref?: AudioTargetRef) {
+        const id = ref?.id ?? this.state.currentId;
+        if (!id) return false;
+        return !!this.loopById.get(id);
+    }
+
+    setLoop(ref: AudioTargetRef | undefined, enabled: boolean) {
+        const id = ref?.id ?? this.state.currentId;
+        if (!id) return;
+
+        const next = !!enabled;
+        this.loopById.set(id, next);
+
+        // If this is the current track, apply to the element immediately.
+        if (this.state.currentId === id) {
+            const audio = this.ensureAudio();
+            audio.loop = next;
+            this.setState({ loop: next });
+        }
+    }
+
+    toggleLoop(ref?: AudioTargetRef) {
+        const id = ref?.id ?? this.state.currentId;
+        if (!id) return;
+        const next = !this.isLoopEnabled({ id });
+        this.setLoop({ id }, next);
+    }
+
+    // Toggle element muting. Used to create a more natural "play after reply" feel
+    // while still satisfying browser autoplay policies.
+    setMuted(muted: boolean) {
+        const audio = this.ensureAudio();
+        audio.muted = !!muted;
+    }
 
     getSnapshot = () => this.state;
 
@@ -297,6 +335,7 @@ export class AudioController {
                 currentTime: 0,
                 currentId: undefined,
                 duration: undefined,
+                loop: false,
             });
         });
 
@@ -317,15 +356,10 @@ export class AudioController {
             if (!needsSigned) return url;
 
             const key =
-                asset.objectKey ??
-                deriveObjectKeyFromPublicUrl(asset.publicUrl);
+                asset.objectKey ?? deriveObjectKeyFromPublicUrl(asset.publicUrl);
             if (key) {
                 const signed = await fetchSignedUrl(key, "play");
-                const merged: AudioAsset = {
-                    ...asset,
-                    objectKey: key,
-                    publicUrl: signed,
-                };
+                const merged: AudioAsset = { ...asset, objectKey: key, publicUrl: signed };
                 this.registerAssets([merged]);
                 return signed;
             }
@@ -383,6 +417,11 @@ export class AudioController {
             this.pendingSeek = undefined;
 
             const url = await this.getPlayableUrl(asset);
+
+            // Apply per-track loop toggle before playback.
+            const loop = !!this.loopById.get(asset.id);
+            audio.loop = loop;
+            this.setState({ loop });
 
             // If we are switching tracks, reset the element.
             if (audio.src !== url) {
@@ -446,6 +485,7 @@ export class AudioController {
             currentTime: 0,
             duration: undefined,
             error: undefined,
+            loop: false,
         });
     }
 
@@ -490,15 +530,11 @@ export class AudioController {
 
         // Prefer signed download URL for private buckets.
         let url: string;
-        const key =
-            asset.objectKey ?? deriveObjectKeyFromPublicUrl(asset.publicUrl);
+        const key = asset.objectKey ?? deriveObjectKeyFromPublicUrl(asset.publicUrl);
         if (key) {
             url = await fetchSignedUrl(key, "download");
         } else {
-            url =
-                asset.publicUrl ??
-                gcsPublicUrlFromObjectKey(asset.objectKey) ??
-                "";
+            url = asset.publicUrl ?? gcsPublicUrlFromObjectKey(asset.objectKey) ?? "";
         }
 
         if (!url) throw new Error("No download URL");

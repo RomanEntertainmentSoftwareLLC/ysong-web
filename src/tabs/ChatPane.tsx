@@ -89,6 +89,489 @@ type ChatMessage = {
     ts?: number; // timestamp (ms)
 };
 
+/* ---------- Emoji Picker (desktop-only) ---------- */
+type EmojiCategoryKey =
+    | "smileys"
+    | "people"
+    | "nature"
+    | "food"
+    | "travel"
+    | "activities"
+    | "objects"
+    | "symbols"
+    | "flags";
+
+type EmojiDef = { ch: string; name: string; keywords: string[] };
+
+const E = (ch: string, name: string, keywords: string[] = []): EmojiDef => ({
+    ch,
+    name,
+    keywords,
+});
+
+const TWEMOJI_SVG_BASE =
+    "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/";
+
+function twemojiSvgUrl(emoji: string): string {
+    const codePoints = Array.from(emoji).map((c) =>
+        (c.codePointAt(0) ?? 0).toString(16)
+    );
+    return `${TWEMOJI_SVG_BASE}${codePoints.join("-")}.svg`;
+}
+
+function isRegionalIndicatorFlag(emoji: string): boolean {
+    const cps = Array.from(emoji).map((c) => c.codePointAt(0) ?? 0);
+    return (
+        cps.length === 2 && cps.every((cp) => cp >= 0x1f1e6 && cp <= 0x1f1ff)
+    );
+}
+
+const FLAG_PAIR_RE = /([\u{1F1E6}-\u{1F1FF}]{2})/gu;
+
+function renderTwemojiFlags(text: string) {
+    if (!text) return text;
+
+    const nodes: React.ReactNode[] = [];
+    let last = 0;
+    let found = false;
+
+    for (const m of text.matchAll(FLAG_PAIR_RE)) {
+        found = true;
+        const idx = m.index ?? 0;
+        const flag = m[1];
+
+        if (idx > last) nodes.push(text.slice(last, idx));
+
+        nodes.push(
+            <img
+                key={`flag-${idx}-${flag}`}
+                src={twemojiSvgUrl(flag)}
+                alt={flag}
+                draggable={false}
+                className="inline-block h-[1.05em] w-[1.05em] align-[-2px]"
+            />
+        );
+
+        last = idx + flag.length; // flag is 2 regional indicators (4 UTF-16 code units)
+    }
+
+    if (!found) return text;
+    if (last < text.length) nodes.push(text.slice(last));
+
+    return nodes;
+}
+
+const EMOJI_CATEGORIES: Array<{
+    key: EmojiCategoryKey;
+    label: string;
+    icon: string;
+    emojis: EmojiDef[];
+}> = [
+    {
+        key: "smileys",
+        label: "Smileys",
+        icon: "😀",
+        emojis: [
+            E("😀", "grinning face", ["grin", "happy"]),
+            E("😃", "grinning face with big eyes", ["happy"]),
+            E("😄", "grinning face with smiling eyes", ["smile"]),
+            E("😁", "beaming face with smiling eyes", ["grin"]),
+            E("😆", "grinning squinting face", ["laugh"]),
+            E("😅", "grinning face with sweat", ["relief"]),
+            E("😂", "face with tears of joy", ["lol", "laugh"]),
+            E("🤣", "rolling on the floor laughing", ["rofl", "laugh"]),
+            E("😊", "smiling face with smiling eyes", ["blush"]),
+            E("😇", "smiling face with halo", ["angel"]),
+            E("🙂", "slightly smiling face", ["smile"]),
+            E("🙃", "upside-down face", ["silly"]),
+            E("😉", "winking face", ["wink"]),
+            E("😍", "smiling face with heart-eyes", ["love"]),
+            E("🥰", "smiling face with hearts", ["love", "adore"]),
+            E("😘", "face blowing a kiss", ["kiss"]),
+            E("😋", "face savoring food", ["yum"]),
+            E("😛", "face with tongue", ["tongue"]),
+            E("😜", "winking face with tongue", ["silly"]),
+            E("🤪", "zany face", ["crazy"]),
+            E("🤨", "face with raised eyebrow", ["skeptical"]),
+            E("🧐", "face with monocle", ["inspect"]),
+            E("🤓", "nerd face", ["glasses"]),
+            E("😎", "smiling face with sunglasses", ["cool"]),
+            E("🤩", "star-struck", ["wow"]),
+            E("🥳", "partying face", ["party"]),
+            E("😏", "smirking face", ["smirk"]),
+            E("😒", "unamused face", ["meh"]),
+            E("😞", "disappointed face", ["sad"]),
+            E("😔", "pensive face", ["sad"]),
+            E("😕", "confused face", ["confused"]),
+            E("🙁", "slightly frowning face", ["sad"]),
+            E("☹️", "frowning face", ["sad"]),
+            E("🥺", "pleading face", ["please"]),
+            E("😢", "crying face", ["cry"]),
+            E("😭", "loudly crying face", ["sob"]),
+            E("😤", "face with steam from nose", ["frustrated"]),
+            E("😠", "angry face", ["mad"]),
+            E("😡", "pouting face", ["mad"]),
+            E("🤬", "face with symbols on mouth", ["swear"]),
+            E("😳", "flushed face", ["embarrassed"]),
+            E("😱", "face screaming in fear", ["shock"]),
+            E("😰", "anxious face with sweat", ["nervous"]),
+            E("😴", "sleeping face", ["sleep"]),
+            E("🤗", "smiling face with open hands", ["hug"]),
+            E("🤔", "thinking face", ["think"]),
+            E("🤐", "zipper-mouth face", ["quiet"]),
+            E("🙄", "face with rolling eyes", ["eye roll"]),
+        ],
+    },
+    {
+        key: "people",
+        label: "People",
+        icon: "🙋",
+        emojis: [
+            E("👋", "waving hand", ["wave", "hello"]),
+            E("🤚", "raised back of hand", ["hand"]),
+            E("✋", "raised hand", ["stop"]),
+            E("🖐️", "hand with fingers splayed", ["hand"]),
+            E("🖖", "vulcan salute", ["spock"]),
+            E("👍", "thumbs up", ["like", "approve"]),
+            E("👎", "thumbs down", ["dislike"]),
+            E("✊", "raised fist", ["solidarity"]),
+            E("👊", "oncoming fist", ["fist", "bump"]),
+            E("🤝", "handshake", ["deal"]),
+            E("🙌", "raising hands", ["praise"]),
+            E("🙏", "folded hands", ["pray", "thanks"]),
+            E("🫶", "heart hands", ["love"]),
+            E("💪", "flexed biceps", ["strong"]),
+            E("🧠", "brain", ["mind"]),
+            E("👀", "eyes", ["look"]),
+            E("🫦", "biting lip", ["lip"]),
+            E("🧑‍💻", "technologist", ["coder", "dev"]),
+            E("🧑‍🎤", "singer", ["music"]),
+            E("🧑‍🎨", "artist", ["paint"]),
+            E("🧑‍🍳", "cook", ["chef"]),
+            E("🧑‍🚀", "astronaut", ["space"]),
+            E("🧑‍⚕️", "health worker", ["doctor"]),
+            E("🧑‍🎓", "student", ["grad"]),
+            E("👶", "baby", ["infant"]),
+            E("🧒", "child", ["kid"]),
+            E("👧", "girl", ["kid"]),
+            E("👦", "boy", ["kid"]),
+            E("👩", "woman", ["adult"]),
+            E("👨", "man", ["adult"]),
+            E("👵", "older woman", ["grandma"]),
+            E("👴", "older man", ["grandpa"]),
+        ],
+    },
+    {
+        key: "nature",
+        label: "Animals & Nature",
+        icon: "🐻",
+        emojis: [
+            E("🐶", "dog face", ["dog"]),
+            E("🐱", "cat face", ["cat"]),
+            E("🐭", "mouse face", ["mouse"]),
+            E("🐹", "hamster", ["hamster"]),
+            E("🐰", "rabbit face", ["bunny"]),
+            E("🦊", "fox", ["fox"]),
+            E("🐻", "bear", ["bear"]),
+            E("🐼", "panda", ["panda"]),
+            E("🐨", "koala", ["koala"]),
+            E("🦁", "lion", ["lion"]),
+            E("🐯", "tiger face", ["tiger"]),
+            E("🐮", "cow face", ["cow"]),
+            E("🐷", "pig face", ["pig"]),
+            E("🐸", "frog", ["frog"]),
+            E("🐵", "monkey face", ["monkey"]),
+            E("🐔", "chicken", ["chicken"]),
+            E("🐧", "penguin", ["penguin"]),
+            E("🐦", "bird", ["bird"]),
+            E("🦋", "butterfly", ["butterfly"]),
+            E("🐝", "honeybee", ["bee"]),
+            E("🐢", "turtle", ["turtle"]),
+            E("🐍", "snake", ["snake"]),
+            E("🐙", "octopus", ["octopus"]),
+            E("🐠", "tropical fish", ["fish"]),
+            E("🐬", "dolphin", ["dolphin"]),
+            E("🦈", "shark", ["shark"]),
+            E("🌳", "deciduous tree", ["tree"]),
+            E("🌿", "herb", ["plant"]),
+            E("🌸", "cherry blossom", ["flower"]),
+            E("🌻", "sunflower", ["flower"]),
+            E("🌙", "crescent moon", ["moon"]),
+            E("⭐", "star", ["star"]),
+            E("☀️", "sun", ["sun"]),
+            E("🌈", "rainbow", ["rainbow"]),
+            E("❄️", "snowflake", ["snow"]),
+            E("🔥", "fire", ["lit"]),
+        ],
+    },
+    {
+        key: "food",
+        label: "Food & Drink",
+        icon: "🍔",
+        emojis: [
+            E("🍎", "red apple", ["apple"]),
+            E("🍌", "banana", ["banana"]),
+            E("🍉", "watermelon", ["melon"]),
+            E("🍇", "grapes", ["grape"]),
+            E("🍓", "strawberry", ["berry"]),
+            E("🫐", "blueberries", ["berry"]),
+            E("🍒", "cherries", ["cherry"]),
+            E("🍑", "peach", ["peach"]),
+            E("🥭", "mango", ["mango"]),
+            E("🍍", "pineapple", ["pineapple"]),
+            E("🥑", "avocado", ["avocado"]),
+            E("🥦", "broccoli", ["broccoli"]),
+            E("🌶️", "hot pepper", ["spicy"]),
+            E("🧄", "garlic", ["garlic"]),
+            E("🥔", "potato", ["potato"]),
+            E("🍞", "bread", ["bread"]),
+            E("🥐", "croissant", ["pastry"]),
+            E("🧀", "cheese wedge", ["cheese"]),
+            E("🥚", "egg", ["egg"]),
+            E("🥞", "pancakes", ["pancake"]),
+            E("🥓", "bacon", ["bacon"]),
+            E("🍗", "poultry leg", ["chicken"]),
+            E("🍔", "hamburger", ["burger"]),
+            E("🍟", "french fries", ["fries"]),
+            E("🍕", "pizza", ["pizza"]),
+            E("🌭", "hot dog", ["hotdog"]),
+            E("🌮", "taco", ["taco"]),
+            E("🍣", "sushi", ["sushi"]),
+            E("🍜", "steaming bowl", ["ramen", "noodles"]),
+            E("🍩", "doughnut", ["donut"]),
+            E("🍪", "cookie", ["cookie"]),
+            E("🍫", "chocolate bar", ["chocolate"]),
+            E("🧁", "cupcake", ["cake"]),
+            E("☕", "hot beverage", ["coffee"]),
+            E("🧋", "bubble tea", ["boba"]),
+            E("🥤", "cup with straw", ["soda"]),
+            E("🍺", "beer mug", ["beer"]),
+            E("🍷", "wine glass", ["wine"]),
+        ],
+    },
+    {
+        key: "travel",
+        label: "Travel & Places",
+        icon: "✈️",
+        emojis: [
+            E("🚗", "car", ["car"]),
+            E("🚕", "taxi", ["taxi"]),
+            E("🚌", "bus", ["bus"]),
+            E("🚆", "train", ["train"]),
+            E("🚇", "metro", ["subway"]),
+            E("🚲", "bicycle", ["bike"]),
+            E("🛴", "kick scooter", ["scooter"]),
+            E("✈️", "airplane", ["flight"]),
+            E("🛫", "airplane departure", ["takeoff"]),
+            E("🛬", "airplane arrival", ["landing"]),
+            E("🚀", "rocket", ["rocket"]),
+            E("🛸", "flying saucer", ["ufo"]),
+            E("⛵", "sailboat", ["boat"]),
+            E("🚢", "ship", ["boat"]),
+            E("🗺️", "world map", ["map"]),
+            E("🧭", "compass", ["compass"]),
+            E("🗽", "statue of liberty", ["nyc"]),
+            E("🗼", "tokyo tower", ["tokyo"]),
+            E("🏰", "castle", ["castle"]),
+            E("🏯", "japanese castle", ["castle"]),
+            E("🏟️", "stadium", ["stadium"]),
+            E("🏖️", "beach with umbrella", ["beach"]),
+            E("🏝️", "desert island", ["island"]),
+            E("🏕️", "camping", ["camp"]),
+            E("⛺", "tent", ["tent"]),
+            E("🌋", "volcano", ["volcano"]),
+            E("🗻", "mount fuji", ["mountain"]),
+        ],
+    },
+    {
+        key: "activities",
+        label: "Activities",
+        icon: "⚽",
+        emojis: [
+            E("⚽", "soccer ball", ["soccer", "football"]),
+            E("🏀", "basketball", ["basketball"]),
+            E("🏈", "american football", ["football"]),
+            E("⚾", "baseball", ["baseball"]),
+            E("🎾", "tennis", ["tennis"]),
+            E("🎮", "video game", ["game"]),
+            E("🎲", "game die", ["dice"]),
+            E("🧩", "puzzle piece", ["puzzle"]),
+            E("♟️", "chess pawn", ["chess"]),
+            E("🎯", "bullseye", ["target"]),
+            E("🎹", "musical keyboard", ["piano"]),
+            E("🥁", "drum", ["drums"]),
+            E("🎸", "guitar", ["guitar"]),
+            E("🎻", "violin", ["violin"]),
+            E("🎺", "trumpet", ["trumpet"]),
+            E("🎷", "saxophone", ["sax"]),
+            E("🎤", "microphone", ["sing"]),
+            E("🎧", "headphone", ["music"]),
+            E("🎬", "clapper board", ["movie"]),
+            E("🎨", "artist palette", ["art"]),
+        ],
+    },
+    {
+        key: "objects",
+        label: "Objects",
+        icon: "💡",
+        emojis: [
+            E("💡", "light bulb", ["idea"]),
+            E("📎", "paperclip", ["clip"]),
+            E("📌", "pushpin", ["pin"]),
+            E("📍", "round pushpin", ["location"]),
+            E("🎁", "wrapped gift", ["gift"]),
+            E("🎈", "balloon", ["balloon"]),
+            E("🎉", "party popper", ["party"]),
+            E("🔧", "wrench", ["tool"]),
+            E("🪛", "screwdriver", ["tool"]),
+            E("🔨", "hammer", ["tool"]),
+            E("⚙️", "gear", ["settings"]),
+            E("🖥️", "desktop computer", ["computer"]),
+            E("💻", "laptop", ["laptop"]),
+            E("⌨️", "keyboard", ["keyboard"]),
+            E("🖱️", "computer mouse", ["mouse"]),
+            E("📱", "mobile phone", ["phone"]),
+            E("📷", "camera", ["photo"]),
+            E("🎥", "movie camera", ["video"]),
+            E("💾", "floppy disk", ["save"]),
+            E("🔊", "speaker high volume", ["sound"]),
+            E("🔇", "muted speaker", ["mute"]),
+            E("🔔", "bell", ["notification"]),
+            E("⏰", "alarm clock", ["alarm"]),
+            E("🔋", "battery", ["battery"]),
+            E("🔌", "electric plug", ["plug"]),
+            E("🔬", "microscope", ["science"]),
+            E("🔭", "telescope", ["space"]),
+        ],
+    },
+    {
+        key: "symbols",
+        label: "Symbols",
+        icon: "❤️",
+        emojis: [
+            E("❤️", "red heart", ["heart", "love"]),
+            E("🧡", "orange heart", ["heart"]),
+            E("💛", "yellow heart", ["heart"]),
+            E("💚", "green heart", ["heart"]),
+            E("💙", "blue heart", ["heart"]),
+            E("💜", "purple heart", ["heart"]),
+            E("🖤", "black heart", ["heart"]),
+            E("🤍", "white heart", ["heart"]),
+            E("💔", "broken heart", ["heartbreak"]),
+            E("💕", "two hearts", ["love"]),
+            E("💞", "revolving hearts", ["love"]),
+            E("✨", "sparkles", ["sparkle"]),
+            E("✅", "check mark button", ["check", "ok"]),
+            E("☑️", "check box with check", ["check"]),
+            E("✔️", "check mark", ["check"]),
+            E("❌", "cross mark", ["x"]),
+            E("⚠️", "warning", ["alert"]),
+            E("⛔", "no entry", ["stop"]),
+            E("🚫", "prohibited", ["no"]),
+            E("ℹ️", "information", ["info"]),
+            E("❓", "question mark", ["question"]),
+            E("❗", "exclamation mark", ["exclamation"]),
+            E("⭐", "star", ["star"]),
+            E("♾️", "infinity", ["infinite"]),
+            E("🔞", "no one under eighteen", ["18+"]),
+        ],
+    },
+    {
+        key: "flags",
+        label: "Flags",
+        icon: "🏳️",
+        emojis: [
+            E("🏁", "chequered flag", ["race"]),
+            E("🚩", "triangular flag", ["flag"]),
+            E("🎌", "crossed flags", ["flags"]),
+            E("🏴‍☠️", "pirate flag", ["pirate"]),
+            E("🇺🇸", "flag: United States", ["usa", "us"]),
+            E("🇦🇷", "flag: Argentina", ["argentina", "ar"]),
+            E("🇲🇽", "flag: Mexico", ["mexico", "mx"]),
+            E("🇨🇦", "flag: Canada", ["canada", "ca"]),
+            E("🇧🇷", "flag: Brazil", ["brazil", "br"]),
+            E("🇬🇧", "flag: United Kingdom", ["uk", "gb"]),
+            E("🇮🇪", "flag: Ireland", ["ireland", "ie"]),
+            E("🇫🇷", "flag: France", ["france", "fr"]),
+            E("🇩🇪", "flag: Germany", ["germany", "de"]),
+            E("🇮🇹", "flag: Italy", ["italy", "it"]),
+            E("🇪🇸", "flag: Spain", ["spain", "es"]),
+            E("🇵🇹", "flag: Portugal", ["portugal", "pt"]),
+            E("🇯🇵", "flag: Japan", ["japan", "jp"]),
+            E("🇰🇷", "flag: South Korea", ["korea", "kr"]),
+            E("🇨🇳", "flag: China", ["china", "cn"]),
+            E("🇮🇳", "flag: India", ["india", "in"]),
+            E("🇦🇺", "flag: Australia", ["australia", "au"]),
+            E("🇪🇺", "flag: European Union", ["eu"]),
+        ],
+    },
+];
+
+type EmojiItem = EmojiDef & { cat: EmojiCategoryKey };
+
+const EMOJI_BY_CAT: Record<EmojiCategoryKey, EmojiItem[]> = (() => {
+    const map = {
+        smileys: [] as EmojiItem[],
+        people: [] as EmojiItem[],
+        nature: [] as EmojiItem[],
+        food: [] as EmojiItem[],
+        travel: [] as EmojiItem[],
+        activities: [] as EmojiItem[],
+        objects: [] as EmojiItem[],
+        symbols: [] as EmojiItem[],
+        flags: [] as EmojiItem[],
+    };
+
+    for (const cat of EMOJI_CATEGORIES) {
+        for (const e of cat.emojis) {
+            map[cat.key].push({ ...e, cat: cat.key });
+        }
+    }
+    return map;
+})();
+
+const EMOJI_INDEX: EmojiItem[] = (() => {
+    const out: EmojiItem[] = [];
+    for (const k of Object.keys(EMOJI_BY_CAT) as EmojiCategoryKey[]) {
+        out.push(...EMOJI_BY_CAT[k]);
+    }
+    return out;
+})();
+
+function emojiMatchesQuery(e: EmojiItem, q: string) {
+    if (!q) return true;
+    const s = q.toLowerCase();
+    if (e.ch.includes(s)) return true;
+    if (e.name.toLowerCase().includes(s)) return true;
+    return e.keywords.some((kw) => kw.toLowerCase().includes(s));
+}
+
+// --- Unicode helpers (fix garbled/square filenames, normalize text rendering) ---
+function maybeDecodeURIComponentSafe(s: string): string {
+    if (!s) return s;
+    // Only try decode when it looks percent-encoded.
+    if (!/%[0-9A-Fa-f]{2}/.test(s)) return s;
+    try {
+        return decodeURIComponent(s);
+    } catch {
+        return s;
+    }
+}
+
+function normalizeUnicodeText(s: string): string {
+    if (typeof s !== "string") return "";
+    // NFC is the safest “display” normalization for filenames/text.
+    try {
+        return s.normalize("NFC");
+    } catch {
+        return s;
+    }
+}
+
+function normalizeFilenameDisplay(name: string): string {
+    return normalizeUnicodeText(maybeDecodeURIComponentSafe(name || ""));
+}
+
 function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
     if (!url) return;
 
@@ -118,10 +601,10 @@ function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
 
 function normalizeAttachment(raw: any): Attachment {
     if (typeof raw === "string") {
-        return { name: raw, size: 0, type: "" };
+        return { name: normalizeFilenameDisplay(raw), size: 0, type: "" };
     }
 
-    const name =
+    const nameRaw =
         typeof raw?.name === "string"
             ? raw.name
             : typeof raw?.filename === "string"
@@ -160,6 +643,8 @@ function normalizeAttachment(raw: any): Attachment {
     // if we only have the GCS url, derive objectKey from it
     if (!objectKey) objectKey = deriveObjectKeyFromPublicUrl(publicUrl);
 
+    const name = normalizeFilenameDisplay(String(nameRaw));
+
     return { name, size, type, publicUrl, objectKey };
 }
 
@@ -170,7 +655,8 @@ function sanitizeEmDashesToSentences(text: string): string {
 
     // Case 1: middle-of-sentence clause, like "nice — this feels..."
     // Turn: "<char><spaces>—<spaces><letter>" into "<char>. <CapitalLetter>"
-    out = out.replace(/(\S)\s*\u2014\s*([A-Za-z])/g, (_m, before, after) => {
+    // Unicode-aware: \p{L} instead of A-Za-z
+    out = out.replace(/(\S)\s*\u2014\s*(\p{L})/gu, (_m, before, after) => {
         return `${before}. ${String(after).toUpperCase()}`;
     });
 
@@ -219,6 +705,19 @@ function stripAudioCommandHints(text: string): string {
     return out.trim();
 }
 
+// Remove any internal tool-tag protocol text from what the user sees.
+// (The assistant may still emit these tags; the app should never render them.)
+function stripYsToolTags(text: string): string {
+    if (!text) return text;
+    let out = text;
+
+    // Use a non-greedy matcher so tags still strip even if attribute values contain ']'
+    // (e.g. id="[redacted] ..."), which would break a naive [^\]]* regex.
+    out = out.replace(/\[\[ys:[\s\S]*?\]\]/gi, "");
+    out = out.replace(/\n{3,}/g, "\n\n");
+    return out.trim();
+}
+
 function fileKey(f: File) {
     return `${f.name}:${f.size}:${f.lastModified}`;
 }
@@ -238,21 +737,6 @@ function uploadLabel(atts?: Attachment[]) {
 
     const names = list.map((a) => a.name).join(", ");
     return `Uploaded ${list.length} files: ${names}`;
-}
-
-function uploadAck(atts?: Attachment[]) {
-    const list = Array.isArray(atts) ? atts : [];
-    if (list.length === 0) return "Got it.";
-
-    if (list.length === 1) {
-        const a = list[0];
-        return `Got it. I received your file: ${a.name} (${fmtMB(
-            a.size
-        )}). Tell me what you want to do with it and I will help.`;
-    }
-
-    const names = list.map((a) => a.name).join(", ");
-    return `Got it. I received ${list.length} files: ${names}. Tell me what you want to do with them and I will help.`;
 }
 
 type AudioAction =
@@ -451,7 +935,7 @@ function parseUserAudioCommands(
     // Natural phrasing support:
     // "play X", "could you play X", "please play X", "can you pause", "seek 1:23", etc.
     const headRe =
-        /^\s*(?:(?:ok|okay|alright|all right|hey|yo|pls|please|could you|can you|would you|would ya|can ya)\s+)*\b(play|resume|pause|stop|seek)\b/i;
+        /^\s*(?:(?:ok|okay|alright|all right|hey|yo|pls|please|could you|can you|would you|would ya|can ya|now|then|so|well|alrighty|allright)\s+)*\b(play|resume|pause|stop|seek)\b/i;
     const m = t.match(headRe);
     if (!m) return null;
 
@@ -490,6 +974,12 @@ function parseUserAudioCommands(
                 ""
             )
             .replace(/\b(?:random|any|something)\b/gi, "")
+            // Strip common emoticons so ":P" doesn't become a stray "p" token and break matching.
+            .replace(
+                /(?:^|\s)(?:[:;=8]|x|X)(?:-)?(?:\)|\(|d|D|p|P)(?=\s|$)/g,
+                " "
+            )
+            .replace(/(?:^|\s)<3(?=\s|$)/g, " ")
             // Phrases users commonly add that shouldn't affect matching.
             .replace(/\b(?:from|in)\s+(?:the\s+)?asset\s+drawer\b/gi, "")
             .replace(/\b(?:from|in)\s+(?:the\s+)?drawer\b/gi, "")
@@ -509,11 +999,24 @@ function parseUserAudioCommands(
     if (verb === "stop") return [{ kind: "stop" }];
 
     if (verb === "play" || verb === "resume") {
+        const wantsRandom =
+            /\b(random|shuffle|surprise|anything|any|whatever)\b/i.test(
+                quoted ?? tailRaw
+            );
         const query = stripFiller(quoted ?? tailRaw);
-        const asset =
-            bestMatchAsset(query || "last", audioAssets) ?? newest ?? undefined;
-        if (!asset) return null;
-        return [{ kind: verb, ref: refFromAsset(asset)! }];
+
+        // If the user explicitly asked for random, and their query collapses to empty after
+        // stripping filler words, pick a random track from the whole drawer.
+        const avoidId = audioController.getSnapshot().lastPlayedId;
+        const asset = wantsRandom
+            ? query
+                ? bestMatchAsset(query, audioAssets)
+                : pickRandomAsset(audioAssets, avoidId)
+            : bestMatchAsset(query || "last", audioAssets);
+
+        const chosen = asset ?? newest ?? undefined;
+        if (!chosen) return null;
+        return [{ kind: verb, ref: refFromAsset(chosen)! }];
     }
 
     // seek parsing:
@@ -586,8 +1089,10 @@ function extractAudioToolTags(text: string) {
     const actions: AudioAction[] = [];
     if (!text) return { cleaned: text, actions };
 
+    // Non-greedy capture so values like id="[redacted] ..." (which contain ']')
+    // don't break tag stripping.
     const tagRe =
-        /\[\[ys:audio\.(play|resume|pause|stop|seek)\s*([^\]]*)\]\]/gi;
+        /\[\[ys:audio\.(play|resume|pause|stop|seek)\s*([\s\S]*?)\]\]/gi;
 
     const cleaned = text.replace(tagRe, (_full, verbRaw, attrsRaw) => {
         const verb = String(verbRaw).toLowerCase();
@@ -789,15 +1294,25 @@ function fallbackAckForAudioActions(
     }
 
     if (a0.kind === "pause")
-        return pickOne(["Paused.", "On pause.", "Pausing it."]);
+        return pickOne([
+            "Alright, pausing it.",
+            "Cool. Paused.",
+            "Yep, putting it on pause.",
+            "Got you. Pausing it for a sec.",
+        ]);
     if (a0.kind === "stop")
-        return pickOne(["Stopped.", "Stopping playback.", "Done — stopped."]);
+        return pickOne([
+            "Okay, stopping it.",
+            "All good. Stopped.",
+            "Done. Stopped playback.",
+            "Sure thing. Stopping it now.",
+        ]);
 
     if (a0.kind === "seekSeconds") {
         return pickOne([
             `Jumped to ${fmtTime(a0.seconds)}.`,
-            `Skipped to ${fmtTime(a0.seconds)}.`,
-            `Seeking to ${fmtTime(a0.seconds)}.`,
+            `Skipping to ${fmtTime(a0.seconds)}.`,
+            `Alright, seeking to ${fmtTime(a0.seconds)}.`,
         ]);
     }
 
@@ -805,12 +1320,25 @@ function fallbackAckForAudioActions(
         const pct = Math.round(a0.fraction * 100);
         return pickOne([
             `Jumped to ${pct}%.`,
-            `Skipped to ${pct}%.`,
-            `Seeking to ${pct}%.`,
+            `Skipping to ${pct}%.`,
+            `Alright, seeking to ${pct}%.`,
         ]);
     }
 
     return "Done.";
+}
+
+function isoCountryToFlagEmoji(code: string) {
+    const cc = (code || "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(cc)) return code;
+
+    const A = "A".charCodeAt(0);
+    const base = 0x1f1e6; // Regional Indicator Symbol Letter A
+
+    const c0 = cc.charCodeAt(0) - A;
+    const c1 = cc.charCodeAt(1) - A;
+
+    return String.fromCodePoint(base + c0, base + c1);
 }
 
 export default function ChatPane({ tab, chats, setChats }: Props) {
@@ -820,6 +1348,18 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
     const messageCount = chat?.messages?.length ?? 0;
 
     const [input, setInput] = useState("");
+
+    // Emoji picker (desktop-only). Mobile already has OS emoji.
+    const [emojiOpen, setEmojiOpen] = useState(false);
+    const [emojiQuery, setEmojiQuery] = useState("");
+    const [emojiCat, setEmojiCat] = useState<EmojiCategoryKey>("smileys");
+    const emojiBtnRef = useRef<HTMLButtonElement | null>(null);
+    const emojiPanelRef = useRef<HTMLDivElement | null>(null);
+    const emojiSearchRef = useRef<HTMLInputElement | null>(null);
+    const composerSelRef = useRef<{ start: number; end: number }>({
+        start: 0,
+        end: 0,
+    });
 
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [isUploading, setIsUploading] = useState(false);
@@ -898,6 +1438,43 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         el.style.height = el.scrollHeight + "px";
     }, [input]);
 
+    // Close emoji picker on outside click / Esc, and focus search when opened.
+    useEffect(() => {
+        if (!emojiOpen) return;
+
+        const onKeyDown = (ev: KeyboardEvent) => {
+            if (ev.key === "Escape") setEmojiOpen(false);
+        };
+
+        const onMouseDown = (ev: MouseEvent) => {
+            const t = ev.target as Node | null;
+            if (!t) return;
+
+            const panel = emojiPanelRef.current;
+            const btn = emojiBtnRef.current;
+
+            if (panel && panel.contains(t)) return;
+            if (btn && btn.contains(t)) return;
+
+            setEmojiOpen(false);
+        };
+
+        window.addEventListener("keydown", onKeyDown);
+        window.addEventListener("mousedown", onMouseDown);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("mousedown", onMouseDown);
+        };
+    }, [emojiOpen]);
+
+    useEffect(() => {
+        if (!emojiOpen) return;
+        const id = window.setTimeout(() => {
+            emojiSearchRef.current?.focus();
+        }, 0);
+        return () => window.clearTimeout(id);
+    }, [emojiOpen]);
+
     // ---- Load messages for this chat from Neon when the chat opens / changes ----
     useEffect(() => {
         if (!chatId) return;
@@ -926,7 +1503,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 
                                       const text =
                                           m.role === "assistant"
-                                              ? sanitizeEmDashesToSentences(raw)
+                                              ? sanitizeEmDashesToSentences(
+                                                    stripYsToolTags(raw)
+                                                )
                                               : raw === ZWSP &&
                                                 attachments &&
                                                 attachments.length
@@ -1057,6 +1636,87 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         );
     }
 
+    function syncComposerSelection() {
+        const el = textareaRef.current;
+        if (!el) return;
+
+        const start =
+            typeof el.selectionStart === "number"
+                ? el.selectionStart
+                : el.value.length;
+        const end =
+            typeof el.selectionEnd === "number" ? el.selectionEnd : start;
+
+        composerSelRef.current = { start, end };
+    }
+
+    function toggleEmojiPicker() {
+        setEmojiOpen((v) => {
+            const next = !v;
+            if (next) {
+                syncComposerSelection();
+                setEmojiQuery("");
+            }
+            return next;
+        });
+    }
+
+    function insertEmoji(ch: string) {
+        const el = textareaRef.current;
+
+        // If the textarea is not focused (because the user clicked an emoji),
+        // use the last-known caret position.
+        const sel =
+            el && document.activeElement === el
+                ? {
+                      start:
+                          typeof el.selectionStart === "number"
+                              ? el.selectionStart
+                              : el.value.length,
+                      end:
+                          typeof el.selectionEnd === "number"
+                              ? el.selectionEnd
+                              : typeof el.selectionStart === "number"
+                              ? el.selectionStart
+                              : el.value.length,
+                  }
+                : composerSelRef.current;
+
+        // If the picker gives "GB"/"US"/"CN", convert to the actual Unicode flag.
+        const normalized = (ch ?? "").trim();
+        const toInsert = /^[A-Za-z]{2}$/.test(normalized)
+            ? isoCountryToFlagEmoji(normalized)
+            : normalized;
+
+        const caret = sel.start + toInsert.length;
+
+        setInput((prev) => {
+            const start = Math.max(0, Math.min(prev.length, sel.start));
+            const end = Math.max(start, Math.min(prev.length, sel.end));
+            return prev.slice(0, start) + toInsert + prev.slice(end);
+        });
+
+        requestAnimationFrame(() => {
+            const t = textareaRef.current;
+            if (!t) return;
+            try {
+                t.focus();
+                t.setSelectionRange(caret, caret);
+                composerSelRef.current = { start: caret, end: caret };
+            } catch {
+                // ignore
+            }
+        });
+    }
+
+    const emojiQueryTrim = emojiQuery.trim();
+    const emojiList = emojiQueryTrim
+        ? EMOJI_INDEX.filter((e) => emojiMatchesQuery(e, emojiQueryTrim)).slice(
+              0,
+              200
+          )
+        : EMOJI_BY_CAT[emojiCat] ?? EMOJI_BY_CAT.smileys;
+
     function triggerPicker() {
         fileInputRef.current?.click();
     }
@@ -1150,7 +1810,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             setProgressByKey((prev) => ({ ...prev, [k]: 100 }));
 
             uploaded.push({
-                name: json?.filename ?? file.name,
+                name: normalizeFilenameDisplay(json?.filename ?? file.name),
                 size: json?.size ?? file.size,
                 type: json?.contentType ?? file.type,
                 publicUrl: json?.publicUrl,
@@ -1281,6 +1941,10 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
         if (isUploading) return;
         if (!input.trim() && pendingFiles.length === 0) return;
 
+        // Close emoji picker on send
+        setEmojiOpen(false);
+        setEmojiQuery("");
+
         const rawText = input;
         const text = rawText.trim();
         const hasText = text.length > 0;
@@ -1303,6 +1967,28 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 ? localAudioActions
                 : null;
 
+        // Natural-feeling playback: we previously tried to "prime" audio muted and then resume
+        // after the assistant reply. That introduces race conditions and can leave playback paused.
+        // For locally-handled audio commands we should just play immediately so UI + audio stay in sync.
+        let queuedResumeRef: AudioTargetRef | undefined;
+        let resetToStartOnResume = false;
+
+        const willReplyLocally = !!preExecutedAudioActions?.length;
+
+        const deferAudibleUntilReply =
+            !willReplyLocally &&
+            (preExecutedAudioActions?.some(
+                (a) => a.kind === "play" || a.kind === "resume"
+            ) ??
+                false);
+
+        let shouldUnmuteAfterReply = false;
+
+        if (deferAudibleUntilReply) {
+            audioController.setMuted(true);
+            shouldUnmuteAfterReply = true;
+        }
+
         if (preExecutedAudioActions) {
             // Ensure the controller has the latest registry
             audioController.registerAssets(audioAssets);
@@ -1315,9 +2001,13 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             for (const action of preExecutedAudioActions) {
                 try {
                     if (action.kind === "play") {
-                        void audioController.play(action.ref);
+                        const ref = action.ref;
+                        if (!ref) continue;
+                        void audioController.play(ref);
                     } else if (action.kind === "resume") {
-                        void audioController.resume(action.ref);
+                        const ref = action.ref;
+                        if (!ref) continue;
+                        void audioController.resume(ref);
                     } else if (action.kind === "pause") {
                         audioController.pause(action.ref ?? currentRef);
                     } else if (action.kind === "stop") {
@@ -1336,7 +2026,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             }
         }
 
-        const shouldCallAI = hasText;
+        const shouldCallAI = hasText && !preExecutedAudioActions;
 
         setInput("");
 
@@ -1432,12 +2122,36 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
             console.error("Failed to save user message to Neon", e);
         }
 
-        // file-only message: still respond (local ack) so the user gets feedback.
-        // We intentionally do NOT call the AI here because the current chat API
-        // does not send/stream file contents to the model.
-        if (!hasText) {
-            const ack = uploadAck(attachments);
-            const ackTs = Date.now();
+        // File-only message: DO NOT auto-reply.
+        // (User sees "Uploaded: ..." as their message; AI responds naturally only when the user also sends text.)
+        if (!hasText) return;
+
+        // If we already executed a local audio command, reply locally so the
+        // visible assistant text always matches the exact track/action that ran.
+        // This avoids the model "guessing" a title that differs from playback.
+        if (preExecutedAudioActions?.length) {
+            const localVisible = sanitizeEmDashesToSentences(
+                stripAudioCommandHints(
+                    stripYsToolTags(
+                        fallbackAckForAudioActions(
+                            preExecutedAudioActions,
+                            audioAssets
+                        )
+                    )
+                )
+            );
+
+            try {
+                await appendMessage(chatId, {
+                    role: "assistant",
+                    content: localVisible,
+                });
+            } catch (e) {
+                console.error(
+                    "Failed to save local assistant reply to Neon",
+                    e
+                );
+            }
 
             setChats((prev) =>
                 prev.map((c) =>
@@ -1445,11 +2159,13 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                         ? {
                               ...c,
                               messages: [
-                                  ...(c.messages ?? []),
+                                  ...(Array.isArray(c.messages)
+                                      ? (c.messages as any[])
+                                      : []),
                                   {
                                       role: "assistant",
-                                      text: ack,
-                                      ts: ackTs,
+                                      text: localVisible,
+                                      ts: Date.now(),
                                   } as ChatMessage,
                               ],
                           }
@@ -1457,13 +2173,18 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
                 )
             );
 
-            try {
-                await appendMessage(chatId, {
-                    role: "assistant",
-                    content: ack,
-                });
-            } catch (e) {
-                console.error("Failed to save upload ack to Neon", e);
+            if (shouldUnmuteAfterReply) {
+                try {
+                    audioController.setMuted(false);
+                    if (queuedResumeRef) {
+                        if (resetToStartOnResume) {
+                            audioController.seekSeconds(queuedResumeRef, 0);
+                        }
+                        void audioController.resume(queuedResumeRef);
+                    }
+                } catch {
+                    // ignore
+                }
             }
 
             return;
@@ -1486,7 +2207,8 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 - Do NOT emit any [[ys:audio.*]] tool tags.
 - Do NOT ask the user to type a command or a filename.
-- Keep the reply short, conversational, and avoid file extensions.`
+- Keep the reply short, conversational, and avoid file extensions.
+- Stay in your current in-chat persona/voice (do not become robotic). Vary phrasing for play/pause/stop/seek acknowledgements.`
                 : "";
 
             const res = await fetch("https://api.ysong.ai/chat", {
@@ -1557,11 +2279,12 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                 }
             }
 
-            let rawVisible =
+            let rawVisible = stripYsToolTags(
                 cleaned ||
-                (actions.length
-                    ? fallbackAckForAudioActions(actions, audioAssets)
-                    : "…");
+                    (actions.length
+                        ? fallbackAckForAudioActions(actions, audioAssets)
+                        : "…")
+            );
             if (preExecutedAudioActions?.length) {
                 rawVisible = stripAudioCommandHints(rawVisible);
             }
@@ -1594,6 +2317,22 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                         : c
                 )
             );
+
+            if (shouldUnmuteAfterReply) {
+                try {
+                    if (queuedResumeRef) {
+                        if (resetToStartOnResume) {
+                            audioController.seekSeconds(queuedResumeRef, 0);
+                        }
+                        audioController.setMuted(false);
+                        void audioController.resume(queuedResumeRef);
+                    } else {
+                        audioController.setMuted(false);
+                    }
+                } catch {
+                    // ignore
+                }
+            }
         } catch (e) {
             console.error("Chat send failed", e);
 
@@ -1615,8 +2354,26 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                         : c
                 )
             );
+
+            // Don't leave the app muted if the model call failed.
+            if (shouldUnmuteAfterReply) {
+                try {
+                    if (queuedResumeRef) {
+                        if (resetToStartOnResume) {
+                            audioController.seekSeconds(queuedResumeRef, 0);
+                        }
+                        audioController.setMuted(false);
+                        void audioController.resume(queuedResumeRef);
+                    } else {
+                        audioController.setMuted(false);
+                    }
+                } catch {
+                    // ignore
+                }
+            }
         }
     }
+
     return (
         <div className="h-full flex flex-col">
             {/* messages */}
@@ -1655,7 +2412,11 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                       }
                       max-w-[85%] sm:max-w-[70%]`}
                                     >
-                                        {m.text}
+                                        {renderTwemojiFlags(
+                                            m.role === "assistant"
+                                                ? stripYsToolTags(m.text)
+                                                : m.text
+                                        )}
                                         {m.attachments &&
                                             m.attachments.length > 0 && (
                                                 <div className="mt-3 flex flex-wrap gap-3">
@@ -1814,7 +2575,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 
                                     <div className="min-w-0 flex flex-col flex-1">
                                         <span className="truncate max-w-[10rem] font-medium">
-                                            {f.name}
+                                            {normalizeFilenameDisplay(f.name)}
                                         </span>
 
                                         {isUploading ? (
@@ -1871,7 +2632,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                             Add files
                         </label>
 
-                        <div className="flex w-full items-center gap-1 rounded-2xl border border-neutral-300 bg-neutral-50/80 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900/60">
+                        <div className="relative flex w-full items-center gap-1 rounded-2xl border border-neutral-300 bg-neutral-50/80 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900/60">
                             <YSButton
                                 type="button"
                                 onClick={triggerPicker}
@@ -1902,7 +2663,16 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                                 value={input}
                                 rows={1}
                                 autoComplete="off"
-                                onChange={(e) => setInput(e.target.value)}
+                                onChange={(e) => {
+                                    setInput(e.target.value);
+                                    requestAnimationFrame(
+                                        syncComposerSelection
+                                    );
+                                }}
+                                onSelect={syncComposerSelection}
+                                onKeyUp={syncComposerSelection}
+                                onMouseUp={syncComposerSelection}
+                                onFocus={syncComposerSelection}
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !e.shiftKey) {
                                         e.preventDefault();
@@ -1912,10 +2682,162 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
                                 placeholder={`Message ${
                                     import.meta.env.VITE_APP_NAME
                                 }…`}
+                                style={{
+                                    fontFamily:
+                                        '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',
+                                }}
                                 className="flex-1 bg-transparent border-0 px-2 py-1 text-sm sm:text-base
                   leading-relaxed resize-none overflow-y-auto max-h-40
                   focus:outline-none focus:ring-0"
                             />
+
+                            {/* Emoji (desktop-only) */}
+                            <div className="relative hidden sm:block">
+                                <button
+                                    ref={emojiBtnRef}
+                                    type="button"
+                                    onClick={toggleEmojiPicker}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-transparent text-neutral-400 hover:bg-neutral-200/60 hover:text-neutral-900
+                  dark:text-neutral-500 dark:hover:bg-neutral-700/60 dark:hover:text-neutral-50"
+                                    title="Emoji"
+                                    aria-label="Emoji"
+                                >
+                                    <svg
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        className="h-5 w-5"
+                                        aria-hidden="true"
+                                    >
+                                        <circle cx="12" cy="12" r="9" />
+                                        <path d="M8.5 14.5c1 1 2.2 1.5 3.5 1.5s2.5-.5 3.5-1.5" />
+                                        <path d="M9 10h.01" />
+                                        <path d="M15 10h.01" />
+                                    </svg>
+                                </button>
+
+                                {emojiOpen && (
+                                    <div
+                                        ref={emojiPanelRef}
+                                        className="absolute bottom-11 right-0 z-50 w-[340px] overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-lg
+                      dark:border-neutral-700 dark:bg-neutral-950"
+                                        role="dialog"
+                                        aria-label="Emoji picker"
+                                    >
+                                        <div className="p-2">
+                                            <input
+                                                ref={emojiSearchRef}
+                                                value={emojiQuery}
+                                                onChange={(e) =>
+                                                    setEmojiQuery(
+                                                        e.target.value
+                                                    )
+                                                }
+                                                placeholder="Search emojis"
+                                                className="w-full rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm
+                          focus:outline-none focus:ring-2 focus:ring-neutral-300
+                          dark:border-neutral-700 dark:bg-neutral-900 dark:focus:ring-neutral-700"
+                                            />
+                                        </div>
+
+                                        <div className="px-2 pb-2">
+                                            <div className="flex items-center gap-1 border-b border-neutral-200 pb-2 dark:border-neutral-800">
+                                                {EMOJI_CATEGORIES.map((cat) => (
+                                                    <button
+                                                        key={cat.key}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setEmojiCat(
+                                                                cat.key
+                                                            );
+                                                            setEmojiQuery("");
+                                                        }}
+                                                        className={`inline-flex h-8 w-8 items-center justify-center rounded-xl text-lg
+                                  ${
+                                      emojiCat === cat.key && !emojiQueryTrim
+                                          ? "bg-neutral-200 dark:bg-neutral-800"
+                                          : "hover:bg-neutral-200/70 dark:hover:bg-neutral-800/70"
+                                  }`}
+                                                        title={cat.label}
+                                                        aria-label={cat.label}
+                                                    >
+                                                        <span aria-hidden="true">
+                                                            {cat.icon}
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-2 max-h-[260px] overflow-y-auto pr-1">
+                                                <div className="grid grid-cols-10 gap-1">
+                                                    {emojiList.length ? (
+                                                        emojiList.map((e) => (
+                                                            <button
+                                                                key={`${e.cat}-${e.name}-${e.ch}`}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const isIsoFlag =
+                                                                        e.cat ===
+                                                                            "flags" &&
+                                                                        /^[A-Za-z]{2}$/.test(
+                                                                            e.ch
+                                                                        );
+                                                                    const chToInsert =
+                                                                        isIsoFlag
+                                                                            ? isoCountryToFlagEmoji(
+                                                                                  e.ch
+                                                                              )
+                                                                            : e.ch;
+
+                                                                    insertEmoji(
+                                                                        chToInsert
+                                                                    );
+                                                                    setEmojiOpen(
+                                                                        false
+                                                                    );
+                                                                }}
+                                                                className="inline-flex h-8 w-8 items-center justify-center rounded-xl hover:bg-neutral-200/70
+                                          dark:hover:bg-neutral-800/70"
+                                                                title={`:${e.name}:`}
+                                                                aria-label={
+                                                                    e.name
+                                                                }
+                                                            >
+                                                                {isRegionalIndicatorFlag(
+                                                                    e.ch
+                                                                ) ? (
+                                                                    <img
+                                                                        src={twemojiSvgUrl(
+                                                                            e.ch
+                                                                        )}
+                                                                        alt=""
+                                                                        className="h-6 w-6"
+                                                                        draggable={
+                                                                            false
+                                                                        }
+                                                                        loading="lazy"
+                                                                    />
+                                                                ) : (
+                                                                    <span className="text-lg leading-none">
+                                                                        {e.ch}
+                                                                    </span>
+                                                                )}
+                                                            </button>
+                                                        ))
+                                                    ) : (
+                                                        <div className="col-span-10 py-6 text-center text-sm opacity-70">
+                                                            No results
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
 
                             <YSButton
                                 type="button"

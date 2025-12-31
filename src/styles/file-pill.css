@@ -121,6 +121,19 @@
     );
 }
 
+.fp-wave.is-real {
+    /* Give real waveforms a touch more visibility than the fake bars */
+    opacity: 0.42;
+}
+
+.fp-wave-canvas {
+    position: absolute;
+    inset: 10px;
+    width: calc(100% - 20px);
+    height: calc(100% - 20px);
+    display: block;
+}
+
 .fp-wave-bar {
     width: 2px;
     border-radius: 999px;
@@ -229,6 +242,12 @@
     cursor: pointer;
     display: grid;
     place-items: center;
+}
+
+.fp-ctl.is-active {
+    border-color: rgba(255, 255, 255, 0.32);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+    background: rgba(0, 0, 0, 0.42);
 }
 
 .fp-ctl:hover {

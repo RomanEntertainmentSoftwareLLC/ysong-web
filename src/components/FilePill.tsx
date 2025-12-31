@@ -62,6 +62,142 @@ function fmtTime(seconds: number) {
     return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+// --- Waveform extraction (real audio → peaks → canvas)
+type WaveformPeaks = {
+    peaksL: Float32Array;
+    peaksR: Float32Array;
+};
+
+const waveformCache = new Map<string, WaveformPeaks>();
+
+let waveAudioCtx: AudioContext | null = null;
+function getWaveAudioContext() {
+    if (waveAudioCtx) return waveAudioCtx;
+    const Ctx =
+        (window as any).AudioContext || (window as any).webkitAudioContext;
+    waveAudioCtx = Ctx ? new Ctx() : null;
+    return waveAudioCtx;
+}
+
+function isLikelySignedUrl(url?: string) {
+    if (!url) return false;
+    return /[?&]X-Goog-(Algorithm|Signature|Credential)=/i.test(url);
+}
+
+function looksLikeGcsUrl(url?: string) {
+    if (!url) return false;
+    try {
+        const u = new URL(url);
+        if (u.hostname === "storage.googleapis.com") return true;
+        if (u.hostname.endsWith(".storage.googleapis.com")) return true;
+    } catch {
+        return false;
+    }
+    return false;
+}
+
+function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
+    if (!url) return;
+    try {
+        const u = new URL(url);
+
+        // https://storage.googleapis.com/<bucket>/<objectKey>
+        if (u.hostname === "storage.googleapis.com") {
+            const parts = u.pathname.split("/").filter(Boolean);
+            if (parts.length >= 2) {
+                return decodeURIComponent(parts.slice(1).join("/"));
+            }
+        }
+
+        // https://<bucket>.storage.googleapis.com/<objectKey>
+        if (u.hostname.endsWith(".storage.googleapis.com")) {
+            const key = u.pathname.replace(/^\/+/, "");
+            return key ? decodeURIComponent(key) : undefined;
+        }
+    } catch {
+        // ignore
+    }
+    return;
+}
+
+function computePeaks(channel: Float32Array, buckets: number) {
+    const out = new Float32Array(buckets);
+    if (channel.length === 0 || buckets <= 0) return out;
+
+    const block = Math.max(1, Math.floor(channel.length / buckets));
+    for (let i = 0; i < buckets; i++) {
+        const start = i * block;
+        const end = Math.min(channel.length, start + block);
+        let max = 0;
+        for (let j = start; j < end; j++) {
+            const v = Math.abs(channel[j]);
+            if (v > max) max = v;
+        }
+        out[i] = max;
+    }
+    return out;
+}
+
+function drawStereoWaveform(
+    canvas: HTMLCanvasElement,
+    peaks: WaveformPeaks,
+    hue: number
+) {
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(1, rect.width);
+    const h = Math.max(1, rect.height);
+
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cw = Math.floor(w * dpr);
+    const ch = Math.floor(h * dpr);
+    if (canvas.width !== cw) canvas.width = cw;
+    if (canvas.height !== ch) canvas.height = ch;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const gradA = ctx.createLinearGradient(0, 0, w, 0);
+    gradA.addColorStop(0, `hsla(${hue}, 90%, 62%, 0.85)`);
+    gradA.addColorStop(1, `hsla(${(hue + 38) % 360}, 90%, 52%, 0.85)`);
+
+    const gradB = ctx.createLinearGradient(0, 0, w, 0);
+    gradB.addColorStop(0, `hsla(${(hue + 18) % 360}, 90%, 72%, 0.75)`);
+    gradB.addColorStop(1, `hsla(${(hue + 56) % 360}, 90%, 46%, 0.75)`);
+
+    // Layout: left channel on top, right channel on bottom.
+    const midL = h * 0.35;
+    const midR = h * 0.65;
+    const amp = h * 0.22;
+
+    const drawChannel = (
+        arr: Float32Array,
+        midY: number,
+        stroke: CanvasGradient
+    ) => {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+
+        const n = arr.length;
+        for (let x = 0; x < w; x++) {
+            const i = Math.min(n - 1, Math.floor((x / w) * n));
+            const p = arr[i] || 0;
+            const y1 = midY - p * amp;
+            const y2 = midY + p * amp;
+            const xx = x + 0.5;
+            ctx.moveTo(xx, y1);
+            ctx.lineTo(xx, y2);
+        }
+        ctx.stroke();
+    };
+
+    drawChannel(peaks.peaksL, midL, gradA);
+    drawChannel(peaks.peaksR, midR, gradB);
+}
+
 async function fetchSignedUrl(objectKey: string, mode: "play" | "download") {
     const token = localStorage.getItem("ys_token");
     if (!token) throw new Error("no_token");
@@ -116,6 +252,19 @@ export function FilePill({
     const audioState = useAudioControllerState();
     const isCurrent = isAudio && audioState.currentId === id;
 
+    // Loop toggle (remembered per pill while mounted; AudioController also
+    // remembers per-id for playback correctness.)
+    const [loopOn, setLoopOn] = useState(false);
+
+    const waveKey = useMemo(
+        () => objectKey || publicUrl || id,
+        [id, objectKey, publicUrl]
+    );
+    const [waveform, setWaveform] = useState<WaveformPeaks | null>(() => {
+        return waveKey ? waveformCache.get(waveKey) ?? null : null;
+    });
+    const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
     // If the user scrubs while not playing, remember that seek so the next
     // play starts from the chosen position.
     const [standbySeekFrac, setStandbySeekFrac] = useState<number | null>(null);
@@ -166,6 +315,117 @@ export function FilePill({
     const canDelete = !!objectKey && !!onDelete;
     const canPlay = isAudio && (!!objectKey || !!publicUrl);
 
+    // ---- Real waveform extraction (falls back to placeholder if decode/CORS fails)
+    useEffect(() => {
+        if (!isAudio || !canPlay) return;
+        if (!waveKey) return;
+
+        // already have it?
+        const cached = waveformCache.get(waveKey);
+        if (cached) {
+            if (!waveform) setWaveform(cached);
+            return;
+        }
+
+        let cancelled = false;
+        const ac = new AbortController();
+
+        const run = async () => {
+            try {
+                let url = "";
+
+                if (objectKey) {
+                    url = (await fetchSignedUrl(objectKey, "play")).url;
+                } else if (publicUrl) {
+                    const needsSigned =
+                        looksLikeGcsUrl(publicUrl) &&
+                        !isLikelySignedUrl(publicUrl);
+                    if (needsSigned) {
+                        const key = deriveObjectKeyFromPublicUrl(publicUrl);
+                        url = key
+                            ? (await fetchSignedUrl(key, "play")).url
+                            : publicUrl;
+                    } else {
+                        url = publicUrl;
+                    }
+                }
+
+                if (!url) return;
+
+                const res = await fetch(url, {
+                    signal: ac.signal,
+                    // Signed URLs should be CORS-enabled if playback works.
+                    mode: "cors",
+                });
+                if (!res.ok) return;
+
+                const buf = await res.arrayBuffer();
+                const ctx = getWaveAudioContext();
+                if (!ctx) return;
+
+                const audioBuf = await ctx.decodeAudioData(buf.slice(0));
+                const ch0 = audioBuf.getChannelData(0);
+                const ch1 =
+                    audioBuf.numberOfChannels > 1
+                        ? audioBuf.getChannelData(1)
+                        : ch0;
+
+                // 512 buckets is a good balance: looks "real" but still lightweight.
+                const peaks: WaveformPeaks = {
+                    peaksL: computePeaks(ch0, 512),
+                    peaksR: computePeaks(ch1, 512),
+                };
+
+                waveformCache.set(waveKey, peaks);
+                if (!cancelled) setWaveform(peaks);
+            } catch {
+                // keep placeholder
+            }
+        };
+
+        // Avoid decoding a bunch of audio files at once when the drawer opens.
+        const idle = (window as any).requestIdleCallback as
+            | ((cb: () => void, opts?: any) => any)
+            | undefined;
+        const cancelIdle = (window as any).cancelIdleCallback as
+            | ((id: any) => void)
+            | undefined;
+
+        const idleId = idle
+            ? idle(run, { timeout: 1200 })
+            : window.setTimeout(run, 250);
+
+        return () => {
+            cancelled = true;
+            ac.abort();
+            if (idle && cancelIdle) cancelIdle(idleId);
+            else window.clearTimeout(idleId as any);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isAudio, canPlay, waveKey, objectKey, publicUrl]);
+
+    // Draw waveform to canvas (and redraw on resize)
+    useLayoutEffect(() => {
+        const canvas = waveCanvasRef.current;
+        if (!canvas || !waveform) return;
+
+        const draw = () => drawStereoWaveform(canvas, waveform, hue);
+        draw();
+
+        let ro: ResizeObserver | null = null;
+        if (typeof ResizeObserver !== "undefined") {
+            ro = new ResizeObserver(draw);
+            ro.observe(canvas);
+        } else {
+            window.addEventListener("resize", draw);
+        }
+
+        return () => {
+            if (ro) ro.disconnect();
+            else window.removeEventListener("resize", draw);
+        };
+    }, [waveform, hue]);
+
     const displaySize = Number.isFinite(sizeMB) ? sizeMB.toFixed(1) : "0.0";
 
     const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
@@ -208,6 +468,9 @@ export function FilePill({
             };
             audioController.registerAssets([asset]);
 
+            // Apply loop preference for this asset before playback starts.
+            audioController.setLoop({ id }, loopOn);
+
             audioController.play({ id }); // user gesture → should be allowed
 
             const pending = queuedSeekFracRef.current;
@@ -230,6 +493,13 @@ export function FilePill({
         if (audioState.status === "paused") {
             audioController.resume({ id });
         }
+    };
+
+    const onToggleLoop = () => {
+        const next = !loopOn;
+        setLoopOn(next);
+        // Remember in controller so future play() calls loop correctly.
+        audioController.setLoop({ id }, next);
     };
 
     // ---- Menu close behavior
@@ -414,17 +684,27 @@ export function FilePill({
             >
                 {/* Waveform background placeholder */}
                 {isAudio && (
-                    <div className="fp-wave" aria-hidden="true">
-                        {Array.from({ length: 52 }).map((_, i) => {
-                            const h = 20 + ((i * 17) % 60);
-                            return (
-                                <span
-                                    key={i}
-                                    className="fp-wave-bar"
-                                    style={{ height: `${h}%` }}
-                                />
-                            );
-                        })}
+                    <div
+                        className={`fp-wave ${waveform ? "is-real" : ""}`}
+                        aria-hidden="true"
+                    >
+                        {waveform ? (
+                            <canvas
+                                ref={waveCanvasRef}
+                                className="fp-wave-canvas"
+                            />
+                        ) : (
+                            Array.from({ length: 52 }).map((_, i) => {
+                                const h = 20 + ((i * 17) % 60);
+                                return (
+                                    <span
+                                        key={i}
+                                        className="fp-wave-bar"
+                                        style={{ height: `${h}%` }}
+                                    />
+                                );
+                            })
+                        )}
                     </div>
                 )}
 
@@ -536,6 +816,24 @@ export function FilePill({
                             <span className="fp-ctl-icon">
                                 {playState === "paused" ? "▶" : "❚❚"}
                             </span>
+                        </button>
+
+                        <button
+                            type="button"
+                            className={`fp-ctl ${loopOn ? "is-active" : ""}`}
+                            onClick={onToggleLoop}
+                            disabled={!canPlay}
+                            aria-pressed={loopOn}
+                            aria-label="Toggle loop"
+                            title={
+                                !canPlay
+                                    ? "No audio URL"
+                                    : loopOn
+                                    ? "Loop: On"
+                                    : "Loop: Off"
+                            }
+                        >
+                            <span className="fp-ctl-icon">↻</span>
                         </button>
                     </div>
                 )}
