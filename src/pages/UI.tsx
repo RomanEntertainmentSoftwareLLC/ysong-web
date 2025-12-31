@@ -22,6 +22,7 @@ import SettingsPane from "../tabs/SettingsPane";
 import AssetDrawer from "../components/AssetDrawer";
 import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
+import DAWPane from "../tabs/DAW";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -309,7 +310,7 @@ export default function UI() {
         settings: SettingsPane,
 
         // These are lightweight stubs; leaving them as trivial components is fine.
-        daw: (_props: TabRendererProps) => <Stub title="DAW" />,
+        daw: DAWPane,
         mixer: (_props: TabRendererProps) => <Stub title="Mixer" />,
         market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
         band: (_props: TabRendererProps) => <Stub title="Band Creation" />,
