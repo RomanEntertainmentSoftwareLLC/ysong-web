@@ -17,9 +17,10 @@ type ModuleType =
     | "settings"
     | "daw"
     | "mixer"
-    | "market"
     | "band"
     | "artwork"
+    | "library"
+    | "market"
     | "world";
 
 type Props = {
@@ -285,9 +286,10 @@ export default function UISidebar({
                             ["Settings", "settings"],
                             ["DAW", "daw"],
                             ["Mixer", "mixer"],
-                            ["Marketplace", "market"],
                             ["Band Creation", "band"],
-                            ["Artwork Editor", "artwork"],
+                            ["Artwork Studio", "artwork"],
+                            ["My Library", "library"],
+                            ["Marketplace", "market"],
                             ["YSong World", "world"],
                         ] as [string, ModuleType][]
                     ).map(([label, type]) => (

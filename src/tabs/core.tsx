@@ -19,9 +19,10 @@ export type TabType =
     | "settings"
     | "daw"
     | "mixer"
-    | "market"
     | "band"
     | "artwork"
+    | "library"
+    | "market"
     | "world";
 
 export type TabRecord = {

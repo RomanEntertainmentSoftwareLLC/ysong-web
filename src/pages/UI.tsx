@@ -115,15 +115,41 @@ function BootTabs({
                         return chatId && knownChatIds.has(chatId);
                     });
 
-                    if (filteredTabs.length > 0) {
-                        filteredTabs.forEach((t) => openTab(t as any));
+                    const MODULE_TITLES: Record<string, string> = {
+                        settings: "Settings",
+                        daw: "DAW",
+                        mixer: "Mixer",
+                        band: "Band Creation",
+                        artwork: "Artwork Studio",
+                        library: "My Library",
+                        market: "Marketplace",
+                        world: "YSong World",
+                    };
+
+                    const normalizeRestoredTab = (t: any) => {
+                        let type = String(t?.type ?? "");
+                        // one-time migration: old tab name -> new tab name
+                        if (type === "content") type = "library";
+
+                        let title =
+                            typeof t?.title === "string" ? t.title.trim() : "";
+                        if (!title) title = MODULE_TITLES[type] ?? "Tab";
+
+                        return { ...t, type, title };
+                    };
+
+                    const normalizedTabs =
+                        filteredTabs.map(normalizeRestoredTab);
+
+                    if (normalizedTabs.length > 0) {
+                        normalizedTabs.forEach((t) => openTab(t as any));
 
                         let activeId = data.activeId;
                         if (
                             !activeId ||
-                            !filteredTabs.some((t) => t.id === activeId)
+                            !normalizedTabs.some((t) => t.id === activeId)
                         ) {
-                            activeId = filteredTabs[0].id;
+                            activeId = normalizedTabs[0].id;
                         }
                         if (activeId) activateTab(activeId);
                         restored = true;
@@ -308,13 +334,14 @@ export default function UI() {
         // IMPORTANT: use the actual components here so their identity is stable.
         chat: ChatPane,
         settings: SettingsPane,
+        daw: DAWPane,
 
         // These are lightweight stubs; leaving them as trivial components is fine.
-        daw: DAWPane,
         mixer: (_props: TabRendererProps) => <Stub title="Mixer" />,
-        market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
         band: (_props: TabRendererProps) => <Stub title="Band Creation" />,
-        artwork: (_props: TabRendererProps) => <Stub title="Artwork Editor" />,
+        artwork: (_props: TabRendererProps) => <Stub title="Artwork Studio" />,
+        library: (_props: TabRendererProps) => <Stub title="My Library" />,
+        market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
         world: (_props: TabRendererProps) => <Stub title="YSong World" />,
     } as const;
 
@@ -374,9 +401,10 @@ export default function UI() {
                 settings: "Settings",
                 daw: "DAW",
                 mixer: "Mixer",
-                market: "Marketplace",
                 band: "Band Creation",
-                artwork: "Artwork Editor",
+                artwork: "Artwork Studio",
+                library: "My Library",
+                market: "Marketplace",
                 world: "YSong World",
             } as const;
             const existing = tabs.find((t) => t.type === type);
