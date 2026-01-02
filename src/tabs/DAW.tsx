@@ -32,7 +32,7 @@ type Clip = {
     assetId?: string; // <-- set for audio clips created by drop
 };
 
-// ✅ Baby Step 5: include all UI options (triplets + 1/128) so TS doesn't explode
+// Include all UI options (triplets + 1/128) so TS doesn't explode
 type GridValue =
     | "bar"
     | "1/2"
@@ -89,7 +89,7 @@ function isEditableTarget(t: EventTarget | null) {
     return tag === "input" || tag === "textarea" || t.isContentEditable;
 }
 
-// --- Snap helpers (Baby Step 5: Absolute snapping only) ---
+// --- Snap helpers (Absolute snapping only) ---
 function parseGridValue(
     v: GridValue
 ): { kind: "bar" } | { kind: "note"; div: number; triplet: boolean } {
@@ -135,9 +135,47 @@ function gridStepBars(v: GridValue, sigNum: number, sigDen: number) {
 }
 
 export default function DAW(_props: TabRendererProps) {
-    const [tracks, setTracks] = useState<Track[]>(() => [mkTrack("audio", 1)]);
+    type DawPersistV1 = {
+        v: 1;
+        tracks: Track[];
+        clips: Clip[];
+        projectAssets: ProjectAsset[];
+        selectedTrackId: string | null;
+        selectedClipId: string | null;
 
-    // --- Selection + clips (baby step: create & render, no drag/resize yet) ---
+        snapEnabled: boolean;
+        gridValue: GridValue;
+        gridMode: GridMode;
+
+        playheadPosBars: number;
+        loopL: number;
+        loopR: number;
+        endBar: number;
+        loopEnabled: boolean;
+
+        bpm: number;
+        sigNum: number;
+        sigDen: number;
+    };
+
+    function safeParse<T>(raw: string | null): T | null {
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw) as T;
+        } catch {
+            return null;
+        }
+    }
+
+    // Try to derive a stable key per tab instance (adjust if your TabRendererProps differs)
+    const tabId =
+        (_props as any)?.tabId ?? (_props as any)?.tab?.id ?? "default";
+
+    const DAW_STORAGE_KEY = `ysong:daw:${tabId}`;
+
+    const [tracks, setTracks] = useState<Track[]>(() => []);
+
+    // --- Selection + clips (Create & render, no drag/resize yet) ---
     const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
     const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
     const [clips, setClips] = useState<Clip[]>([]);
@@ -214,6 +252,21 @@ export default function DAW(_props: TabRendererProps) {
         setSelectedClipId(null);
     };
 
+    const deleteTrack = (id: string) => {
+        // clear selected clip if it's on this track
+        const clipOnTrack = clips.find((c) => c.id === selectedClipId);
+        if (clipOnTrack?.trackId === id) setSelectedClipId(null);
+
+        // clear selected track if it's this one
+        if (selectedTrackId === id) setSelectedTrackId(null);
+
+        // remove the track
+        setTracks((prev) => prev.filter((t) => t.id !== id));
+
+        // remove clips on that track
+        setClips((prev) => prev.filter((c) => c.trackId !== id));
+    };
+
     const toggle = (id: string, key: "mute" | "solo" | "arm") => {
         setTracks((prev) =>
             prev.map((t) => (t.id === id ? { ...t, [key]: !t[key] } : t))
@@ -258,7 +311,7 @@ export default function DAW(_props: TabRendererProps) {
         []
     );
 
-    // --- Snap math (Baby Step 5: Absolute only) ---
+    // --- Snap math (Absolute only) ---
     const stepBars = gridStepBars(gridValue, sigNum, sigDen);
 
     const snapBarsAbsolute = (posBars: number) => {
@@ -659,6 +712,98 @@ export default function DAW(_props: TabRendererProps) {
         };
 
     useEffect(() => {
+        const data = safeParse<DawPersistV1>(
+            sessionStorage.getItem(DAW_STORAGE_KEY)
+        );
+        if (!data || data.v !== 1) return;
+
+        // Never auto-resume playback on restore
+        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        setIsPlaying(false);
+
+        setTracks(data.tracks ?? []);
+        setClips(data.clips ?? []);
+        setProjectAssets(data.projectAssets ?? []);
+
+        setSelectedTrackId(
+            data.selectedTrackId ?? data.tracks?.[0]?.id ?? null
+        );
+        setSelectedClipId(data.selectedClipId ?? null);
+
+        setSnapEnabled(!!data.snapEnabled);
+        setGridValue((data.gridValue as GridValue) ?? "bar");
+        setGridMode((data.gridMode as GridMode) ?? "absolute");
+
+        setPlayheadPosBars(data.playheadPosBars ?? 1);
+        setLoopL(data.loopL ?? 1);
+        setLoopR(data.loopR ?? 5);
+        setEndBar(data.endBar ?? 17);
+        setLoopEnabled(!!data.loopEnabled);
+
+        setBpm(clamp(data.bpm ?? 120, 20, 400));
+        setSigNum(data.sigNum ?? 4);
+        setSigDen(data.sigDen ?? 4);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [DAW_STORAGE_KEY]);
+
+    useEffect(() => {
+        const payload: DawPersistV1 = {
+            v: 1,
+            tracks,
+            clips,
+            projectAssets,
+            selectedTrackId,
+            selectedClipId,
+
+            snapEnabled,
+            gridValue,
+            gridMode,
+
+            playheadPosBars,
+            loopL,
+            loopR,
+            endBar,
+            loopEnabled,
+
+            bpm,
+            sigNum,
+            sigDen,
+        };
+
+        const t = window.setTimeout(() => {
+            try {
+                sessionStorage.setItem(
+                    DAW_STORAGE_KEY,
+                    JSON.stringify(payload)
+                );
+            } catch {
+                // ignore quota / serialization issues for now
+            }
+        }, 150);
+
+        return () => window.clearTimeout(t);
+    }, [
+        DAW_STORAGE_KEY,
+        tracks,
+        clips,
+        projectAssets,
+        selectedTrackId,
+        selectedClipId,
+        snapEnabled,
+        gridValue,
+        gridMode,
+        playheadPosBars,
+        loopL,
+        loopR,
+        endBar,
+        loopEnabled,
+        bpm,
+        sigNum,
+        sigDen,
+    ]);
+
+    useEffect(() => {
         if (!addMenuOpen) return;
 
         const onDown = (e: PointerEvent) => {
@@ -711,8 +856,15 @@ export default function DAW(_props: TabRendererProps) {
 
     // Keep selection sane if tracks change
     useEffect(() => {
+        if (!tracks.length) {
+            setSelectedTrackId(null);
+            setSelectedClipId(null);
+            return;
+        }
+
         if (selectedTrackId && tracks.some((t) => t.id === selectedTrackId))
             return;
+
         setSelectedTrackId(tracks[0]?.id ?? null);
         setSelectedClipId(null);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -956,6 +1108,13 @@ export default function DAW(_props: TabRendererProps) {
                                             title="Arm"
                                         >
                                             ●
+                                        </YSButton>
+                                        <YSButton
+                                            className="text-[11px] px-2 py-1 rounded-md opacity-60 hover:opacity-100"
+                                            title="Delete track"
+                                            onClick={() => deleteTrack(t.id)}
+                                        >
+                                            ✕
                                         </YSButton>
                                     </div>
                                 </div>

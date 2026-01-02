@@ -151,6 +151,10 @@ type Props = {
     drawerAssets: DrawerAsset[];
     setDrawerAssets: React.Dispatch<React.SetStateAction<DrawerAsset[]>>;
     activeChatId?: string;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    hideHandle?: boolean;
+    embedded?: boolean;
 };
 
 type Attachment = {
@@ -299,14 +303,26 @@ async function removeAttachmentFromMessage(
     }
 }
 
-export default function AssetDrawer({
-    chats,
-    setChats,
-    drawerAssets,
-    setDrawerAssets,
-    activeChatId,
-}: Props) {
-    const [open, setOpen] = useState(false);
+export default function AssetDrawer(props: Props) {
+    const {
+        chats,
+        setChats,
+        drawerAssets,
+        setDrawerAssets,
+        activeChatId,
+        hideHandle = false,
+        embedded = false,
+    } = props;
+    const [openUncontrolled, setOpenUncontrolled] = useState(false);
+    const isControlled = typeof props.open === "boolean";
+    const open = isControlled ? props.open! : openUncontrolled;
+
+    const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+        const value = typeof next === "function" ? next(open) : next;
+        if (isControlled) props.onOpenChange?.(value);
+        else setOpenUncontrolled(value);
+    };
+
     const handleRef = useRef<HTMLButtonElement | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -805,125 +821,128 @@ export default function AssetDrawer({
         void addAssetsToDrawer(files);
     }
 
+    const panel = (
+        <div
+            id="asset-drawer-panel"
+            className={`asset-drawer-panel ${
+                open ? "asset-drawer-panel-open" : "asset-drawer-panel-closed"
+            }`}
+        >
+            {/* header */}
+            <div className="asset-drawer-header">
+                <div className="asset-drawer-title">
+                    {isUploading
+                        ? `UPLOADING… ${overallPct}%`
+                        : `ASSETS (${assets.length})`}
+                    <span className="asset-drawer-hint">
+                        Drop files here or click +
+                    </span>
+                </div>
+
+                <div className="asset-drawer-actions">
+                    <YSButton
+                        type="button"
+                        className="asset-drawer-add-btn"
+                        onClick={triggerPicker}
+                        disabled={isUploading}
+                        title="Add files"
+                    >
+                        +
+                    </YSButton>
+
+                    <YSButton
+                        type="button"
+                        onClick={() => setOpen(false)}
+                        className="asset-drawer-close-btn"
+                        disabled={isUploading}
+                    >
+                        Close
+                    </YSButton>
+                </div>
+
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={onPickFiles}
+                    accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
+                />
+            </div>
+
+            {/* scrollable content + dropzone */}
+            <div
+                className="asset-drawer-scroll asset-drawer-dropzone"
+                onDragEnter={onDragEnter}
+                onDragLeave={onDragLeave}
+                onDragOver={onDragOver}
+                onDrop={onDrop}
+            >
+                {(dragActive || isUploading) && (
+                    <div className="asset-drawer-dropoverlay">
+                        <div className="asset-drawer-dropcard">
+                            <div className="asset-drawer-dropcard-title">
+                                Drop to upload
+                            </div>
+                            <div className="asset-drawer-dropcard-sub">
+                                Files will be added to your current chat and
+                                appear here instantly.
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <div className="asset-drawer-inner">
+                    <div className="asset-pill-grid">
+                        {assets.map((asset) => (
+                            <FilePill
+                                key={asset.id}
+                                id={asset.id}
+                                name={asset.name}
+                                sizeMB={asset.sizeMB}
+                                type={asset.type as any}
+                                publicUrl={
+                                    asset.objectKey
+                                        ? signedPlayUrlByKey[asset.objectKey] ??
+                                          asset.publicUrl
+                                        : asset.publicUrl
+                                }
+                                objectKey={asset.objectKey}
+                                onDelete={
+                                    asset.objectKey
+                                        ? () =>
+                                              deleteAssetEverywhere(
+                                                  asset.objectKey!
+                                              )
+                                        : undefined
+                                }
+                            />
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+
+    if (embedded) return panel;
+
     return (
         <div className="asset-drawer-shell">
             <div className="asset-drawer-container">
-                {/* handle */}
-                <YSButton
-                    ref={handleRef}
-                    type="button"
-                    onClick={() => setOpen((v) => !v)}
-                    className="asset-drawer-handle"
-                    aria-expanded="false"
-                    aria-controls="asset-drawer-panel"
-                >
-                    /=====\
-                </YSButton>
-
-                {/* panel */}
-                <div
-                    id="asset-drawer-panel"
-                    className={`asset-drawer-panel ${
-                        open
-                            ? "asset-drawer-panel-open"
-                            : "asset-drawer-panel-closed"
-                    }`}
-                >
-                    {/* header */}
-                    <div className="asset-drawer-header">
-                        <div className="asset-drawer-title">
-                            {isUploading
-                                ? `UPLOADING… ${overallPct}%`
-                                : `ASSETS (${assets.length})`}
-                            <span className="asset-drawer-hint">
-                                Drop files here or click +
-                            </span>
-                        </div>
-
-                        <div className="asset-drawer-actions">
-                            <YSButton
-                                type="button"
-                                className="asset-drawer-add-btn"
-                                onClick={triggerPicker}
-                                disabled={isUploading}
-                                title="Add files"
-                            >
-                                +
-                            </YSButton>
-
-                            <YSButton
-                                type="button"
-                                onClick={() => setOpen(false)}
-                                className="asset-drawer-close-btn"
-                                disabled={isUploading}
-                            >
-                                Close
-                            </YSButton>
-                        </div>
-
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            multiple
-                            className="hidden"
-                            onChange={onPickFiles}
-                            accept="audio/*,image/*,.txt,.md,.lrc,.lyr,.rtf,.json"
-                        />
-                    </div>
-
-                    {/* scrollable content + dropzone */}
-                    <div
-                        className="asset-drawer-scroll asset-drawer-dropzone"
-                        onDragEnter={onDragEnter}
-                        onDragLeave={onDragLeave}
-                        onDragOver={onDragOver}
-                        onDrop={onDrop}
+                {!hideHandle && (
+                    <YSButton
+                        ref={handleRef}
+                        type="button"
+                        onClick={() => setOpen((v) => !v)}
+                        className="asset-drawer-handle"
+                        aria-expanded="false"
+                        aria-controls="asset-drawer-panel"
                     >
-                        {(dragActive || isUploading) && (
-                            <div className="asset-drawer-dropoverlay">
-                                <div className="asset-drawer-dropcard">
-                                    <div className="asset-drawer-dropcard-title">
-                                        Drop to upload
-                                    </div>
-                                    <div className="asset-drawer-dropcard-sub">
-                                        Files will be added to your current chat
-                                        and appear here instantly.
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                        /=====\
+                    </YSButton>
+                )}
 
-                        <div className="asset-drawer-inner">
-                            <div className="asset-pill-grid">
-                                {assets.map((asset) => (
-                                    <FilePill
-                                        key={asset.id}
-                                        id={asset.id}
-                                        name={asset.name}
-                                        sizeMB={asset.sizeMB}
-                                        type={asset.type as any}
-                                        publicUrl={
-                                            asset.objectKey
-                                                ? signedPlayUrlByKey[
-                                                      asset.objectKey
-                                                  ] ?? asset.publicUrl
-                                                : asset.publicUrl
-                                        }
-                                        objectKey={asset.objectKey}
-                                        onDelete={
-                                            asset.objectKey
-                                                ? () =>
-                                                      deleteAssetEverywhere(
-                                                          asset.objectKey!
-                                                      )
-                                                : undefined
-                                        }
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                {panel}
             </div>
         </div>
     );

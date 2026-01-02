@@ -19,7 +19,8 @@ import {
 } from "../tabs/core";
 import ChatPane, { YSONG_WELCOME } from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
-import AssetDrawer from "../components/AssetDrawer";
+import BottomDrawers from "../components/BottomDrawers";
+import type { ProjectAsset } from "../components/ProjectAssetDrawer";
 import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
 import DAWPane from "../tabs/DAW";
@@ -466,6 +467,7 @@ export default function UI() {
     }
 
     const [drawerAssets, setDrawerAssets] = useState<DrawerAsset[]>([]);
+    const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
 
     return (
         <TabManagerProvider>
@@ -522,12 +524,14 @@ export default function UI() {
                 </main>
             </div>
 
-            <AssetDrawer
+            <BottomDrawers
                 chats={chats}
                 setChats={setChats}
                 drawerAssets={drawerAssets}
                 setDrawerAssets={setDrawerAssets}
                 activeChatId={activeId}
+                projectAssets={projectAssets}
+                setProjectAssets={setProjectAssets}
             />
 
             {/* auto-open first Chat tab */}
