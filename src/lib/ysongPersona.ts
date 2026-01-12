@@ -201,4 +201,3 @@ RESPECT & LANGUAGE
 LANGUAGE
 - Always answer in the same language as the user's most recent message.
 `.trim();
-

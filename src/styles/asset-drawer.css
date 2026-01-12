@@ -2,26 +2,26 @@
 
 /* OUTER FIXED WRAPPER */
 .asset-drawer-shell {
-    @apply fixed bottom-0 right-0 left-0 lg:left-[280px] z-[60]
+	@apply fixed bottom-0 right-0 left-0 lg:left-[280px] z-[60]
         flex justify-center pointer-events-none;
 }
 
 /* INNER LAYOUT CONTAINER */
 .asset-drawer-container {
-    @apply w-full max-w-[720px] px-4
+	@apply w-full max-w-[720px] px-4
         pb-[env(safe-area-inset-bottom,0px)]
         flex flex-col items-center space-y-2;
 }
 
 /* HANDLE BUTTON */
 .asset-drawer-handle {
-    @apply pointer-events-auto mx-auto flex items-center justify-center
+	@apply pointer-events-auto mx-auto flex items-center justify-center
         rounded-full px-4 py-1 text-[11px] font-mono border shadow-lg;
 }
 
 /* DRAWER PANEL CONTAINER */
 .asset-drawer-panel {
-    @apply pointer-events-auto w-full max-w-5xl mx-auto rounded-t-2xl
+	@apply pointer-events-auto w-full max-w-5xl mx-auto rounded-t-2xl
         border-t shadow-xl
         /* LIGHT MODE base */
         bg-neutral-50/95 text-neutral-900 border-neutral-200
@@ -32,87 +32,87 @@
 
 /* DARK MODE override */
 .dark .asset-drawer-panel {
-    @apply bg-neutral-900/95 text-neutral-50 border-neutral-800;
+	@apply bg-neutral-900/95 text-neutral-50 border-neutral-800;
 }
 
 /* OPEN/CLOSED STATES */
 .asset-drawer-panel-open {
-    @apply max-h-[25vh] opacity-100 translate-y-0;
+	@apply max-h-[25vh] opacity-100 translate-y-0;
 }
 
 .asset-drawer-panel-closed {
-    @apply max-h-0 opacity-0 translate-y-2;
+	@apply max-h-0 opacity-0 translate-y-2;
 }
 
 /* HEADER ROW */
 .asset-drawer-header {
-    @apply flex items-center justify-between px-4 py-2
+	@apply flex items-center justify-between px-4 py-2
         border-b border-neutral-200 dark:border-neutral-800;
 }
 
 .asset-drawer-title {
-    @apply text-xs font-semibold uppercase tracking-wide
+	@apply text-xs font-semibold uppercase tracking-wide
         text-neutral-600 dark:text-neutral-400;
 }
 
 /* CLOSE BUTTON */
 .asset-drawer-close-btn {
-    @apply pointer-events-auto rounded-md px-2 py-1 text-[11px] border;
+	@apply pointer-events-auto rounded-md px-2 py-1 text-[11px] border;
 }
 
 /* SCROLLABLE CONTENT AREA */
 .asset-drawer-scroll {
-    @apply h-[25vh] min-h-[160px] max-h-[320px] overflow-y-auto;
+	@apply h-[25vh] min-h-[160px] max-h-[320px] overflow-y-auto;
 }
 
 /* INNER WIDTH + PADDING (matches ChatPane) */
 .asset-drawer-inner {
-    @apply mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 pb-4;
+	@apply mx-auto w-full max-w-[720px] px-4 sm:px-6 pt-3 pb-4;
 }
 
 /* GRID OF ASSET PILLS */
 .asset-pill-grid {
-    @apply grid grid-cols-2 sm:grid-cols-3 gap-3;
+	@apply grid grid-cols-2 sm:grid-cols-3 gap-3;
 }
 
 /* header right-side actions */
 .asset-drawer-actions {
-    @apply flex items-center gap-2;
+	@apply flex items-center gap-2;
 }
 
 /* little hint text next to title */
 .asset-drawer-hint {
-    @apply ml-2 text-[10px] font-normal normal-case opacity-70;
+	@apply ml-2 text-[10px] font-normal normal-case opacity-70;
 }
 
 /* plus button */
 .asset-drawer-add-btn {
-    @apply pointer-events-auto rounded-md w-8 h-8 flex items-center justify-center
+	@apply pointer-events-auto rounded-md w-8 h-8 flex items-center justify-center
         text-sm border;
 }
 
 /* dropzone overlay */
 .asset-drawer-dropzone {
-    @apply relative;
+	@apply relative;
 }
 
 .asset-drawer-dropoverlay {
-    @apply absolute inset-0 z-[5] flex items-center justify-center pointer-events-none;
+	@apply absolute inset-0 z-[5] flex items-center justify-center pointer-events-none;
 }
 
 .asset-drawer-dropcard {
-    @apply rounded-2xl border-2 border-dashed px-6 py-5 shadow-lg
+	@apply rounded-2xl border-2 border-dashed px-6 py-5 shadow-lg
         bg-neutral-50/90 text-neutral-900 border-neutral-300;
 }
 
 .dark .asset-drawer-dropcard {
-    @apply bg-neutral-950/70 text-neutral-50 border-neutral-700;
+	@apply bg-neutral-950/70 text-neutral-50 border-neutral-700;
 }
 
 .asset-drawer-dropcard-title {
-    @apply text-sm font-semibold;
+	@apply text-sm font-semibold;
 }
 
 .asset-drawer-dropcard-sub {
-    @apply text-xs opacity-70 mt-1;
+	@apply text-xs opacity-70 mt-1;
 }

@@ -3,56 +3,50 @@
 
 /* Optional ergonomics using Tailwind utilities */
 :root {
-    font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-    line-height: 1.5;
-    font-weight: 400;
+	font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+	line-height: 1.5;
+	font-weight: 400;
 
-    color-scheme: light dark;
-    color: rgba(242, 246, 252, 0.87); /* Default forecolor of the webpage */
-    background-color: rgba(
-        26,
-        26,
-        26,
-        1
-    ); /* Default backcolor of the webpage */
+	color-scheme: light dark;
+	color: rgba(242, 246, 252, 0.87); /* Default forecolor of the webpage */
+	background-color: rgba(26, 26, 26, 1); /* Default backcolor of the webpage */
 
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
 }
 
 body {
-    @apply m-0 min-h-screen min-w-[320px] antialiased;
+	@apply m-0 min-h-screen min-w-[320px] antialiased;
 }
 
 a {
-    @apply font-semibold underline underline-offset-4 decoration-neutral-400/70
+	@apply font-semibold underline underline-offset-4 decoration-neutral-400/70
          text-neutral-800 dark:text-neutral-200
          transition-colors duration-200;
 }
 
 /* Hover: higher contrast + thicker underline + glow */
 a:hover {
-    @apply text-black dark:text-white decoration-black dark:decoration-white decoration-2;
-    /* brighter halo in light mode */
-    text-shadow: 0 0 6px rgba(0, 0, 0, 0.35), 0 0 14px rgba(0, 0, 0, 0.22);
-    filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.2));
+	@apply text-black dark:text-white decoration-black dark:decoration-white decoration-2;
+	/* brighter halo in light mode */
+	text-shadow: 0 0 6px rgba(0, 0, 0, 0.35), 0 0 14px rgba(0, 0, 0, 0.22);
+	filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.2));
 }
 
 /* Dark-mode halo is a bit stronger/softer */
 .dark a:hover {
-    text-shadow: 0 0 8px rgba(255, 255, 255, 0.45),
-        0 0 18px rgba(255, 255, 255, 0.3);
-    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
+	text-shadow: 0 0 8px rgba(255, 255, 255, 0.45), 0 0 18px rgba(255, 255, 255, 0.3);
+	filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.25));
 }
 
 h1 {
-    @apply text-5xl leading-tight font-extrabold;
+	@apply text-5xl leading-tight font-extrabold;
 }
 
 .ys-button {
-    @apply inline-flex items-center justify-center rounded-lg font-medium
+	@apply inline-flex items-center justify-center rounded-lg font-medium
     text-black hover:text-black
     dark:text-neutral-100 dark:hover:text-black
     border border-neutral-400/70 dark:border-neutral-700/70
@@ -63,37 +57,35 @@ h1 {
 
 /* Respect users who prefer reduced motion */
 @media (prefers-reduced-motion: reduce) {
-    button {
-        @apply transition-none;
-    }
+	button {
+		@apply transition-none;
+	}
 }
 
 button:hover {
-    /* light mode halo + tiny lift */
-    box-shadow: 0 0 12px rgba(0, 0, 0, 0.28), 0 0 24px rgba(0, 0, 0, 0.2),
-        0 6px 18px rgba(0, 0, 0, 0.12);
-    transform: translateY(-1px);
+	/* light mode halo + tiny lift */
+	box-shadow: 0 0 12px rgba(0, 0, 0, 0.28), 0 0 24px rgba(0, 0, 0, 0.2), 0 6px 18px rgba(0, 0, 0, 0.12);
+	transform: translateY(-1px);
 }
 
 .dark button:hover {
-    /* brighter in dark mode */
-    box-shadow: 0 0 14px rgba(255, 255, 255, 0.35),
-        0 0 32px rgba(255, 255, 255, 0.25), 0 6px 20px rgba(0, 0, 0, 0.25);
+	/* brighter in dark mode */
+	box-shadow: 0 0 14px rgba(255, 255, 255, 0.35), 0 0 32px rgba(255, 255, 255, 0.25), 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
 input {
-    @apply border-neutral-300 dark:border-neutral-700
+	@apply border-neutral-300 dark:border-neutral-700
          bg-neutral-300/70 dark:bg-neutral-900
           focus:outline-none focus:ring-2 focus:ring-white;
 }
 
 html,
 body {
-    width: 100%;
+	width: 100%;
 }
 #root {
-    min-height: 100%;
-    max-width: none;
-    margin: 0;
-    padding: 0;
+	min-height: 100%;
+	max-width: none;
+	margin: 0;
+	padding: 0;
 }

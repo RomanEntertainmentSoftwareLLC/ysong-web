@@ -11,12 +11,10 @@ export type UserSettingsResponse = {
 
 // ---------- Settings ----------
 export async function loadUserSettings() {
-  	return apiGet<UserSettingsResponse>("/api/settings");
+	return apiGet<UserSettingsResponse>("/api/settings");
 }
 
-export async function saveUserSettings(
- 	p: Partial<UserSettingsResponse>
-) {
+export async function saveUserSettings(p: Partial<UserSettingsResponse>) {
 	return apiPost("/api/settings", {
 		// send ALL the fields the server expects
 		saveChats: p.saveChats,
@@ -29,15 +27,10 @@ export async function saveUserSettings(
 // ---------- UI Layout ----------
 export async function loadLayout() {
 	// -> { tabs: TabRecord[], activeId: string | null }
-	return apiGet<{ tabs: TabRecord[]; activeId: string | null }>(
-		"/api/ui/layout"
-	);
+	return apiGet<{ tabs: TabRecord[]; activeId: string | null }>("/api/ui/layout");
 }
 
-export async function saveLayout(p: {
-	tabs: TabRecord[];
-	activeId: string | null;
-}) {
+export async function saveLayout(p: { tabs: TabRecord[]; activeId: string | null }) {
 	// server accepts POST upsert
 	return apiPost("/api/ui/layout", p);
 }

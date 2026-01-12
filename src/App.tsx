@@ -23,138 +23,128 @@ import TosGate from "./components/ToSGate";
 import { apiGet, apiPost } from "./lib/authApi";
 
 type CurrentUser = {
-    id: string;
-    email: string;
-    tosAcceptedAt?: string | null;
-    tosAcceptedVersion?: string | null;
-    currentTosVersion?: string | null;
+	id: string;
+	email: string;
+	tosAcceptedAt?: string | null;
+	tosAcceptedVersion?: string | null;
+	currentTosVersion?: string | null;
 };
 
 function useMediaQuery(query: string) {
-    const get = () =>
-        typeof window !== "undefined" && window.matchMedia(query).matches;
-    const [matches, setMatches] = useState<boolean>(get());
+	const get = () => typeof window !== "undefined" && window.matchMedia(query).matches;
+	const [matches, setMatches] = useState<boolean>(get());
 
-    useEffect(() => {
-        if (typeof window === "undefined") return;
-        const mql = window.matchMedia(query);
-        const onChange = () => setMatches(mql.matches);
-        mql.addEventListener("change", onChange);
-        setMatches(mql.matches);
-        return () => mql.removeEventListener("change", onChange);
-    }, [query]);
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		const mql = window.matchMedia(query);
+		const onChange = () => setMatches(mql.matches);
+		mql.addEventListener("change", onChange);
+		setMatches(mql.matches);
+		return () => mql.removeEventListener("change", onChange);
+	}, [query]);
 
-    return matches;
+	return matches;
 }
 
 /** Shell that chooses which header to show and preserves the header offset */
 function AppShell() {
-    const location = useLocation();
-    const inApp = location.pathname.startsWith("/app");
+	const location = useLocation();
+	const inApp = location.pathname.startsWith("/app");
 
-    return (
-        <>
-            {inApp ? <UINavbar /> : <Navbar />}
-            <UseGradientBackground />
-            {/* keep content pushed below 4rem header */}
-            <div className="pt-16">
-                <Outlet />
-            </div>
-        </>
-    );
+	return (
+		<>
+			{inApp ? <UINavbar /> : <Navbar />}
+			<UseGradientBackground />
+			{/* keep content pushed below 4rem header */}
+			<div className="pt-16">
+				<Outlet />
+			</div>
+		</>
+	);
 }
 
 function App() {
-    const isMobile = useMediaQuery("(max-width: 640px)");
-    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+	const isMobile = useMediaQuery("(max-width: 640px)");
+	const location = useLocation();
+	const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
-    // Helper we can reuse (e.g. after accepting ToS)
-    async function refetchMe() {
-        try {
-            const res = await apiGet<{ ok: boolean; user: CurrentUser }>(
-                "/auth/me"
-            );
-            setCurrentUser(res.user);
-        } catch {
-            // ignore; user might be logged out
-        }
-    }
+	// Helper we can reuse (e.g. after accepting ToS)
+	async function refetchMe() {
+		try {
+			const res = await apiGet<{ ok: boolean; user: CurrentUser }>("/auth/me");
+			setCurrentUser(res.user);
+		} catch {
+			// ignore; user might be logged out
+		}
+	}
 
-    // Initial fetch of the signed-in user
-    useEffect(() => {
-        const token =
-            localStorage.getItem("ys_token") ||
-            localStorage.getItem("ysong.token"); // legacy fallback
+	// Initial fetch of the signed-in user
+	useEffect(() => {
+		if (!location.pathname.startsWith("/app")) return;
+		const token = localStorage.getItem("ys_token");
 
-        if (!token) return; // <- don't call /auth/me when logged out
-        refetchMe();
-    }, []);
+		if (!token) return; // <- don't call /auth/me when logged out
+		refetchMe();
+	}, [location.pathname]);
 
-    // ---- ToS anon → per-user key migration -----------------------------------
-    // If an older session stored `ysong.tos.accepted.<ver>.anon` and we now know
-    // the real userId, move that flag to the user-specific key so a different
-    // account on the same browser doesn’t get blocked.
-    useEffect(() => {
-        if (!currentUser?.id) return;
+	// ---- ToS anon → per-user key migration -----------------------------------
+	// If an older session stored `ysong.tos.accepted.<ver>.anon` and we now know
+	// the real userId, move that flag to the user-specific key so a different
+	// account on the same browser doesn’t get blocked.
+	useEffect(() => {
+		if (!currentUser?.id) return;
 
-        const ver = currentUser.currentTosVersion || "v0";
-        const userKey = `ysong.tos.accepted.${ver}.${currentUser.id}`;
+		const ver = currentUser.currentTosVersion || "v0";
+		const userKey = `ysong.tos.accepted.${ver}.${currentUser.id}`;
 
-        const localAccepted = localStorage.getItem(userKey) === "1";
-        const serverAccepted =
-            !!currentUser.tosAcceptedAt &&
-            !!currentUser.tosAcceptedVersion &&
-            currentUser.tosAcceptedVersion === currentUser.currentTosVersion;
+		const localAccepted = localStorage.getItem(userKey) === "1";
+		const serverAccepted =
+			!!currentUser.tosAcceptedAt &&
+			!!currentUser.tosAcceptedVersion &&
+			currentUser.tosAcceptedVersion === currentUser.currentTosVersion;
 
-        if (localAccepted && !serverAccepted) {
-            apiPost("/auth/accept-tos", {})
-                .then(() => refetchMe())
-                .catch(() => {});
-        }
-    }, [
-        currentUser?.id,
-        currentUser?.currentTosVersion,
-        currentUser?.tosAcceptedAt,
-        currentUser?.tosAcceptedVersion,
-    ]);
-    // ---------------------------------------------------------------------------
+		if (localAccepted && !serverAccepted) {
+			apiPost("/auth/accept-tos", {})
+				.then(() => refetchMe())
+				.catch(() => {});
+		}
+	}, [currentUser?.id, currentUser?.currentTosVersion, currentUser?.tosAcceptedAt, currentUser?.tosAcceptedVersion]);
+	// ---------------------------------------------------------------------------
 
-    return (
-        <Routes>
-            {/* Everything renders inside the shell so the correct header shows */}
-            <Route element={<AppShell />}>
-                <Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
-                <Route path="/legal" element={<Legal />} />
-                <Route path="/privacy" element={<Privacy />} />
-                <Route path="/login" element={<Login />} />
-                <Route path="/signup" element={<Signup />} />
-                <Route path="/verify" element={<Verify />} />
-                <Route path="/forgot-username" element={<ForgotUserName />} />
-                <Route path="/forgot-password" element={<ForgotPassword />} />
-                <Route path="/forgot-sent" element={<ForgotSent />} />
-                <Route path="/terms-of-service" element={<TermsOfService />} />
+	return (
+		<Routes>
+			{/* Everything renders inside the shell so the correct header shows */}
+			<Route element={<AppShell />}>
+				<Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
+				<Route path="/legal" element={<Legal />} />
+				<Route path="/privacy" element={<Privacy />} />
+				<Route path="/login" element={<Login />} />
+				<Route path="/signup" element={<Signup />} />
+				<Route path="/verify" element={<Verify />} />
+				<Route path="/forgot-username" element={<ForgotUserName />} />
+				<Route path="/forgot-password" element={<ForgotPassword />} />
+				<Route path="/forgot-sent" element={<ForgotSent />} />
+				<Route path="/terms-of-service" element={<TermsOfService />} />
 
-                <Route
-                    path="/app"
-                    element={
-                        <RequireAuth>
-                            <TosGate
-                                userAcceptedAt={currentUser?.tosAcceptedAt}
-                                userAcceptedVersion={
-                                    currentUser?.tosAcceptedVersion
-                                }
-                                currentVersion={currentUser?.currentTosVersion}
-                                userId={currentUser?.id}
-                                onAccepted={refetchMe} // refresh /auth/me after accept
-                            >
-                                <UI />
-                            </TosGate>
-                        </RequireAuth>
-                    }
-                />
-            </Route>
-        </Routes>
-    );
+				<Route
+					path="/app"
+					element={
+						<RequireAuth>
+							<TosGate
+								userAcceptedAt={currentUser?.tosAcceptedAt}
+								userAcceptedVersion={currentUser?.tosAcceptedVersion}
+								currentVersion={currentUser?.currentTosVersion}
+								userId={currentUser?.id}
+								onAccepted={refetchMe} // refresh /auth/me after accept
+							>
+								<UI />
+							</TosGate>
+						</RequireAuth>
+					}
+				/>
+			</Route>
+		</Routes>
+	);
 }
 
 export default App;
