@@ -21,7 +21,7 @@ export default function TosGate({
 	userId,
 	onAccepted,
 }: Props) {
-	console.log(userId);
+	//console.log(userId);
 	const [mustAccept, setMustAccept] = useState(false);
 	const [ready, setReady] = useState(false);
 
