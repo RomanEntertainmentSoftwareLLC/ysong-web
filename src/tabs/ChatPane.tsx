@@ -1254,6 +1254,8 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 	const scrollerRef = useRef<HTMLDivElement | null>(null);
 	const bottomRef = useRef<HTMLDivElement | null>(null);
 
+	const fetchedChatIdsRef = useRef<Set<string>>(new Set());
+
 	// Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
 	// Also pre-warm signed "play" URLs in the background so prompt-play works without autoplay blocks.
 	useEffect(() => {
@@ -1350,6 +1352,23 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 	// ---- Load messages for this chat from Neon when the chat opens / changes ----
 	useEffect(() => {
 		if (!chatId) return;
+
+		// If UI prefetch already loaded messages (ids and/or attachments), skip.
+		const currentChat = chats.find((c) => c.id === chatId);
+		const msgs: any[] = Array.isArray((currentChat as any)?.messages)
+			? ((currentChat as any).messages as any[])
+			: [];
+
+		const looksLoaded =
+			msgs.some((m) => typeof (m as any)?.id === "string") ||
+			msgs.some((m) => Array.isArray((m as any)?.attachments) && (m as any).attachments.length > 0);
+
+		if (looksLoaded) return;
+
+		// Prevent repeated fetch attempts for the same chatId
+		if (fetchedChatIdsRef.current.has(chatId)) return;
+		fetchedChatIdsRef.current.add(chatId);
+
 		let cancelled = false;
 
 		(async () => {
@@ -1389,6 +1408,9 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 					)
 				);
 			} catch (e: any) {
+				// allow retry if it failed (network, etc.)
+				fetchedChatIdsRef.current.delete(chatId);
+
 				if (e?.message === "chat_not_found") return;
 				console.error("Failed to load messages for chat", chatId, e);
 			}
@@ -1397,7 +1419,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 		return () => {
 			cancelled = true;
 		};
-	}, [chatId, setChats]);
+	}, [chatId, chats, setChats]);
 
 	// Keep scroll pinned to bottom when messages change
 	useEffect(() => {

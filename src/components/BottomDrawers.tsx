@@ -7,8 +7,9 @@ import { YSButton } from "./YSButton";
 
 import AssetDrawer, { type DrawerAsset } from "./AssetDrawer";
 import ProjectAssetDrawer, { type ProjectAsset } from "./ProjectAssetDrawer";
+import PersonaAssetDrawer from "./PersonaAssetDrawer";
 
-type DrawerId = "assets" | "project" | null;
+type DrawerId = "personas" | "assets" | "project" | null;
 
 type Props = {
 	chats: Chat[];
@@ -46,13 +47,22 @@ export default function BottomDrawers({
 			<div className="w-full max-w-[720px] px-4 pb-[env(safe-area-inset-bottom,0px)] flex flex-col items-center">
 				{/* HANDLE ROW */}
 				<div className="w-full flex justify-center">
-					<div
-						className="pointer-events-auto inline-flex items-center gap-2"
-						style={{
-							transform: `translateX(${(HANDLE_W + 8) / 2}px)`,
-						}}
-					>
-						{/* Assets */}
+					<div className="pointer-events-auto inline-flex items-center gap-2">
+						{/* Personas (LEFT) */}
+						<YSButton
+							type="button"
+							onClick={() => toggle("personas")}
+							className="asset-drawer-handle"
+							style={{ width: HANDLE_W }}
+							aria-expanded={openDrawer === "personas"}
+							aria-controls="persona-asset-drawer-panel"
+							aria-label="Toggle Personas drawer"
+							title="Personas"
+						>
+							/=====\
+						</YSButton>
+
+						{/* Assets (CENTER) */}
 						<YSButton
 							type="button"
 							onClick={() => toggle("assets")}
@@ -66,7 +76,7 @@ export default function BottomDrawers({
 							/=====\
 						</YSButton>
 
-						{/* Project Assets */}
+						{/* Project Assets (RIGHT) */}
 						<YSButton
 							type="button"
 							onClick={() => toggle("project")}
@@ -84,6 +94,12 @@ export default function BottomDrawers({
 
 				{/* PANELS */}
 				<div className="w-full mt-2">
+					<PersonaAssetDrawer
+						embedded
+						hideHandle
+						open={openDrawer === "personas"}
+						onOpenChange={(v) => setOpenDrawer(v ? "personas" : null)}
+					/>
 					<AssetDrawer
 						embedded
 						hideHandle

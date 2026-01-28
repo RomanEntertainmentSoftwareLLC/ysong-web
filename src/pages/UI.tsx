@@ -18,6 +18,9 @@ import type { ProjectAsset } from "../components/ProjectAssetDrawer";
 import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
 import DAWPane from "../tabs/DAW";
+import { fetchChatMessages } from "../lib/chatApi";
+
+const ZWSP = "\u200B";
 
 /* ---------- tiny hook: >= 1024px (Tailwind lg) ---------- */
 function useMediaQuery(query: string) {
@@ -179,6 +182,101 @@ function SyncActiveChatFromTabs({
 	return null;
 }
 
+function normalizeAttachment(raw: any) {
+	if (!raw) return null;
+	const name = typeof raw.name === "string" ? raw.name : "file";
+	const size = typeof raw.size === "number" ? raw.size : Number(raw.size ?? 0);
+	const type = typeof raw.type === "string" ? raw.type : "application/octet-stream";
+	const objectKey = typeof raw.objectKey === "string" ? raw.objectKey : undefined;
+	const publicUrl = typeof raw.publicUrl === "string" ? raw.publicUrl : undefined;
+	return { name, size, type, objectKey, publicUrl };
+}
+
+function uploadLabel(n: number) {
+	return n === 1 ? "(uploaded 1 file)" : `(uploaded ${n} files)`;
+}
+
+function PrefetchChatMessagesFromTabs({
+	enabled,
+	chatsHydrated,
+	chats,
+	setChats,
+}: {
+	enabled: boolean;
+	chatsHydrated: boolean;
+	chats: Chat[];
+	setChats: Dispatch<SetStateAction<Chat[]>>;
+}) {
+	const { tabs } = useTabManager();
+	const fetched = useRef<Set<string>>(new Set());
+
+	useEffect(() => {
+		if (!enabled) return;
+		if (!chatsHydrated) return;
+
+		const ids = Array.from(
+			new Set(tabs.filter((t) => t.type === "chat" && t.payload?.chatId).map((t) => String(t.payload.chatId)))
+		);
+
+		if (ids.length === 0) return;
+
+		ids.forEach((chatId) => {
+			if (fetched.current.has(chatId)) return;
+
+			const chat = chats.find((c) => c.id === chatId);
+			if (!chat) return;
+
+			// If we already have DB ids or attachments, assume loaded.
+			const msgs: any[] = Array.isArray((chat as any).messages) ? (chat as any).messages : [];
+			const looksLoaded =
+				msgs.some((m) => typeof m?.id === "string") ||
+				msgs.some((m) => Array.isArray(m?.attachments) && m.attachments.length > 0);
+
+			if (looksLoaded) {
+				fetched.current.add(chatId);
+				return;
+			}
+
+			fetched.current.add(chatId);
+
+			(async () => {
+				try {
+					const dbMessages: any[] = await fetchChatMessages(chatId);
+
+					setChats((prev) =>
+						prev.map((c) => {
+							if (c.id !== chatId) return c;
+
+							const mapped = (dbMessages || []).map((m) => {
+								const raw = typeof m?.content === "string" ? m.content : "";
+								const atts = Array.isArray(m?.attachments)
+									? m.attachments.map(normalizeAttachment).filter(Boolean)
+									: [];
+								const text = raw === ZWSP && atts.length ? uploadLabel(atts.length) : raw;
+
+								return {
+									id: m?.id,
+									role: m?.role,
+									text,
+									ts: m?.createdAt ? new Date(m.createdAt).getTime() : Date.now(),
+									attachments: atts,
+								};
+							});
+
+							return { ...c, messages: mapped } as any;
+						})
+					);
+				} catch (e) {
+					console.error("Failed to prefetch chat messages", e);
+					fetched.current.delete(chatId);
+				}
+			})();
+		});
+	}, [enabled, chatsHydrated, tabs, chats, setChats]);
+
+	return null;
+}
+
 export default function UI() {
 	const [me, setMe] = useState<{ email: string } | null>(null);
 
@@ -186,6 +284,7 @@ export default function UI() {
 	const [chatsHydrated, setChatsHydrated] = useState(false);
 	const [activeId, setActiveId] = useState("");
 	const [layoutHydrated, setLayoutHydrated] = useState(false);
+	const [saveChatsEnabled, setSaveChatsEnabled] = useState(false);
 
 	// responsive + mobile drawer
 	const isLgUp = useMediaQuery("(min-width: 1024px)");
@@ -214,6 +313,8 @@ export default function UI() {
 					setChatsHydrated(true);
 					return;
 				}
+
+				setSaveChatsEnabled(!!settings?.saveChats);
 
 				// 2) If saveChats is true, pull chats from cloud
 				const data = await apiGet<{ chats: Chat[] }>("/api/chats");
@@ -429,6 +530,13 @@ export default function UI() {
 	return (
 		<TabManagerProvider>
 			<SyncActiveChatFromTabs activeChatId={activeId} setActiveChatId={setActiveId} />
+			<PrefetchChatMessagesFromTabs
+				enabled={saveChatsEnabled}
+				chatsHydrated={chatsHydrated}
+				chats={chats}
+				setChats={setChats}
+			/>
+
 			<div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
 				{/* Desktop sidebar */}
 				{isLgUp && (
