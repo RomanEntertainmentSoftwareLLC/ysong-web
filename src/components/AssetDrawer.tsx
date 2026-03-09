@@ -141,6 +141,9 @@ type Props = {
 	onOpenChange?: (open: boolean) => void;
 	hideHandle?: boolean;
 	embedded?: boolean;
+
+	// Add to Project (Project Asset drawer)
+	onAddToProject?: (asset: DrawerAsset) => void | Promise<void>;
 };
 
 type Attachment = {
@@ -198,6 +201,59 @@ function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
 
 	return;
 }
+
+
+function makeDragGhost(label: string) {
+	try {
+		const el = document.createElement("div");
+		el.textContent = label;
+		el.style.position = "absolute";
+		el.style.top = "-1000px";
+		el.style.left = "-1000px";
+		el.style.padding = "8px 10px";
+		el.style.background = "rgba(10,10,12,0.85)";
+		el.style.border = "1px solid rgba(255,255,255,0.18)";
+		el.style.borderRadius = "12px";
+		el.style.color = "rgba(255,255,255,0.92)";
+		el.style.fontSize = "12px";
+		el.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+		el.style.pointerEvents = "none";
+		el.style.opacity = "0.82";
+		el.style.maxWidth = "280px";
+		el.style.whiteSpace = "nowrap";
+		el.style.overflow = "hidden";
+		el.style.textOverflow = "ellipsis";
+		document.body.appendChild(el);
+		return el;
+	} catch {
+		return null;
+	}
+}
+
+function makePillCloneGhost(pillEl: HTMLElement) {
+	try {
+		const clone = pillEl.cloneNode(true) as HTMLElement;
+		// Remove interactive bits so the ghost looks like a clean clip preview
+		clone.querySelectorAll("button, .fp-controls, .fp-more, .fp-toast-portal").forEach((n) => {
+			try {
+				(n as HTMLElement).remove();
+			} catch {}
+		});
+		clone.style.position = "absolute";
+		clone.style.top = "-1000px";
+		clone.style.left = "-1000px";
+		clone.style.pointerEvents = "none";
+		clone.style.opacity = "0.72";
+		clone.style.transform = "translateZ(0)";
+		clone.style.filter = "drop-shadow(0 10px 22px rgba(0,0,0,0.35))";
+		document.body.appendChild(clone);
+		return clone;
+	} catch {
+		return null;
+	}
+}
+
+
 
 function normalizeAttachment(raw: any): Attachment {
 	if (typeof raw === "string") {
@@ -269,6 +325,7 @@ export default function AssetDrawer(props: Props) {
 		activeChatId,
 		hideHandle = false,
 		embedded = false,
+		onAddToProject,
 	} = props;
 	const [openUncontrolled, setOpenUncontrolled] = useState(false);
 	const isControlled = typeof props.open === "boolean";
@@ -281,6 +338,7 @@ export default function AssetDrawer(props: Props) {
 	};
 
 	const handleRef = useRef<HTMLButtonElement | null>(null);
+
 
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -777,22 +835,55 @@ export default function AssetDrawer(props: Props) {
 
 				<div className="asset-drawer-inner">
 					<div className="asset-pill-grid">
-						{assets.map((asset) => (
-							<FilePill
-								key={asset.id}
-								id={asset.id}
-								name={asset.name}
-								sizeMB={asset.sizeMB}
-								type={asset.type as any}
-								publicUrl={
-									asset.objectKey
-										? signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl
-										: asset.publicUrl
-								}
-								objectKey={asset.objectKey}
-								onDelete={asset.objectKey ? () => deleteAssetEverywhere(asset.objectKey!) : undefined}
-							/>
-						))}
+						
+						{assets.map((asset) => {
+							const canDrag = asset.type === "audio";
+							const payload = {
+								id: asset.objectKey ?? asset.id,
+								kind: "audio",
+								name: asset.name,
+								objectKey: asset.objectKey,
+							};
+							return (
+								<div
+									key={asset.id}
+									draggable={canDrag}
+									onDragStart={(e) => {
+										if (!canDrag) return;
+										e.dataTransfer.effectAllowed = "copy";
+										e.dataTransfer.setData("application/x-ysong-asset", JSON.stringify(payload));
+										e.dataTransfer.setData("text/plain", "");
+										const pill = (e.currentTarget as HTMLElement).querySelector(".asset-pill") as HTMLElement | null;
+						const ghost = pill ? makePillCloneGhost(pill) : makeDragGhost(asset.name);
+										if (ghost) {
+											const rect = ghost.getBoundingClientRect();
+							e.dataTransfer.setDragImage(ghost, Math.min(28, rect.width / 2), Math.min(18, rect.height / 2));
+											setTimeout(() => { try { ghost.remove(); } catch {} }, 600);
+										}
+									}}
+									title={canDrag ? `Drag: ${asset.name}` : asset.name}
+								>
+									<FilePill
+										id={asset.id}
+										name={asset.name}
+										sizeMB={asset.sizeMB}
+										type={asset.type as any}
+										publicUrl={
+											asset.objectKey
+												? signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl
+												: asset.publicUrl
+										}
+										objectKey={asset.objectKey}
+										disableScrub={canDrag}
+										onAddToProject={
+											asset.objectKey && onAddToProject ? () => onAddToProject(asset) : undefined
+										}
+										onDelete={asset.objectKey ? () => deleteAssetEverywhere(asset.objectKey!) : undefined}
+									/>
+								</div>
+							);
+						})}
+
 					</div>
 				</div>
 			</div>

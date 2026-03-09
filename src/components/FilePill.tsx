@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import "../styles/file-pill.css";
 
@@ -17,6 +17,12 @@ export interface FilePillProps {
 
 	onDelete?: () => void | Promise<void>;
 	onDownload?: () => void;
+
+	// Drawer/DAW UX
+	disableScrub?: boolean; // enables HTML5 drag (prevents pointerdown preventDefault from blocking drag)
+	onAddToProject?: () => void | Promise<void>;
+	className?: string;
+	style?: CSSProperties;
 }
 
 // Note: "loading" is a transient state while the shared AudioController is
@@ -197,7 +203,7 @@ async function fetchSignedUrl(objectKey: string, mode: "play" | "download") {
 	return { url: String(data.url), expiresAt: Number(data.expiresAt || 0) };
 }
 
-export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelete, onDownload }: FilePillProps) {
+export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelete, onDownload, disableScrub, onAddToProject, className, style }: FilePillProps) {
 	const isAudio = type === "audio";
 
 	const hue = useMemo(() => hashHue(name), [name]);
@@ -599,15 +605,16 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 	return (
 		<div
 			ref={pillRef}
-			className="asset-pill"
-			style={{ ["--fp-hue" as any]: hue }}
+			className={`asset-pill${className ? ` ${className}` : ""}`}
+			style={{ ...(style ?? {}), ["--fp-hue" as any]: hue } as CSSProperties}
 			onMouseEnter={() => setTipOpen(true)}
 			onMouseLeave={() => setTipOpen(false)}
 		>
 			<div
 				className={`asset-pill-body ${isAudio ? "is-audio" : "is-file"}`}
 				onPointerDown={(e) => {
-					if (!isAudio || !canPlay) return;
+				if (disableScrub) return;
+				if (!isAudio || !canPlay) return;
 
 					// Ignore clicks on buttons (play/pause/menu/etc.)
 					const target = e.target as HTMLElement;
@@ -773,6 +780,24 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 						>
 							Download
 						</button>
+
+						{onAddToProject && (
+							<button
+								type="button"
+								role="menuitem"
+								className="asset-pill-menu-item"
+								onClick={async () => {
+									try {
+										await onAddToProject();
+									} finally {
+										setOpen(false);
+									}
+								}}
+								title="Add to Project"
+							>
+								Add to Project
+							</button>
+						)}
 
 						<button
 							type="button"

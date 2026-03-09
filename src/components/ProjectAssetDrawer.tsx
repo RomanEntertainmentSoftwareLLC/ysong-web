@@ -1,5 +1,5 @@
 // src/components/ProjectAssetDrawer.tsx
-import { useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import "../styles/asset-drawer.css";
 
 import { YSButton } from "./YSButton";
@@ -9,7 +9,13 @@ export type ProjectAsset = {
 	id: string;
 	kind: "audio";
 	name: string;
-	url: string; // blob: or signed URL later
+
+	// Either local blob URL (imports) or a signed URL (runtime).
+	url?: string;
+
+	// Cloud object key for persisted assets.
+	objectKey?: string;
+
 	durationSec?: number;
 };
 
@@ -33,6 +39,29 @@ function fmtDur(sec?: number) {
 	return `${m}:${String(r).padStart(2, "0")}`;
 }
 
+
+function makePillCloneGhost(pillEl: HTMLElement) {
+	try {
+		const clone = pillEl.cloneNode(true) as HTMLElement;
+		clone.querySelectorAll("button, .fp-controls, .fp-more, .fp-toast-portal").forEach((n) => {
+			try {
+				(n as HTMLElement).remove();
+			} catch {}
+		});
+		clone.style.position = "absolute";
+		clone.style.top = "-1000px";
+		clone.style.left = "-1000px";
+		clone.style.pointerEvents = "none";
+		clone.style.opacity = "0.72";
+		clone.style.transform = "translateZ(0)";
+		clone.style.filter = "drop-shadow(0 10px 22px rgba(0,0,0,0.35))";
+		document.body.appendChild(clone);
+		return clone;
+	} catch {
+		return null;
+	}
+}
+
 export default function ProjectAssetDrawer(props: Props) {
 	const {
 		projectAssets,
@@ -54,6 +83,16 @@ export default function ProjectAssetDrawer(props: Props) {
 		else setOpenUncontrolled(value);
 	};
 
+	// Expose setter so the DAW tab can add assets into the Project drawer on drop.
+	useEffect(() => {
+		try {
+			(window as any).__ysongProjectAssets = projectAssets;
+			(window as any).__ysongSetProjectAssets = setProjectAssets;
+		} catch {
+			// ignore
+		}
+	}, [projectAssets, setProjectAssets]);
+
 	const handleRef = useRef<HTMLButtonElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -74,6 +113,7 @@ export default function ProjectAssetDrawer(props: Props) {
 				kind: "audio" as const,
 				name: f.name,
 				url: URL.createObjectURL(f),
+				objectKey: undefined,
 			}));
 
 		if (!next.length) return;
@@ -137,6 +177,7 @@ export default function ProjectAssetDrawer(props: Props) {
 									kind: "audio",
 									name: a.name,
 									url: a.url,
+									objectKey: a.objectKey,
 									durationSec: a.durationSec,
 								};
 
@@ -148,9 +189,16 @@ export default function ProjectAssetDrawer(props: Props) {
 											e.dataTransfer.effectAllowed = "copy";
 											e.dataTransfer.setData(
 												"application/x-ysong-asset",
-												JSON.stringify(payload)
+												JSON.stringify(payload),
 											);
-											e.dataTransfer.setData("text/plain", a.url);
+											e.dataTransfer.setData("text/plain", "");
+							const pill = (e.currentTarget as HTMLElement).querySelector(".asset-pill") as HTMLElement | null;
+							const ghost = pill ? makePillCloneGhost(pill) : null;
+							if (ghost) {
+								const rect = ghost.getBoundingClientRect();
+								e.dataTransfer.setDragImage(ghost, Math.min(28, rect.width / 2), Math.min(18, rect.height / 2));
+								setTimeout(() => { try { ghost.remove(); } catch {} }, 600);
+							}
 										}}
 										title={`Drag: ${a.name}`}
 									>
@@ -160,11 +208,11 @@ export default function ProjectAssetDrawer(props: Props) {
 											sizeMB={0}
 											type={fileKind as any}
 											publicUrl={a.url}
-											objectKey={undefined}
+											objectKey={a.objectKey}
+												style={{ boxShadow: "0 14px 30px rgba(0,0,0,0.30)" }}
 											onDelete={onDeleteAsset ? () => onDeleteAsset(a.id) : undefined}
 										/>
-										<div className="mt-1 text-[10px] opacity-60">{fmtDur(a.durationSec)}</div>
-									</div>
+</div>
 								);
 							})}
 						</div>

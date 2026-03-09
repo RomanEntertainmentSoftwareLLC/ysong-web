@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, Outlet, useLocation } from "react-router-dom";
-
-import Mobile from "./Mobile";
-import Desktop from "./Desktop";
+import { isMobile, isTablet, useMobileOrientation } from "react-device-detect";
 import Navbar from "./components/NavBar";
 import UINavbar from "./components/UINavBar";
-
+import Home from "./components/Home";
+import Footer from "./components/Footer";
 import Legal from "./pages/Legal";
 import Privacy from "./pages/Privacy";
 import Login from "./pages/Login";
@@ -14,7 +13,6 @@ import Verify from "./pages/Verify";
 import ForgotUserName from "./pages/ForgotUserName";
 import ForgotPassword from "./pages/ForgotPassword";
 import ForgotSent from "./pages/ForgotSent";
-
 import UseGradientBackground from "./components/UseGradientBackground";
 import RequireAuth from "./components/RequireAuth";
 import UI from "./pages/UI";
@@ -30,20 +28,35 @@ type CurrentUser = {
 	currentTosVersion?: string | null;
 };
 
-function useMediaQuery(query: string) {
-	const get = () => typeof window !== "undefined" && window.matchMedia(query).matches;
-	const [matches, setMatches] = useState<boolean>(get());
+function HomeResponsive() {
+	// Device class
+	const handheld = isMobile || isTablet;
 
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-		const mql = window.matchMedia(query);
-		const onChange = () => setMatches(mql.matches);
-		mql.addEventListener("change", onChange);
-		setMatches(mql.matches);
-		return () => mql.removeEventListener("change", onChange);
-	}, [query]);
+	// Orientation (your working pattern)
+	const orientation = useMobileOrientation();
+	const isLandscape = !!orientation.isLandscape;
 
-	return matches;
+	// Mirror the old Mobile.tsx/Desktop.tsx behavior:
+	// - Desktop: place-items-start, w-full, pt-6 sm:pt-10, Home directly
+	// - Mobile:  place-items-center, section pt-24 (or tighter in landscape), then Home
+	const handheldTopPad = isLandscape ? "pt-16" : "pt-24";
+
+	return (
+		<div className={`min-h-screen grid ${handheld ? "place-items-center" : "place-items-start"} bg-transparent`}>
+			<main
+				className={["text-left font-sans", handheld ? "" : "w-full", handheld ? "" : "pt-6 sm:pt-10"].join(" ")}
+			>
+				{handheld ? (
+					<section className={`${handheldTopPad} sm:pt-10`}>
+						<Home />
+					</section>
+				) : (
+					<Home />
+				)}
+				<Footer />
+			</main>
+		</div>
+	);
 }
 
 /** Shell that chooses which header to show and preserves the header offset */
@@ -64,7 +77,6 @@ function AppShell() {
 }
 
 function App() {
-	const isMobile = useMediaQuery("(max-width: 640px)");
 	const location = useLocation();
 	const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
@@ -115,7 +127,7 @@ function App() {
 		<Routes>
 			{/* Everything renders inside the shell so the correct header shows */}
 			<Route element={<AppShell />}>
-				<Route path="/" element={isMobile ? <Mobile /> : <Desktop />} />
+				<Route path="/" element={<HomeResponsive />} />
 				<Route path="/legal" element={<Legal />} />
 				<Route path="/privacy" element={<Privacy />} />
 				<Route path="/login" element={<Login />} />

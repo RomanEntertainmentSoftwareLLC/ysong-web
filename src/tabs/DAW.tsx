@@ -13,13 +13,20 @@ type Track = {
 	mute: boolean;
 	solo: boolean;
 	arm: boolean;
+	rowH?: number;
 };
 
 type ProjectAsset = {
 	id: string;
 	kind: "audio";
-	name: string; // display name (file.name)
-	url: string; // object URL for now
+	name: string;
+
+	// Runtime playable URL (blob: for local imports, or signed URL for cloud)
+	url?: string;
+
+	// Cloud object key (preferred for persistence)
+	objectKey?: string;
+
 	durationSec?: number;
 };
 
@@ -50,6 +57,8 @@ type GridValue =
 type GridMode = "absolute" | "relative";
 
 const ROW_H = 44;
+const MIN_AUDIO_ROW_H = 44;
+const MAX_AUDIO_ROW_H = 220;
 const BAR_W = 96;
 const BARS = 64;
 
@@ -63,6 +72,77 @@ const TICKS_PER_BEAT = 96;
 // Bottom-center drawer handle(s) sit on top of the app; reserve space so transport text isn't covered.
 const BOTTOM_DOCK_SAFE_PX = 56;
 
+const env = (import.meta as any).env || {};
+const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
+const API = (API_BASE || "").replace(/\/+$/, "");
+
+async function fetchSignedUrl(objectKey: string, mode: "play" | "download" = "play") {
+	const token = localStorage.getItem("ys_token");
+	if (!token) throw new Error("no_token");
+
+	const base = API ? API.replace(/\/+$/, "") + "/api/uploads/signed-url" : "/api/uploads/signed-url";
+	const qs = new URLSearchParams({ objectKey, mode }).toString();
+
+	const res = await fetch(`${base}?${qs}`, {
+		method: "GET",
+		headers: { Authorization: `Bearer ${token}` },
+	});
+
+	if (!res.ok) throw new Error(`signed_url_failed_${res.status}`);
+	const data = await res.json();
+
+	const url = typeof data?.url === "string" ? data.url : "";
+	const expiresAt = typeof data?.expiresAt === "number" ? data.expiresAt : Date.now() + 60 * 60 * 1000;
+	if (!url) throw new Error("signed_url_missing");
+	return { url, expiresAt };
+}
+
+function shouldAttemptCopy() {
+	// Production API (api.ysong.ai) may not have /api/uploads/copy deployed yet.
+	// Allow override via localStorage: ysong:enableCopy = "1"
+	try {
+		if (localStorage.getItem("ysong:enableCopy") === "1") return true;
+	} catch {}
+
+	const base = String(API_BASE || "").trim();
+	if (!base) return true;
+
+	// Handle both fully-qualified URLs and bare hostnames.
+	const lower = base.toLowerCase();
+	if (lower.includes("api.ysong.ai")) return false;
+
+	try {
+		const u = new URL(base.includes("://") ? base : "https://" + base);
+		if (u.hostname === "api.ysong.ai") return false;
+	} catch {
+		// If parsing fails, fall back to substring test above.
+	}
+
+	return true;
+}
+
+async function copyUploadIntoProject(objectKey: string, projectId: string) {
+	if (!shouldAttemptCopy()) return objectKey;
+	const token = localStorage.getItem("ys_token");
+	if (!token) throw new Error("no_token");
+
+	const base = API ? API.replace(/\/+$/, "") + "/api/uploads/copy" : "/api/uploads/copy";
+	const res = await fetch(base, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${token}`,
+		},
+		body: JSON.stringify({ objectKey, projectId }),
+	});
+
+	if (!res.ok) throw new Error(`copy_failed_${res.status}`);
+	const data = await res.json();
+	const newKey = String(data?.objectKey || data?.newObjectKey || "");
+	if (!newKey) throw new Error("copy_missing_objectKey");
+	return newKey;
+}
+
 function mkTrack(type: TrackType, index: number, id?: string): Track {
 	return {
 		id: id ?? crypto.randomUUID(),
@@ -71,11 +151,88 @@ function mkTrack(type: TrackType, index: number, id?: string): Track {
 		mute: false,
 		solo: false,
 		arm: false,
+		rowH: ROW_H,
 	};
 }
 
 function clamp(n: number, a: number, b: number) {
 	return Math.max(a, Math.min(b, n));
+}
+
+function hashHue(input: string) {
+	let h = 0;
+	for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
+	return h % 360;
+}
+
+function hash32(str: string) {
+	let h = 2166136261;
+	for (let i = 0; i < str.length; i++) {
+		h ^= str.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	return h >>> 0;
+}
+
+function pseudoWaveHeights(seed: string, count: number) {
+	const base = hash32(seed);
+	const out: number[] = [];
+	let x = base || 1;
+	for (let i = 0; i < count; i++) {
+		// xorshift
+		x ^= x << 13;
+		x ^= x >>> 17;
+		x ^= x << 5;
+		const frac = ((x >>> 0) % 1000) / 999;
+		out.push(0.15 + frac * 0.85);
+	}
+	return out;
+}
+
+function computeMonoPeaks(channel: Float32Array, buckets: number) {
+	const out: number[] = new Array(buckets).fill(0);
+	if (!channel.length || buckets <= 0) return out;
+	const block = Math.max(1, Math.floor(channel.length / buckets));
+	for (let i = 0; i < buckets; i++) {
+		const start = i * block;
+		const end = Math.min(channel.length, start + block);
+		let max = 0;
+		for (let j = start; j < end; j++) {
+			const v = Math.abs(channel[j]);
+			if (v > max) max = v;
+		}
+		out[i] = max;
+	}
+	return out;
+}
+
+function computeStereoPeaksFromBuffer(buf: AudioBuffer, buckets = 2048) {
+	const ch0 = buf.getChannelData(0);
+	const ch1 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : ch0;
+	return {
+		top: computeMonoPeaks(ch0, buckets),
+		bottom: computeMonoPeaks(ch1, buckets),
+	};
+}
+
+function resamplePeaksRange(src: number[], count: number, startFrac = 0, endFrac = 1) {
+	const out: number[] = new Array(Math.max(0, count)).fill(0);
+	if (!src.length || count <= 0) return out;
+	const s = Math.max(0, Math.min(0.999999, startFrac));
+	const e = Math.max(s + 0.000001, Math.min(1, endFrac));
+	const startIdx = s * src.length;
+	const endIdx = e * src.length;
+	const span = Math.max(1, endIdx - startIdx);
+	for (let i = 0; i < count; i++) {
+		const a = startIdx + (i / count) * span;
+		const b = startIdx + ((i + 1) / count) * span;
+		const ia = Math.max(0, Math.floor(a));
+		const ib = Math.min(src.length, Math.ceil(b));
+		let max = 0;
+		for (let j = ia; j < ib; j++) max = Math.max(max, src[j] || 0);
+		out[i] = max;
+	}
+	return out;
 }
 
 // bar is 1-indexed for display
@@ -161,10 +318,26 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	}
 
-	// Try to derive a stable key per tab instance (adjust if your TabRendererProps differs)
-	const tabId = (_props as any)?.tabId ?? (_props as any)?.tab?.id ?? "default";
+	// Try to derive a stable key per project.
+	const initialProjectId =
+		(_props as any)?.projectId ??
+		(_props as any)?.project?.id ??
+		localStorage.getItem("ysong:activeProjectId") ??
+		"default";
 
-	const DAW_STORAGE_KEY = `ysong:daw:${tabId}`;
+	const [activeProjectId, setActiveProjectId] = useState<string>(() => String(initialProjectId));
+
+	useEffect(() => {
+		try {
+			localStorage.setItem("ysong:activeProjectId", String(activeProjectId));
+		} catch {
+			// ignore
+		}
+	}, [activeProjectId]);
+
+	const DAW_STORAGE_KEY = `ysong:daw:${activeProjectId}`;
+	const PROJECT_NAME_KEY = `ysong:projectName:${activeProjectId}`;
+	const PROJECTS_KEY = "ysong:projects:v1";
 
 	const [tracks, setTracks] = useState<Track[]>(() => []);
 
@@ -178,9 +351,17 @@ export default function DAW(_props: TabRendererProps) {
 	const [gridValue, setGridValue] = useState<GridValue>("bar");
 	const [gridMode, setGridMode] = useState<GridMode>("absolute");
 
-	// Project placeholders
-	const [projectName] = useState("Untitled Project");
-	const [projectDirty] = useState(false);
+	// Project (autosave-oriented)
+	const [projectName, setProjectName] = useState<string>(() => {
+		try {
+			return localStorage.getItem(PROJECT_NAME_KEY) || "Untitled Project";
+		} catch {
+			return "Untitled Project";
+		}
+	});
+	const [projectSheetOpen, setProjectSheetOpen] = useState(false);
+	const [isSavingUi, setIsSavingUi] = useState(false);
+	const projectDirty = false; // placeholder until cloud project persistence
 
 	// --- Markers (bars are 1..BARS) ---
 	const [playheadPosBars, setPlayheadPosBars] = useState(1); // float bars (1.0 = bar 1)
@@ -195,10 +376,84 @@ export default function DAW(_props: TabRendererProps) {
 	const [sigNum, setSigNum] = useState(4);
 	const [sigDen, setSigDen] = useState(4);
 
+	// Keep name persisted
+	useEffect(() => {
+		try {
+			localStorage.setItem(PROJECT_NAME_KEY, projectName);
+		} catch {}
+	}, [PROJECT_NAME_KEY, projectName]);
+
+	type ProjectMeta = { id: string; name: string; updatedAt: number };
+
+	const readProjects = (): ProjectMeta[] => {
+		try {
+			const raw = localStorage.getItem(PROJECTS_KEY);
+			const parsed = raw ? (JSON.parse(raw) as ProjectMeta[]) : [];
+			return Array.isArray(parsed) ? parsed : [];
+		} catch {
+			return [];
+		}
+	};
+
+	const upsertProjectMeta = (id: string, name: string) => {
+		try {
+			const list = readProjects();
+			const now = Date.now();
+			const next = [{ id, name, updatedAt: now }, ...list.filter((p) => p.id !== id)].slice(0, 30);
+			localStorage.setItem(PROJECTS_KEY, JSON.stringify(next));
+		} catch {}
+	};
+
+	useEffect(() => {
+		// On project switch, hydrate name from storage (or default)
+		try {
+			const n = localStorage.getItem(PROJECT_NAME_KEY);
+			setProjectName(n || "Untitled Project");
+		} catch {
+			setProjectName("Untitled Project");
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [PROJECT_NAME_KEY]);
+
+	const createNewProject = () => {
+		const id = crypto.randomUUID();
+		try {
+			localStorage.setItem(`ysong:projectName:${id}`, "Untitled Project");
+		} catch {}
+		setActiveProjectId(id);
+		setProjectSheetOpen(false);
+	};
+
+	const clearProject = () => {
+		stop();
+		setTracks([]);
+		setClips([]);
+		setProjectAssets([]);
+		setSelectedTrackId(null);
+		setSelectedClipId(null);
+		setPlayheadPosBars(1);
+		setLoopL(1);
+		setLoopR(5);
+		setEndBar(17);
+		setLoopEnabled(false);
+	};
+
+	const loadProject = (id: string) => {
+		setActiveProjectId(id);
+		setProjectSheetOpen(false);
+	};
+
 	const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
 
 	// WebAudio context (lazy)
 	const audioCtxRef = useRef<AudioContext | null>(null);
+	const masterGainRef = useRef<GainNode | null>(null);
+	const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
+	const waveformPeaksRef = useRef<Map<string, { top: number[]; bottom: number[] }>>(new Map());
+	const [waveformVersion, setWaveformVersion] = useState(0);
+	const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+	const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
+	const lastPosRef = useRef<number>(1);
 
 	// Keep tempo/sig available for async duration decode
 	const bpmRef = useRef(bpm);
@@ -222,8 +477,8 @@ export default function DAW(_props: TabRendererProps) {
 			({
 				width: timelineWidth,
 				minWidth: "100%",
-			} as React.CSSProperties),
-		[timelineWidth]
+			}) as React.CSSProperties,
+		[timelineWidth],
 	);
 
 	// --- Add Track menu ---
@@ -299,7 +554,7 @@ export default function DAW(_props: TabRendererProps) {
             `,
 			backgroundSize: `${BAR_W}px 100%, ${BAR_W / 4}px 100%`,
 		}),
-		[]
+		[],
 	);
 
 	// --- Snap math (Absolute only) ---
@@ -368,6 +623,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	const clipPtrRef = useRef<ClipPointerState | null>(null);
 	const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
+	const trackResizeRef = useRef<{ trackId: string; pointerId: number; startY: number; startH: number } | null>(null);
 
 	const beginClipMove = (clipId: string) => (e: React.PointerEvent) => {
 		e.stopPropagation();
@@ -453,8 +709,11 @@ export default function DAW(_props: TabRendererProps) {
 		const minLen = doSnap ? stepBars : 0.25; // small-but-usable minimum when snap is off
 		let nextLen = nextEnd - st.startClipBar;
 
-		// clamp so the end boundary never exceeds BARS+1
-		const maxLen = BARS + 1 - st.startClipBar;
+		// clamp so the end boundary never exceeds the asset length (until looping/time-stretch exists)
+		const clipNow = clips.find((c) => c.id === st.clipId);
+		const assetNow = clipNow?.assetId ? projectAssets.find((a) => a.id === clipNow.assetId) : undefined;
+		const assetBars = assetNow?.durationSec ? durationSecToBars(assetNow.durationSec) : Infinity;
+		const maxLen = Math.min(BARS + 1 - st.startClipBar, assetBars);
 		nextLen = clamp(nextLen, minLen, Math.max(minLen, maxLen));
 
 		setClips((prev) => prev.map((c) => (c.id === st.clipId ? { ...c, lengthBars: nextLen } : c)));
@@ -467,6 +726,42 @@ export default function DAW(_props: TabRendererProps) {
 		clipPtrRef.current = null;
 		setDraggingClipId(null);
 	};
+
+	const beginTrackResize = (trackId: string) => (e: React.PointerEvent) => {
+		e.stopPropagation();
+		e.preventDefault();
+		const track = tracks.find((t) => t.id === trackId);
+		if (!track || track.type !== "audio") return;
+		trackResizeRef.current = {
+			trackId,
+			pointerId: e.pointerId,
+			startY: e.clientY,
+			startH: track.rowH ?? ROW_H,
+		};
+	};
+
+	useEffect(() => {
+		const onMove = (e: PointerEvent) => {
+			const st = trackResizeRef.current;
+			if (!st || st.pointerId !== e.pointerId) return;
+			e.preventDefault();
+			const nextH = clamp(st.startH + (e.clientY - st.startY), MIN_AUDIO_ROW_H, MAX_AUDIO_ROW_H);
+			setTracks((prev) => prev.map((t) => (t.id === st.trackId ? { ...t, rowH: nextH } : t)));
+		};
+		const onUp = (e: PointerEvent) => {
+			const st = trackResizeRef.current;
+			if (!st || st.pointerId !== e.pointerId) return;
+			trackResizeRef.current = null;
+		};
+		window.addEventListener("pointermove", onMove);
+		window.addEventListener("pointerup", onUp);
+		window.addEventListener("pointercancel", onUp);
+		return () => {
+			window.removeEventListener("pointermove", onMove);
+			window.removeEventListener("pointerup", onUp);
+			window.removeEventListener("pointercancel", onUp);
+		};
+	}, []);
 
 	// --- Marker dragging ---
 	type DragType = "L" | "R" | "E" | null;
@@ -557,6 +852,13 @@ export default function DAW(_props: TabRendererProps) {
 	const ensureAudioCtx = () => {
 		if (audioCtxRef.current) return audioCtxRef.current;
 		audioCtxRef.current = new AudioContext();
+		try {
+			masterGainRef.current = audioCtxRef.current.createGain();
+			masterGainRef.current.gain.value = 1.0;
+			masterGainRef.current.connect(audioCtxRef.current.destination);
+		} catch {
+			masterGainRef.current = null;
+		}
 		return audioCtxRef.current;
 	};
 
@@ -581,11 +883,132 @@ export default function DAW(_props: TabRendererProps) {
 
 	// Drop audio onto an AUDIO track lane → create asset + clip (length from decode)
 	const onDropAudioOnTrack = (trackId: string) => async (e: React.DragEvent<HTMLDivElement>) => {
-		const track = tracks.find((t) => t.id === trackId);
-		if (!track || track.type !== "audio") return;
+		let track = tracks.find((t) => t.id === trackId);
+		if (!track) {
+			const audioCount = tracks.filter((t) => t.type === "audio").length + 1;
+			const newTrack = mkTrack("audio", audioCount, trackId);
+			setTracks((prev) => (prev.some((t) => t.id === trackId) ? prev : [...prev, newTrack]));
+			track = newTrack;
+		}
+		if (track.type !== "audio") return;
 
 		e.preventDefault();
 		e.stopPropagation();
+
+		// Internal YSong asset drag (from drawers)
+		const raw = e.dataTransfer.getData("application/x-ysong-asset");
+		if (raw) {
+			try {
+				const payload = JSON.parse(raw);
+				if (payload && (payload.kind === "audio" || payload.type === "audio")) {
+					// capture needed event data BEFORE awaits
+					const clientX = e.clientX;
+					const laneEl = e.currentTarget as HTMLElement;
+					setSelectedTrackId(trackId);
+					let cursorStart = clientXToBarInEl(clientX, laneEl, BARS);
+
+					// Freeze snap/grid at drop time
+					const snapOnDrop = snapEnabled;
+					const stepOnDrop = stepBars;
+					const snapEnd = (endBars: number) => {
+						if (!snapOnDrop) return endBars;
+						const bar0 = endBars - 1;
+						return Math.round(bar0 / stepOnDrop) * stepOnDrop + 1;
+					};
+
+					const projectIdNow = localStorage.getItem("ysong:activeProjectId") || "default";
+					let objectKeyToUse: string | undefined = payload.objectKey;
+					if (objectKeyToUse) {
+						try {
+							objectKeyToUse = await copyUploadIntoProject(objectKeyToUse, projectIdNow);
+						} catch {
+							// fallback to original
+						}
+					}
+
+					const assetId = objectKeyToUse || payload.id || crypto.randomUUID();
+					const clipId = crypto.randomUUID();
+
+					// Ensure Project drawer sees it too (best-effort)
+					try {
+						const setGlobal = (window as any).__ysongSetProjectAssets;
+						if (typeof setGlobal === "function") {
+							setGlobal((prev: any[]) => {
+								if (prev?.some((p) => p.id === assetId || p.objectKey === objectKeyToUse)) return prev;
+								return [
+									...(prev || []),
+									{
+										id: assetId,
+										kind: "audio",
+										name: payload.name || "Audio",
+										objectKey: objectKeyToUse,
+									},
+								];
+							});
+						}
+					} catch {}
+
+					// Add locally too
+					setProjectAssets((prev) => {
+						if (prev.some((a) => a.id === assetId || (objectKeyToUse && a.objectKey === objectKeyToUse)))
+							return prev;
+						return [
+							...prev,
+							{
+								id: assetId,
+								kind: "audio",
+								name: payload.name || "Audio",
+								objectKey: objectKeyToUse,
+								url: payload.url,
+							},
+						];
+					});
+
+					const clipStart = cursorStart;
+					const initLen = clamp(2, snapOnDrop ? stepOnDrop : 0.25, Math.max(0.25, BARS + 1 - cursorStart));
+					setClips((prev) => [
+						...prev,
+						{
+							id: clipId,
+							trackId,
+							assetId,
+							name: payload.name || "Audio",
+							startBar: clipStart,
+							lengthBars: initLen,
+						},
+					]);
+					setSelectedClipId(clipId);
+
+					// Resolve duration if missing
+					(async () => {
+						let durSec = Number(payload.durationSec || 0);
+						if (!Number.isFinite(durSec) || durSec <= 0) {
+							try {
+								const buf = await ensureBufferForAsset(assetId);
+								durSec = buf.duration;
+							} catch {}
+						}
+						if (durSec > 0) {
+							setProjectAssets((prev) =>
+								prev.map((a) => (a.id === assetId ? { ...a, durationSec: durSec } : a)),
+							);
+							const rawBarsLen = durationSecToBars(durSec);
+							const desiredEnd = clipStart + rawBarsLen;
+							const endSnapped = snapEnd(desiredEnd);
+							let nextLen = endSnapped - clipStart;
+							const minLen = snapOnDrop ? stepOnDrop : 0.25;
+							const maxLen = BARS + 1 - clipStart;
+							nextLen = clamp(nextLen, minLen, Math.max(minLen, maxLen));
+							setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, lengthBars: nextLen } : c)));
+						}
+					})();
+
+					return; // handled
+				}
+			} catch {
+				// fall through to file drop
+			}
+		}
 
 		const files = Array.from(e.dataTransfer.files).filter(isAudioFile);
 		if (!files.length) return;
@@ -615,6 +1038,16 @@ export default function DAW(_props: TabRendererProps) {
 			const url = URL.createObjectURL(file);
 
 			setProjectAssets((prev) => [...prev, { id: assetId, kind: "audio", name: file.name, url }]);
+
+			try {
+				const setGlobal = (window as any).__ysongSetProjectAssets;
+				if (typeof setGlobal === "function") {
+					setGlobal((prev: any[]) => {
+						if (prev?.some((p) => p.id === assetId)) return prev;
+						return [...(prev || []), { id: assetId, kind: "audio", name: file.name, url }];
+					});
+				}
+			} catch {}
 
 			// optimistic initial length (real audio, just unknown duration yet)
 			const maxLenInit = BARS + 1 - cursorStart;
@@ -662,8 +1095,31 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	useEffect(() => {
-		const data = safeParse<DawPersistV1>(sessionStorage.getItem(DAW_STORAGE_KEY));
-		if (!data || data.v !== 1) return;
+		const data = safeParse<DawPersistV1>(localStorage.getItem(DAW_STORAGE_KEY));
+		if (!data || data.v !== 1) {
+			// New/empty project: reset to defaults
+			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+			rafRef.current = null;
+			setIsPlaying(false);
+			stopScheduledAudio();
+			setTracks([]);
+			setClips([]);
+			setProjectAssets([]);
+			setSelectedTrackId(null);
+			setSelectedClipId(null);
+			setSnapEnabled(true);
+			setGridValue("bar");
+			setGridMode("absolute");
+			setPlayheadPosBars(1);
+			setLoopL(1);
+			setLoopR(5);
+			setEndBar(17);
+			setLoopEnabled(false);
+			setBpm(120);
+			setSigNum(4);
+			setSigDen(4);
+			return;
+		}
 
 		// Never auto-resume playback on restore
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -717,12 +1173,15 @@ export default function DAW(_props: TabRendererProps) {
 			sigDen,
 		};
 
+		setIsSavingUi(true);
 		const t = window.setTimeout(() => {
 			try {
-				sessionStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(payload));
+				localStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(payload));
+				upsertProjectMeta(activeProjectId, projectName);
 			} catch {
 				// ignore quota / serialization issues for now
 			}
+			setIsSavingUi(false);
 		}, 150);
 
 		return () => window.clearTimeout(t);
@@ -835,10 +1294,144 @@ export default function DAW(_props: TabRendererProps) {
 		setSelectedClipId(id);
 	};
 
-	// --- Transport playback loop (visual playhead only, no audio yet) ---
+	const getBarSeconds = () => {
+		const beatSec = (60 / Math.max(1, bpmRef.current)) * (4 / Math.max(1, sigDenRef.current));
+		return beatSec * Math.max(1, sigNumRef.current);
+	};
+
+	const stopScheduledAudio = () => {
+		try {
+			for (const s of activeSourcesRef.current) {
+				try {
+					s.stop();
+				} catch {}
+			}
+		} finally {
+			activeSourcesRef.current = [];
+		}
+	};
+
+	const getSignedPlayUrl = async (objectKey: string) => {
+		const now = Date.now();
+		const cached = signedUrlCacheRef.current.get(objectKey);
+		if (cached && cached.expiresAt > now + 60_000) return cached.url;
+		const s = await fetchSignedUrl(objectKey, "play");
+		signedUrlCacheRef.current.set(objectKey, s);
+		return s.url;
+	};
+
+	const findAssetById = (id: string): ProjectAsset | undefined => {
+		const local = projectAssets.find((a) => a.id === id);
+		if (local) return local;
+		try {
+			const globalList = (window as any).__ysongProjectAssets as any;
+			if (Array.isArray(globalList)) {
+				const hit = globalList.find((a: any) => a.id === id || a.objectKey === id);
+				if (hit) return hit as ProjectAsset;
+			}
+		} catch {}
+		return undefined;
+	};
+
+	const ensureBufferForAsset = async (assetId: string) => {
+		const existing = audioBuffersRef.current.get(assetId);
+		if (existing) return existing;
+
+		const ctx = ensureAudioCtx();
+		await ctx.resume().catch(() => {});
+
+		const asset =
+			findAssetById(assetId) || ({ id: assetId, kind: "audio", name: assetId, objectKey: assetId } as any);
+
+		let url = asset.url;
+		if (!url && asset.objectKey) {
+			url = await getSignedPlayUrl(asset.objectKey);
+		}
+
+		if (!url) throw new Error("no_url");
+
+		const ab = await fetch(url).then((r) => r.arrayBuffer());
+		const buf = await ctx.decodeAudioData(ab.slice(0));
+		audioBuffersRef.current.set(assetId, buf);
+		if (!waveformPeaksRef.current.has(assetId)) {
+			waveformPeaksRef.current.set(assetId, computeStereoPeaksFromBuffer(buf, 2048));
+			setWaveformVersion((v) => v + 1);
+		}
+		return buf;
+	};
+
+	useEffect(() => {
+		const ids = Array.from(new Set(clips.map((c) => c.assetId).filter(Boolean) as string[]));
+		ids.forEach((id) => {
+			if (waveformPeaksRef.current.has(id)) return;
+			ensureBufferForAsset(id).catch(() => {});
+		});
+	}, [clips, projectAssets]);
+
+	void waveformVersion;
+
+	const scheduleAudioFromBars = async (startBars: number) => {
+		// Only schedule audio clips (no midi yet)
+		stopScheduledAudio();
+
+		const ctx = ensureAudioCtx();
+		await ctx.resume().catch(() => {});
+		const barSec = getBarSeconds();
+		const t0 = ctx.currentTime + 0.05;
+
+		const anySolo = tracks.some((t) => t.type === "audio" && t.solo);
+		const trackPlayable = (trackId: string) => {
+			const t = tracks.find((x) => x.id === trackId);
+			if (!t || t.type !== "audio") return false;
+			if (anySolo) return t.solo;
+			return !t.mute;
+		};
+
+		const audioClips = clips.filter((c) => !!c.assetId && trackPlayable(c.trackId));
+
+		for (const c of audioClips) {
+			const assetId = c.assetId!;
+			let buf: AudioBuffer;
+			try {
+				buf = await ensureBufferForAsset(assetId);
+			} catch {
+				continue;
+			}
+
+			const clipStartSecRel = (c.startBar - startBars) * barSec; // relative to t0
+			const clipDurSec = Math.max(0, c.lengthBars * barSec);
+
+			// If playhead starts inside the clip, offset into buffer.
+			const offsetSec = Math.max(0, (startBars - c.startBar) * barSec);
+			const startAt = t0 + Math.max(0, clipStartSecRel);
+			const playDur = Math.max(0, Math.min(clipDurSec - offsetSec, buf.duration - offsetSec));
+
+			if (playDur <= 0.01) continue;
+
+			const srcNode = ctx.createBufferSource();
+			srcNode.buffer = buf;
+
+			const gain = ctx.createGain();
+			gain.gain.value = 1.0;
+			srcNode.connect(gain);
+
+			if (masterGainRef.current) gain.connect(masterGainRef.current);
+			else gain.connect(ctx.destination);
+
+			try {
+				srcNode.start(startAt, offsetSec, playDur);
+				activeSourcesRef.current.push(srcNode);
+			} catch {
+				// ignore scheduling errors
+			}
+		}
+	};
+
+	// --- Transport playback loop (basic audio + visual) ---
 	const stop = () => {
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 		rafRef.current = null;
+		stopScheduledAudio();
 		setIsPlaying(false);
 	};
 
@@ -850,6 +1443,10 @@ export default function DAW(_props: TabRendererProps) {
 		playStartPosRef.current = startPos;
 		setPlayheadPosBars(startPos);
 		setIsPlaying(true);
+
+		// schedule audio clips
+		scheduleAudioFromBars(startPos).catch(() => {});
+		lastPosRef.current = startPos;
 
 		const beatSec = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
 		const barSec = beatSec * Math.max(1, sigNum);
@@ -873,6 +1470,13 @@ export default function DAW(_props: TabRendererProps) {
 			}
 
 			pos = clamp(pos, 1, BARS + 0.999);
+
+			// If looping and we wrapped, reschedule audio for the next loop.
+			if (loopEnabled && pos < lastPosRef.current) {
+				scheduleAudioFromBars(loopL).catch(() => {});
+			}
+			lastPosRef.current = pos;
+
 			setPlayheadPosBars(pos);
 			rafRef.current = requestAnimationFrame(tick);
 		};
@@ -940,6 +1544,26 @@ export default function DAW(_props: TabRendererProps) {
 	const timeString = `${mins}:${String(secs).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
 	const posString = `${barNumber}.${beatNumber}.${String(tickNumber).padStart(2, "0")}`;
 
+	const durationToBars = (sec: number) => {
+		const beatSecNow = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
+		const barSecNow = beatSecNow * Math.max(1, sigNum);
+		return sec / Math.max(0.0001, barSecNow);
+	};
+
+	const loopableByAssetId = useMemo(() => {
+		const m = new Map<string, boolean>();
+		for (const a of projectAssets) {
+			const d = Number(a.durationSec || 0);
+			if (!Number.isFinite(d) || d <= 0) continue;
+			const bars = durationToBars(d);
+			const nearest = Math.round(bars);
+			if (nearest <= 0) continue;
+			if (nearest <= 8 && Math.abs(bars - nearest) < 0.03) m.set(a.id, true);
+		}
+		return m;
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [projectAssets, bpm, sigNum, sigDen]);
+
 	return (
 		<div className="h-full min-h-0 flex flex-col">
 			{/* Main split */}
@@ -953,9 +1577,17 @@ export default function DAW(_props: TabRendererProps) {
 								className={`w-2 h-2 rounded-full ${
 									projectDirty ? "bg-amber-400" : "bg-emerald-400/60"
 								}`}
-								title={projectDirty ? "Unsaved (placeholder)" : "Saved (placeholder)"}
+								title={isSavingUi ? "Saving…" : projectDirty ? "Unsaved" : "Saved"}
 							/>
-							<div className="min-w-0 text-xs opacity-80 truncate">{projectName}</div>
+							<button
+								type="button"
+								className="min-w-0 text-xs opacity-90 truncate px-2 py-1 rounded-md hover:bg-neutral-100/5 active:bg-neutral-100/10"
+								onClick={() => setProjectSheetOpen(true)}
+								title="Project"
+							>
+								{projectName}
+								<span className="ml-1 opacity-60">▾</span>
+							</button>
 						</div>
 
 						<div className="h-10 px-3 flex items-center justify-between">
@@ -981,7 +1613,7 @@ export default function DAW(_props: TabRendererProps) {
 									className={`flex items-center gap-2 px-3 border-b border-neutral-200/10 dark:border-neutral-800 ${
 										selected ? "bg-neutral-100/5" : ""
 									}`}
-									style={{ height: ROW_H }}
+									style={{ height: t.rowH ?? ROW_H }}
 									onPointerDown={() => {
 										setSelectedTrackId(t.id);
 										setSelectedClipId(null);
@@ -1245,6 +1877,29 @@ export default function DAW(_props: TabRendererProps) {
 						<div
 							className="relative"
 							style={timelineWideStyle}
+							onDragOver={(e) => {
+								const types = Array.from(e.dataTransfer.types || []);
+								const hasInternal = types.includes("application/x-ysong-asset");
+								const hasFiles = e.dataTransfer.files && e.dataTransfer.files.length > 0;
+								if (hasInternal || hasFiles) {
+									e.preventDefault();
+									e.dataTransfer.dropEffect = "copy";
+								}
+							}}
+							onDrop={(e) => {
+								// Child lanes stopPropagation(), so this only fires when dropping into empty timeline space.
+								e.preventDefault();
+								e.stopPropagation();
+								const sel = selectedTrackId ? tracks.find((t) => t.id === selectedTrackId) : null;
+								const targetAudio =
+									sel && sel.type === "audio" ? sel.id : tracks.find((t) => t.type === "audio")?.id;
+								if (targetAudio) {
+									onDropAudioOnTrack(targetAudio)(e as any);
+									return;
+								}
+								const newId = crypto.randomUUID();
+								onDropAudioOnTrack(newId)(e as any);
+							}}
 							onPointerDown={(e) => setPlayheadFromEvent(e)}
 						>
 							<div
@@ -1305,7 +1960,7 @@ export default function DAW(_props: TabRendererProps) {
 											laneSelected ? "outline outline-neutral-200/15" : ""
 										}`}
 										style={{
-											height: ROW_H,
+											height: t.rowH ?? ROW_H,
 											...laneGridStyle,
 										}}
 										onPointerDown={() => {
@@ -1327,18 +1982,29 @@ export default function DAW(_props: TabRendererProps) {
 										{trackClips.map((c) => {
 											const isSelected = c.id === selectedClipId;
 											const left = barToLeftPx(c.startBar);
-											const width = Math.max(24, c.lengthBars * BAR_W - 10);
+											const width = Math.max(24, c.lengthBars * BAR_W);
+											const loopable = !!(c.assetId && loopableByAssetId.get(c.assetId));
+											const hue = hashHue(String(c.assetId || c.name || c.id));
+											const rowH = t.rowH ?? ROW_H;
+											const stereo = c.assetId ? waveformPeaksRef.current.get(c.assetId) : undefined;
+											const assetNow = c.assetId ? projectAssets.find((a) => a.id === c.assetId) : undefined;
+											const assetBars = assetNow?.durationSec ? durationSecToBars(assetNow.durationSec) : c.lengthBars;
+											const visibleFrac = assetBars > 0 ? clamp(c.lengthBars / assetBars, 0.001, 1) : 1;
+											const columns = Math.max(24, Math.floor(Math.max(8, width - 6) / 2));
+											const topWave = stereo ? resamplePeaksRange(stereo.top, columns, 0, visibleFrac) : pseudoWaveHeights((c.assetId || c.id) + ":t", columns);
+											const bottomWave = stereo ? resamplePeaksRange(stereo.bottom, columns, 0, visibleFrac) : pseudoWaveHeights((c.assetId || c.id) + ":b", columns);
 											return (
 												<div
 													key={c.id}
-													className={`absolute top-[6px] h-[32px] rounded-md border bg-neutral-950/60 backdrop-blur px-2 flex items-center min-w-[24px] ${
-														isSelected
-															? "border-sky-300/40 ring-2 ring-sky-300/20"
-															: "border-neutral-200/15 dark:border-neutral-800/60"
-													} ${draggingClipId === c.id ? "cursor-grabbing" : "cursor-grab"}`}
+													className={`group absolute top-0 border flex items-start min-w-[24px] overflow-hidden ${isSelected ? "ring-2 ring-sky-300/25" : ""} ${draggingClipId === c.id ? "cursor-grabbing" : "cursor-grab"}`}
 													style={{
-														left: left + 5,
+														left,
 														width,
+														height: Math.max(18, rowH - 1),
+														borderRadius: loopable ? 12 : 0,
+														borderColor: isSelected ? `hsla(${hue}, 92%, 82%, 0.78)` : `hsla(${hue}, 88%, 68%, 0.34)`,
+														background: `linear-gradient(135deg, hsla(${hue}, 76%, 34%, 0.98) 0%, hsla(${(hue + 22) % 360}, 82%, 20%, 0.98) 100%)`,
+														boxShadow: `inset 0 1px 0 hsla(${hue}, 96%, 78%, 0.10), 0 10px 24px rgba(0,0,0,0.24)`,
 													}}
 													onPointerDown={beginClipMove(c.id)}
 													onPointerMove={onClipPointerMove}
@@ -1346,21 +2012,39 @@ export default function DAW(_props: TabRendererProps) {
 													onPointerCancel={endClipPointer}
 													title={c.name}
 												>
-													<div className="text-[11px] opacity-90 truncate">{c.name}</div>
-													{/* Right-edge resize handle */}
+													<div className="absolute inset-0 pointer-events-none opacity-60 px-[2px] py-[2px] flex flex-col">
+														<div className="flex-1 flex items-center gap-[1px]">
+															{topWave.map((h, i) => (
+																<div key={i} style={{ height: `${Math.max(4, Math.round(h * 100))}%`, width: 1, background: "rgba(10,10,18,0.42)" }} />
+															))}
+														</div>
+														<div className="h-px bg-white/10 my-[1px]" />
+														<div className="flex-1 flex items-center gap-[1px]">
+															{bottomWave.map((h, i) => (
+																<div key={i} style={{ height: `${Math.max(4, Math.round(h * 100))}%`, width: 1, background: "rgba(10,10,18,0.42)" }} />
+															))}
+														</div>
+													</div>
+													<div className="absolute inset-0 pointer-events-none" style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(255,255,255,0.00) 42%, rgba(0,0,0,0.16) 100%)" }} />
+													<div className="text-[11px] text-white/92 drop-shadow-[0_1px_0_rgba(0,0,0,0.45)] truncate relative z-10 px-3 pt-2">{c.name}</div>
 													<div
-														className="absolute top-0 right-0 h-full w-[10px] cursor-ew-resize"
+														className="absolute top-0 right-0 h-full w-[10px] cursor-ew-resize opacity-0 group-hover:opacity-100"
 														onPointerDown={beginClipResizeR(c.id)}
 														title="Resize (hold ALT to bypass snap)"
-														style={{
-															// subtle visual grip
-															background:
-																"linear-gradient(to left, rgba(255,255,255,0.08), rgba(255,255,255,0))",
-														}}
+														style={{ background: "linear-gradient(to left, rgba(255,255,255,0.14), rgba(255,255,255,0))" }}
 													/>
 												</div>
 											);
 										})}
+
+										{t.type === "audio" && (
+											<div
+												className="absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize z-20"
+												onPointerDown={beginTrackResize(t.id)}
+												title="Resize track height"
+												style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.08))" }}
+											/>
+										)}
 									</div>
 								);
 							})}
@@ -1513,7 +2197,101 @@ export default function DAW(_props: TabRendererProps) {
 							Create MIDI Track
 						</button>
 					</div>,
-					document.body
+					document.body,
+				)}
+
+			{projectSheetOpen &&
+				createPortal(
+					<div
+						className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
+						role="dialog"
+						aria-modal="true"
+						onMouseDown={(e) => {
+							if (e.target === e.currentTarget) setProjectSheetOpen(false);
+						}}
+					>
+						<div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+						<div className="relative w-full sm:w-[560px] max-w-[95vw] bg-neutral-950/80 border border-neutral-200/15 dark:border-neutral-800 rounded-2xl shadow-2xl p-4 sm:p-5">
+							<div className="flex items-center justify-between gap-3">
+								<div className="text-sm font-semibold tracking-wide">Project</div>
+								<YSButton className="px-2 py-1 rounded-md" onClick={() => setProjectSheetOpen(false)}>
+									Close
+								</YSButton>
+							</div>
+
+							<div className="mt-3">
+								<label className="text-[11px] uppercase tracking-wide opacity-60">Name</label>
+								<input
+									value={projectName}
+									onChange={(e) => setProjectName(e.target.value)}
+									className="mt-1 w-full bg-neutral-950/60 border border-neutral-200/15 dark:border-neutral-800 rounded-xl px-3 py-2 text-sm outline-none focus:border-sky-300/40"
+									placeholder="Untitled Project"
+								/>
+								<div className="mt-1 text-[11px] opacity-60 flex items-center gap-2">
+									<span>{isSavingUi ? "Saving…" : "Autosaved"}</span>
+									<span className="opacity-40">•</span>
+									<span className="opacity-60">{activeProjectId.slice(0, 8)}</span>
+								</div>
+							</div>
+
+							<div className="mt-4 flex flex-wrap gap-2">
+								<YSButton
+									className="px-3 py-2 rounded-xl"
+									onClick={createNewProject}
+									title="Start fresh"
+								>
+									New
+								</YSButton>
+								<YSButton
+									className="px-3 py-2 rounded-xl"
+									onClick={() => {
+										clearProject();
+										setProjectSheetOpen(false);
+									}}
+									title="Clear tracks, clips, and project assets"
+								>
+									Clear
+								</YSButton>
+							</div>
+
+							<div className="mt-5">
+								<div className="text-[11px] uppercase tracking-wide opacity-60 mb-2">Recent</div>
+								<div className="max-h-[260px] overflow-auto rounded-xl border border-neutral-200/10 dark:border-neutral-800 bg-neutral-950/40">
+									{readProjects().length === 0 ? (
+										<div className="p-3 text-[12px] opacity-60">No recent projects yet.</div>
+									) : (
+										readProjects()
+											.sort((a, b) => b.updatedAt - a.updatedAt)
+											.slice(0, 12)
+											.map((p) => (
+												<button
+													key={p.id}
+													type="button"
+													className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 hover:bg-neutral-100/5 ${
+														p.id === activeProjectId ? "bg-neutral-100/5" : ""
+													}`}
+													onClick={() => loadProject(p.id)}
+													title="Load project"
+												>
+													<div className="min-w-0">
+														<div className="text-sm truncate">
+															{p.name || "Untitled Project"}
+														</div>
+														<div className="text-[11px] opacity-50 truncate">
+															{p.id.slice(0, 12)}
+														</div>
+													</div>
+													<div className="text-[11px] opacity-50 shrink-0">
+														{new Date(p.updatedAt).toLocaleString()}
+													</div>
+												</button>
+											))
+									)}
+								</div>
+							</div>
+						</div>
+					</div>,
+					document.body,
 				)}
 		</div>
 	);
