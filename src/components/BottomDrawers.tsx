@@ -23,7 +23,6 @@ type Props = {
 	setProjectAssets: React.Dispatch<React.SetStateAction<ProjectAsset[]>>;
 };
 
-
 const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
 const API = (API_BASE || "").replace(/\/+$/, "");
@@ -38,14 +37,6 @@ function getActiveProjectId() {
 }
 
 async function copyUploadIntoProject(objectKey: string, projectId: string) {
-	// Avoid 404s on production until /api/uploads/copy is deployed
-	try {
-		if (localStorage.getItem("ysong:enableCopy") !== "1") {
-			const baseStr = String(API_BASE || "").toLowerCase();
-			if (baseStr.includes("api.ysong.ai")) return objectKey;
-		}
-	} catch {}
-
 	const token = localStorage.getItem("ys_token");
 	if (!token) throw new Error("no_token");
 
@@ -66,6 +57,28 @@ async function copyUploadIntoProject(objectKey: string, projectId: string) {
 	return newKey;
 }
 
+async function deleteProjectObject(objectKey: string) {
+	const token = localStorage.getItem("ys_token");
+	if (!token) throw new Error("no_token");
+	const base = API ? API.replace(/\/+$/, "") + "/api/uploads/delete" : "/api/uploads/delete";
+	const res = await fetch(base, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${token}`,
+		},
+		body: JSON.stringify({ objectKey }),
+	});
+	if (!res.ok) throw new Error(`delete_failed_${res.status}`);
+	return await res.json();
+}
+
+function normalizeProjectAssetForPersist<T extends { objectKey?: string; url?: string }>(asset: T): T {
+	if (asset?.objectKey) {
+		return { ...asset, url: undefined };
+	}
+	return asset;
+}
 
 export default function BottomDrawers({
 	chats,
@@ -88,7 +101,7 @@ export default function BottomDrawers({
 			if (!raw) return;
 			const parsed = JSON.parse(raw);
 			if (Array.isArray(parsed) && parsed.length && projectAssets.length === 0) {
-				setProjectAssets(parsed);
+				setProjectAssets(parsed.map(normalizeProjectAssetForPersist));
 			}
 		} catch {
 			// ignore
@@ -99,12 +112,11 @@ export default function BottomDrawers({
 	useEffect(() => {
 		try {
 			const key = `ysong:projectAssets:${projectId}`;
-			localStorage.setItem(key, JSON.stringify(projectAssets));
+			localStorage.setItem(key, JSON.stringify(projectAssets.map(normalizeProjectAssetForPersist)));
 		} catch {
 			// ignore
 		}
 	}, [projectAssets, projectId]);
-
 
 	const toggle = (id: Exclude<DrawerId, null>) => {
 		setOpenDrawer((prev) => (prev === id ? null : id));
@@ -118,6 +130,7 @@ export default function BottomDrawers({
 			kind: "audio" as const,
 			name: asset.name,
 			objectKey: asset.objectKey,
+			sizeMB: asset.sizeMB,
 			url: undefined as any,
 		};
 
@@ -143,7 +156,6 @@ export default function BottomDrawers({
 
 		setOpenDrawer("project");
 	};
-
 
 	// Tune these if you change handle width or gap:
 	// gap-2 = 8px, width = 78px -> shift = (78 + 8)/2 = 43px
@@ -217,7 +229,7 @@ export default function BottomDrawers({
 						drawerAssets={drawerAssets}
 						setDrawerAssets={setDrawerAssets}
 						activeChatId={activeChatId}
-					onAddToProject={addDrawerAssetToProject}
+						onAddToProject={addDrawerAssetToProject}
 					/>
 
 					<ProjectAssetDrawer
@@ -227,6 +239,15 @@ export default function BottomDrawers({
 						onOpenChange={(v) => setOpenDrawer(v ? "project" : null)}
 						projectAssets={projectAssets}
 						setProjectAssets={setProjectAssets}
+						onDeleteAsset={async (assetId) => {
+							const hit = projectAssets.find((a) => a.id === assetId);
+							setProjectAssets((prev) => prev.filter((a) => a.id !== assetId));
+							if (hit?.objectKey) {
+								try {
+									await deleteProjectObject(hit.objectKey);
+								} catch {}
+							}
+						}}
 					/>
 				</div>
 			</div>

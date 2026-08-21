@@ -78,7 +78,7 @@ function isAudioAttachment(a?: { name?: string; type?: string }) {
 // For Neon persistence, we strip signed URLs (they expire) and keep only objectKey + metadata.
 async function withSignedPlayUrls(
 	atts: Attachment[],
-	cache: Map<string, { url: string; expiresAt: number }>
+	cache: Map<string, { url: string; expiresAt: number }>,
 ): Promise<Attachment[]> {
 	if (!atts.length) return atts;
 
@@ -100,7 +100,7 @@ async function withSignedPlayUrls(
 			} catch {
 				return a;
 			}
-		})
+		}),
 	);
 }
 
@@ -202,7 +202,6 @@ function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
 	return;
 }
 
-
 function makeDragGhost(label: string) {
 	try {
 		const el = document.createElement("div");
@@ -252,8 +251,6 @@ function makePillCloneGhost(pillEl: HTMLElement) {
 		return null;
 	}
 }
-
-
 
 function normalizeAttachment(raw: any): Attachment {
 	if (typeof raw === "string") {
@@ -338,7 +335,6 @@ export default function AssetDrawer(props: Props) {
 	};
 
 	const handleRef = useRef<HTMLButtonElement | null>(null);
-
 
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -475,7 +471,7 @@ export default function AssetDrawer(props: Props) {
 			.filter((a) => a.type === "audio")
 			.map((a) => {
 				const id = a.objectKey ?? a.publicUrl ?? a.id;
-				const playableUrl = a.objectKey ? signedPlayUrlByKey[a.objectKey] ?? a.publicUrl : a.publicUrl;
+				const playableUrl = a.objectKey ? (signedPlayUrlByKey[a.objectKey] ?? a.publicUrl) : a.publicUrl;
 
 				return {
 					id,
@@ -494,7 +490,7 @@ export default function AssetDrawer(props: Props) {
 		url: string,
 		token: string,
 		file: File,
-		onProgress: (pct: number) => void
+		onProgress: (pct: number) => void,
 	): Promise<any> {
 		return await new Promise((resolve, reject) => {
 			const formData = new FormData();
@@ -623,9 +619,9 @@ export default function AssetDrawer(props: Props) {
 										ts: userTs,
 									} as any,
 								],
-						  }
-						: c
-				)
+							}
+						: c,
+				),
 			);
 
 			// persist to Neon (best-effort)
@@ -643,11 +639,11 @@ export default function AssetDrawer(props: Props) {
 								? {
 										...c,
 										messages: (c.messages ?? []).map((m: any) =>
-											m.role === "user" && m.ts === userTs ? { ...m, id: saved.id } : m
+											m.role === "user" && m.ts === userTs ? { ...m, id: saved.id } : m,
 										),
-								  }
-								: c
-						)
+									}
+								: c,
+						),
 					);
 				})
 				.catch((e: any) => console.error("AssetDrawer failed to persist upload message", e));
@@ -718,7 +714,7 @@ export default function AssetDrawer(props: Props) {
 						attachments: nextAtt.length ? nextAtt : undefined,
 					};
 				}),
-			}))
+			})),
 		);
 
 		setDrawerAssets((prev) => (prev ?? []).filter((a) => a.objectKey !== objectKey));
@@ -835,7 +831,6 @@ export default function AssetDrawer(props: Props) {
 
 				<div className="asset-drawer-inner">
 					<div className="asset-pill-grid">
-						
 						{assets.map((asset) => {
 							const canDrag = asset.type === "audio";
 							const payload = {
@@ -843,6 +838,13 @@ export default function AssetDrawer(props: Props) {
 								kind: "audio",
 								name: asset.name,
 								objectKey: asset.objectKey,
+								sizeMB: asset.sizeMB,
+								url: asset.objectKey
+									? (signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl)
+									: asset.publicUrl,
+								publicUrl: asset.objectKey
+									? (signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl)
+									: asset.publicUrl,
 							};
 							return (
 								<div
@@ -853,12 +855,22 @@ export default function AssetDrawer(props: Props) {
 										e.dataTransfer.effectAllowed = "copy";
 										e.dataTransfer.setData("application/x-ysong-asset", JSON.stringify(payload));
 										e.dataTransfer.setData("text/plain", "");
-										const pill = (e.currentTarget as HTMLElement).querySelector(".asset-pill") as HTMLElement | null;
-						const ghost = pill ? makePillCloneGhost(pill) : makeDragGhost(asset.name);
+										const pill = (e.currentTarget as HTMLElement).querySelector(
+											".asset-pill",
+										) as HTMLElement | null;
+										const ghost = pill ? makePillCloneGhost(pill) : makeDragGhost(asset.name);
 										if (ghost) {
 											const rect = ghost.getBoundingClientRect();
-							e.dataTransfer.setDragImage(ghost, Math.min(28, rect.width / 2), Math.min(18, rect.height / 2));
-											setTimeout(() => { try { ghost.remove(); } catch {} }, 600);
+											e.dataTransfer.setDragImage(
+												ghost,
+												Math.min(28, rect.width / 2),
+												Math.min(18, rect.height / 2),
+											);
+											setTimeout(() => {
+												try {
+													ghost.remove();
+												} catch {}
+											}, 600);
 										}
 									}}
 									title={canDrag ? `Drag: ${asset.name}` : asset.name}
@@ -870,7 +882,7 @@ export default function AssetDrawer(props: Props) {
 										type={asset.type as any}
 										publicUrl={
 											asset.objectKey
-												? signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl
+												? (signedPlayUrlByKey[asset.objectKey] ?? asset.publicUrl)
 												: asset.publicUrl
 										}
 										objectKey={asset.objectKey}
@@ -878,12 +890,13 @@ export default function AssetDrawer(props: Props) {
 										onAddToProject={
 											asset.objectKey && onAddToProject ? () => onAddToProject(asset) : undefined
 										}
-										onDelete={asset.objectKey ? () => deleteAssetEverywhere(asset.objectKey!) : undefined}
+										onDelete={
+											asset.objectKey ? () => deleteAssetEverywhere(asset.objectKey!) : undefined
+										}
 									/>
 								</div>
 							);
 						})}
-
 					</div>
 				</div>
 			</div>

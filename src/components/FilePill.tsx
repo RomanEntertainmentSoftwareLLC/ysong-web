@@ -21,6 +21,8 @@ export interface FilePillProps {
 	// Drawer/DAW UX
 	disableScrub?: boolean; // enables HTML5 drag (prevents pointerdown preventDefault from blocking drag)
 	onAddToProject?: () => void | Promise<void>;
+
+	// Optional visual overrides from drawers / DAW
 	className?: string;
 	style?: CSSProperties;
 }
@@ -203,7 +205,20 @@ async function fetchSignedUrl(objectKey: string, mode: "play" | "download") {
 	return { url: String(data.url), expiresAt: Number(data.expiresAt || 0) };
 }
 
-export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelete, onDownload, disableScrub, onAddToProject, className, style }: FilePillProps) {
+export function FilePill({
+	id,
+	name,
+	sizeMB,
+	type,
+	publicUrl,
+	objectKey,
+	onDelete,
+	onDownload,
+	disableScrub,
+	onAddToProject,
+	className,
+	style,
+}: FilePillProps) {
 	const isAudio = type === "audio";
 
 	const hue = useMemo(() => hashHue(name), [name]);
@@ -236,7 +251,7 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 
 	const waveKey = useMemo(() => objectKey || publicUrl || id, [id, objectKey, publicUrl]);
 	const [waveform, setWaveform] = useState<WaveformPeaks | null>(() => {
-		return waveKey ? waveformCache.get(waveKey) ?? null : null;
+		return waveKey ? (waveformCache.get(waveKey) ?? null) : null;
 	});
 	const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -265,16 +280,16 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 	const playState: PlayState = !isAudio
 		? "stopped"
 		: isCurrent
-		? audioState.status === "playing"
-			? "playing"
-			: audioState.status === "paused"
-			? "paused"
-			: audioState.status === "loading"
-			? "loading"
-			: "stopped"
-		: "stopped";
+			? audioState.status === "playing"
+				? "playing"
+				: audioState.status === "paused"
+					? "paused"
+					: audioState.status === "loading"
+						? "loading"
+						: "stopped"
+			: "stopped";
 
-	const durSec = isCurrent ? audioState.duration ?? null : null;
+	const durSec = isCurrent ? (audioState.duration ?? null) : null;
 	const curSec = isCurrent ? audioState.currentTime : 0;
 
 	const playheadPct = useMemo(() => {
@@ -287,7 +302,7 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 		return 0;
 	}, [curSec, durSec, isCurrent, standbySeekFrac]);
 
-	const canDelete = !!objectKey && !!onDelete;
+	const canDelete = !!onDelete;
 	const canPlay = isAudio && (!!objectKey || !!publicUrl);
 
 	// ---- Real waveform extraction (falls back to placeholder if decode/CORS fails)
@@ -606,29 +621,21 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 		<div
 			ref={pillRef}
 			className={`asset-pill${className ? ` ${className}` : ""}`}
-			style={{ ...(style ?? {}), ["--fp-hue" as any]: hue } as CSSProperties}
+			style={{ ...(style ?? {}), ["--fp-hue" as any]: hue } as any}
 			onMouseEnter={() => setTipOpen(true)}
 			onMouseLeave={() => setTipOpen(false)}
 		>
 			<div
 				className={`asset-pill-body ${isAudio ? "is-audio" : "is-file"}`}
-				onPointerDown={(e) => {
-				if (disableScrub) return;
-				if (!isAudio || !canPlay) return;
+				onClick={(e) => {
+					if (!isAudio || !canPlay) return;
 
-					// Ignore clicks on buttons (play/pause/menu/etc.)
 					const target = e.target as HTMLElement;
 					if (target.closest("button")) return;
-
-					// Ignore right-click mouse (touch will be fine)
-					const btn = (e as any).button;
-					if (typeof btn === "number" && btn !== 0) return;
 
 					const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
 					const frac = (e.clientX - r.left) / r.width;
 					seekToFraction(frac);
-
-					e.preventDefault();
 				}}
 			>
 				{/* Waveform background placeholder */}
@@ -714,8 +721,8 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 										? "Missing audio URL"
 										: "Missing objectKey (old upload)"
 									: playState === "stopped"
-									? "Play"
-									: "Stop"
+										? "Play"
+										: "Stop"
 							}
 						>
 							<span className="fp-ctl-icon">{playState === "stopped" ? "▶" : "■"}</span>
@@ -731,10 +738,10 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 								!canPlay
 									? "No audio URL"
 									: playState === "stopped"
-									? "Play first"
-									: playState === "paused"
-									? "Resume"
-									: "Pause"
+										? "Play first"
+										: playState === "paused"
+											? "Resume"
+											: "Pause"
 							}
 						>
 							<span className="fp-ctl-icon">{playState === "paused" ? "▶" : "❚❚"}</span>
@@ -805,12 +812,12 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 							className="asset-pill-menu-item danger"
 							onClick={handleDelete}
 							disabled={!canDelete}
-							title={canDelete ? "Delete" : "Missing objectKey (old upload)"}
+							title={canDelete ? (objectKey ? "Delete" : "Delete from project") : "Cannot delete"}
 						>
 							Delete
 						</button>
 					</div>,
-					document.body
+					document.body,
 				)}
 
 			{/* Hover toast (portal) */}
@@ -828,7 +835,7 @@ export function FilePill({ id, name, sizeMB, type, publicUrl, objectKey, onDelet
 					>
 						{name}
 					</div>,
-					document.body
+					document.body,
 				)}
 		</div>
 	);

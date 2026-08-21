@@ -5,6 +5,63 @@ import "../styles/asset-drawer.css";
 import { YSButton } from "./YSButton";
 import { FilePill, type FileKind } from "./FilePill";
 
+const env = (import.meta as any).env || {};
+const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
+const API = (API_BASE || "").replace(/\/+$/, "");
+
+async function uploadFileToCloud(file: File) {
+	const token = localStorage.getItem("ys_token");
+	if (!token) throw new Error("no_token");
+
+	const form = new FormData();
+	form.append("file", file);
+
+	const base = API ? API + "/api/uploads" : "/api/uploads";
+	const res = await fetch(base, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${token}` },
+		body: form,
+	});
+
+	if (!res.ok) throw new Error(`upload_failed_${res.status}`);
+	return await res.json();
+}
+
+function shouldAttemptCopy() {
+	try {
+		if (localStorage.getItem("ysong:enableCopy") === "1") return true;
+
+		const lower = String(API_BASE || "").toLowerCase();
+		if (lower.includes("api.ysong.ai")) return false;
+
+		if (API_BASE) {
+			const u = new URL(API_BASE);
+			if (u.hostname === "api.ysong.ai") return false;
+		}
+	} catch {}
+	return true;
+}
+
+async function copyUploadIntoProject(objectKey: string, projectId: string) {
+	if (!shouldAttemptCopy()) return objectKey;
+
+	const token = localStorage.getItem("ys_token");
+	if (!token) throw new Error("no_token");
+
+	const base = API ? API + "/api/uploads/copy" : "/api/uploads/copy";
+	const res = await fetch(base, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${token}`,
+		},
+		body: JSON.stringify({ objectKey, projectId }),
+	});
+
+	if (!res.ok) throw new Error(`copy_failed_${res.status}`);
+	const data = await res.json();
+	return String(data?.objectKey || data?.newObjectKey || "");
+}
 export type ProjectAsset = {
 	id: string;
 	kind: "audio";
@@ -16,6 +73,7 @@ export type ProjectAsset = {
 	// Cloud object key for persisted assets.
 	objectKey?: string;
 
+	sizeMB?: number;
 	durationSec?: number;
 };
 
@@ -23,22 +81,11 @@ type Props = {
 	projectAssets: ProjectAsset[];
 	setProjectAssets: React.Dispatch<React.SetStateAction<ProjectAsset[]>>;
 	onDeleteAsset?: (assetId: string) => void;
-
-	// dock-control (so only one drawer can be open)
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
-	hideHandle?: boolean; // unused in dock mode, but supported
-	embedded?: boolean; // render panel only (no fixed shell)
+	hideHandle?: boolean;
+	embedded?: boolean;
 };
-
-function fmtDur(sec?: number) {
-	if (!Number.isFinite(sec as number) || sec == null) return "—";
-	const s = Math.max(0, Math.floor(sec));
-	const m = Math.floor(s / 60);
-	const r = s % 60;
-	return `${m}:${String(r).padStart(2, "0")}`;
-}
-
 
 function makePillCloneGhost(pillEl: HTMLElement) {
 	try {
@@ -76,45 +123,76 @@ export default function ProjectAssetDrawer(props: Props) {
 	const [openUncontrolled, setOpenUncontrolled] = useState(false);
 	const isControlled = typeof controlledOpen === "boolean";
 	const open = isControlled ? controlledOpen : openUncontrolled;
-
 	const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
 		const value = typeof next === "function" ? next(open) : next;
 		if (isControlled) onOpenChange?.(value);
 		else setOpenUncontrolled(value);
 	};
 
-	// Expose setter so the DAW tab can add assets into the Project drawer on drop.
 	useEffect(() => {
 		try {
 			(window as any).__ysongProjectAssets = projectAssets;
 			(window as any).__ysongSetProjectAssets = setProjectAssets;
-		} catch {
-			// ignore
-		}
+		} catch {}
 	}, [projectAssets, setProjectAssets]);
 
 	const handleRef = useRef<HTMLButtonElement | null>(null);
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
-
 	const triggerPicker = () => {
 		setOpen(true);
 		fileInputRef.current?.click();
 	};
 
-	const onPickFiles = (e: ChangeEvent<HTMLInputElement>) => {
+	const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(e.target.files ?? []);
 		e.currentTarget.value = "";
 		if (!files.length) return;
 
-		const next: ProjectAsset[] = files
-			.filter((f) => (f.type || "").toLowerCase().startsWith("audio/"))
-			.map((f) => ({
-				id: crypto.randomUUID(),
-				kind: "audio" as const,
-				name: f.name,
-				url: URL.createObjectURL(f),
-				objectKey: undefined,
-			}));
+		const projectId = (() => {
+			try {
+				return localStorage.getItem("ysong:activeProjectId") || "default";
+			} catch {
+				return "default";
+			}
+		})();
+
+		const next: ProjectAsset[] = [];
+
+		for (const f of files.filter((f) => (f.type || "").toLowerCase().startsWith("audio/"))) {
+			try {
+				const uploaded = await uploadFileToCloud(f);
+				const srcKey = String(uploaded?.objectKey || "");
+
+				let finalKey = srcKey;
+				try {
+					if (srcKey) {
+						finalKey = (await copyUploadIntoProject(srcKey, projectId)) || srcKey;
+					}
+				} catch {
+					// copy can fail in environments without /api/uploads/copy
+					finalKey = srcKey;
+				}
+
+				next.push({
+					id: finalKey || crypto.randomUUID(),
+					kind: "audio",
+					name: f.name,
+					objectKey: finalKey || undefined,
+					url: undefined,
+					sizeMB: f.size / (1024 * 1024),
+				});
+			} catch {
+				// true fallback only if upload itself failed
+				next.push({
+					id: crypto.randomUUID(),
+					kind: "audio",
+					name: f.name,
+					url: URL.createObjectURL(f),
+					objectKey: undefined,
+					sizeMB: f.size / (1024 * 1024),
+				});
+			}
+		}
 
 		if (!next.length) return;
 
@@ -123,7 +201,6 @@ export default function ProjectAssetDrawer(props: Props) {
 	};
 
 	const fileKind: FileKind = "audio";
-
 	const sorted = useMemo(() => [...projectAssets], [projectAssets]);
 
 	const panel = (
@@ -131,12 +208,10 @@ export default function ProjectAssetDrawer(props: Props) {
 			id="project-asset-drawer-panel"
 			className={`asset-drawer-panel ${open ? "asset-drawer-panel-open" : "asset-drawer-panel-closed"}`}
 		>
-			{/* header */}
 			<div className="asset-drawer-header">
 				<div className="asset-drawer-title">
 					PROJECT ASSETS ({sorted.length})<span className="asset-drawer-hint">Drag onto an audio lane</span>
 				</div>
-
 				<div className="asset-drawer-actions">
 					<YSButton
 						type="button"
@@ -146,12 +221,10 @@ export default function ProjectAssetDrawer(props: Props) {
 					>
 						+
 					</YSButton>
-
 					<YSButton type="button" onClick={() => setOpen(false)} className="asset-drawer-close-btn">
 						Close
 					</YSButton>
 				</div>
-
 				<input
 					ref={fileInputRef}
 					type="file"
@@ -162,7 +235,6 @@ export default function ProjectAssetDrawer(props: Props) {
 				/>
 			</div>
 
-			{/* content */}
 			<div className="asset-drawer-scroll">
 				<div className="asset-drawer-inner">
 					{sorted.length === 0 ? (
@@ -180,11 +252,10 @@ export default function ProjectAssetDrawer(props: Props) {
 									objectKey: a.objectKey,
 									durationSec: a.durationSec,
 								};
-
 								return (
 									<div
 										key={a.id}
-										draggable
+										draggable={a.kind === "audio"}
 										onDragStart={(e) => {
 											e.dataTransfer.effectAllowed = "copy";
 											e.dataTransfer.setData(
@@ -192,27 +263,38 @@ export default function ProjectAssetDrawer(props: Props) {
 												JSON.stringify(payload),
 											);
 											e.dataTransfer.setData("text/plain", "");
-							const pill = (e.currentTarget as HTMLElement).querySelector(".asset-pill") as HTMLElement | null;
-							const ghost = pill ? makePillCloneGhost(pill) : null;
-							if (ghost) {
-								const rect = ghost.getBoundingClientRect();
-								e.dataTransfer.setDragImage(ghost, Math.min(28, rect.width / 2), Math.min(18, rect.height / 2));
-								setTimeout(() => { try { ghost.remove(); } catch {} }, 600);
-							}
+											const pill = (e.currentTarget as HTMLElement).querySelector(
+												".asset-pill",
+											) as HTMLElement | null;
+											const ghost = pill ? makePillCloneGhost(pill) : null;
+											if (ghost) {
+												const rect = ghost.getBoundingClientRect();
+												e.dataTransfer.setDragImage(
+													ghost,
+													Math.min(28, rect.width / 2),
+													Math.min(18, rect.height / 2),
+												);
+												setTimeout(() => {
+													try {
+														ghost.remove();
+													} catch {}
+												}, 600);
+											}
 										}}
 										title={`Drag: ${a.name}`}
 									>
 										<FilePill
 											id={a.id}
 											name={a.name}
-											sizeMB={0}
+											sizeMB={Number.isFinite(a.sizeMB as number) ? (a.sizeMB as number) : 0}
 											type={fileKind as any}
 											publicUrl={a.url}
 											objectKey={a.objectKey}
-												style={{ boxShadow: "0 14px 30px rgba(0,0,0,0.30)" }}
+											disableScrub
+											style={{ boxShadow: "0 14px 30px rgba(0,0,0,0.30)" }}
 											onDelete={onDeleteAsset ? () => onDeleteAsset(a.id) : undefined}
 										/>
-</div>
+									</div>
 								);
 							})}
 						</div>
@@ -222,7 +304,6 @@ export default function ProjectAssetDrawer(props: Props) {
 		</div>
 	);
 
-	// If used standalone (not your dock), allow optional handle rendering.
 	if (!embedded) {
 		return (
 			<div className="asset-drawer-shell">
@@ -245,6 +326,5 @@ export default function ProjectAssetDrawer(props: Props) {
 		);
 	}
 
-	// Dock mode: panel only
 	return panel;
 }

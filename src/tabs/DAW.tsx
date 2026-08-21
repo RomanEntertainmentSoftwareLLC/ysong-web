@@ -13,7 +13,6 @@ type Track = {
 	mute: boolean;
 	solo: boolean;
 	arm: boolean;
-	rowH?: number;
 };
 
 type ProjectAsset = {
@@ -26,6 +25,7 @@ type ProjectAsset = {
 
 	// Cloud object key (preferred for persistence)
 	objectKey?: string;
+	sizeMB?: number;
 
 	durationSec?: number;
 };
@@ -57,10 +57,9 @@ type GridValue =
 type GridMode = "absolute" | "relative";
 
 const ROW_H = 44;
-const MIN_AUDIO_ROW_H = 44;
-const MAX_AUDIO_ROW_H = 220;
 const BAR_W = 96;
-const BARS = 64;
+const MIN_BARS = 64;
+const MAX_BARS = 512;
 
 // Add-track menu sizing (used for viewport clamping)
 const MENU_W = 240;
@@ -97,32 +96,7 @@ async function fetchSignedUrl(objectKey: string, mode: "play" | "download" = "pl
 	return { url, expiresAt };
 }
 
-function shouldAttemptCopy() {
-	// Production API (api.ysong.ai) may not have /api/uploads/copy deployed yet.
-	// Allow override via localStorage: ysong:enableCopy = "1"
-	try {
-		if (localStorage.getItem("ysong:enableCopy") === "1") return true;
-	} catch {}
-
-	const base = String(API_BASE || "").trim();
-	if (!base) return true;
-
-	// Handle both fully-qualified URLs and bare hostnames.
-	const lower = base.toLowerCase();
-	if (lower.includes("api.ysong.ai")) return false;
-
-	try {
-		const u = new URL(base.includes("://") ? base : "https://" + base);
-		if (u.hostname === "api.ysong.ai") return false;
-	} catch {
-		// If parsing fails, fall back to substring test above.
-	}
-
-	return true;
-}
-
 async function copyUploadIntoProject(objectKey: string, projectId: string) {
-	if (!shouldAttemptCopy()) return objectKey;
 	const token = localStorage.getItem("ys_token");
 	if (!token) throw new Error("no_token");
 
@@ -151,18 +125,11 @@ function mkTrack(type: TrackType, index: number, id?: string): Track {
 		mute: false,
 		solo: false,
 		arm: false,
-		rowH: ROW_H,
 	};
 }
 
 function clamp(n: number, a: number, b: number) {
 	return Math.max(a, Math.min(b, n));
-}
-
-function hashHue(input: string) {
-	let h = 0;
-	for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
-	return h % 360;
 }
 
 function hash32(str: string) {
@@ -172,6 +139,12 @@ function hash32(str: string) {
 		h = Math.imul(h, 16777619);
 	}
 	return h >>> 0;
+}
+
+function hashHue(input: string) {
+	let h = 0;
+	for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
+	return h % 360;
 }
 
 function pseudoWaveHeights(seed: string, count: number) {
@@ -189,48 +162,40 @@ function pseudoWaveHeights(seed: string, count: number) {
 	return out;
 }
 
-function computeMonoPeaks(channel: Float32Array, buckets: number) {
-	const out: number[] = new Array(buckets).fill(0);
-	if (!channel.length || buckets <= 0) return out;
-	const block = Math.max(1, Math.floor(channel.length / buckets));
+type StereoPeaks = { top: number[]; bottom: number[] };
+
+function computeStereoPeaks(buffer: AudioBuffer, buckets = 1024): StereoPeaks {
+	const ch0 = buffer.getChannelData(0);
+	const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0;
+	const block = Math.max(1, Math.floor(ch0.length / buckets));
+	const top: number[] = new Array(buckets).fill(0);
+	const bottom: number[] = new Array(buckets).fill(0);
 	for (let i = 0; i < buckets; i++) {
 		const start = i * block;
-		const end = Math.min(channel.length, start + block);
-		let max = 0;
+		const end = Math.min(ch0.length, start + block);
+		let max0 = 0;
+		let max1 = 0;
 		for (let j = start; j < end; j++) {
-			const v = Math.abs(channel[j]);
-			if (v > max) max = v;
+			const a = Math.abs(ch0[j]);
+			const b = Math.abs(ch1[j]);
+			if (a > max0) max0 = a;
+			if (b > max1) max1 = b;
 		}
-		out[i] = max;
+		top[i] = max0;
+		bottom[i] = max1;
 	}
-	return out;
+	return { top, bottom };
 }
 
-function computeStereoPeaksFromBuffer(buf: AudioBuffer, buckets = 2048) {
-	const ch0 = buf.getChannelData(0);
-	const ch1 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : ch0;
-	return {
-		top: computeMonoPeaks(ch0, buckets),
-		bottom: computeMonoPeaks(ch1, buckets),
-	};
-}
-
-function resamplePeaksRange(src: number[], count: number, startFrac = 0, endFrac = 1) {
-	const out: number[] = new Array(Math.max(0, count)).fill(0);
-	if (!src.length || count <= 0) return out;
-	const s = Math.max(0, Math.min(0.999999, startFrac));
-	const e = Math.max(s + 0.000001, Math.min(1, endFrac));
-	const startIdx = s * src.length;
-	const endIdx = e * src.length;
-	const span = Math.max(1, endIdx - startIdx);
+function resamplePeaksRange(arr: number[], count: number, startFrac = 0, endFrac = 1) {
+	if (!arr.length || count <= 0) return [] as number[];
+	const a = clamp(startFrac, 0, 1);
+	const b = clamp(endFrac, a, 1);
+	const out: number[] = [];
 	for (let i = 0; i < count; i++) {
-		const a = startIdx + (i / count) * span;
-		const b = startIdx + ((i + 1) / count) * span;
-		const ia = Math.max(0, Math.floor(a));
-		const ib = Math.min(src.length, Math.ceil(b));
-		let max = 0;
-		for (let j = ia; j < ib; j++) max = Math.max(max, src[j] || 0);
-		out[i] = max;
+		const frac = a + ((i + 0.5) / count) * (b - a);
+		const idx = Math.min(arr.length - 1, Math.max(0, Math.floor(frac * arr.length)));
+		out.push(arr[idx] ?? 0);
 	}
 	return out;
 }
@@ -258,6 +223,13 @@ function parseGridValue(v: GridValue): { kind: "bar" } | { kind: "note"; div: nu
 	if (!Number.isFinite(div) || div <= 0) return { kind: "note", div: 4, triplet: false };
 
 	return { kind: "note", div, triplet };
+}
+
+function normalizeProjectAssetForPersist<T extends { objectKey?: string; url?: string }>(asset: T): T {
+	if (asset?.objectKey) {
+		return { ...asset, url: undefined };
+	}
+	return asset;
 }
 
 /**
@@ -307,6 +279,7 @@ export default function DAW(_props: TabRendererProps) {
 		bpm: number;
 		sigNum: number;
 		sigDen: number;
+		trackHeights?: Record<string, number>;
 	};
 
 	function safeParse<T>(raw: string | null): T | null {
@@ -368,6 +341,7 @@ export default function DAW(_props: TabRendererProps) {
 	const [loopL, setLoopL] = useState(1);
 	const [loopR, setLoopR] = useState(5);
 	const [endBar, setEndBar] = useState(17);
+	const [bars, setBars] = useState(MIN_BARS);
 
 	// --- Transport state ---
 	const [isPlaying, setIsPlaying] = useState(false);
@@ -375,6 +349,18 @@ export default function DAW(_props: TabRendererProps) {
 	const [bpm, setBpm] = useState(120);
 	const [sigNum, setSigNum] = useState(4);
 	const [sigDen, setSigDen] = useState(4);
+
+	useEffect(() => {
+		const maxClipEnd = clips.reduce((acc, c) => Math.max(acc, c.startBar + c.lengthBars), 1);
+		const maxNeed = Math.max(
+			MIN_BARS,
+			Math.ceil(maxClipEnd + 8),
+			Math.ceil(loopR + 8),
+			Math.ceil(playheadPosBars + 8),
+		);
+		setBars((prev) => Math.min(MAX_BARS, Math.max(prev, maxNeed)));
+		setEndBar((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(maxClipEnd + 1))));
+	}, [clips, loopR, playheadPosBars]);
 
 	// Keep name persisted
 	useEffect(() => {
@@ -429,6 +415,7 @@ export default function DAW(_props: TabRendererProps) {
 		setTracks([]);
 		setClips([]);
 		setProjectAssets([]);
+		setTrackHeights({});
 		setSelectedTrackId(null);
 		setSelectedClipId(null);
 		setPlayheadPosBars(1);
@@ -444,13 +431,17 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
+	const [trackHeights, setTrackHeights] = useState<Record<string, number>>({});
+	const waveformPeaksRef = useRef<Map<string, StereoPeaks>>(new Map());
+	const [waveformVersion, setWaveformVersion] = useState(0);
+
+	const getTrackHeight = (trackId: string, type?: TrackType) =>
+		trackHeights[trackId] ?? (type === "audio" ? 96 : ROW_H);
 
 	// WebAudio context (lazy)
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const masterGainRef = useRef<GainNode | null>(null);
 	const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
-	const waveformPeaksRef = useRef<Map<string, { top: number[]; bottom: number[] }>>(new Map());
-	const [waveformVersion, setWaveformVersion] = useState(0);
 	const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
 	const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
 	const lastPosRef = useRef<number>(1);
@@ -463,14 +454,16 @@ export default function DAW(_props: TabRendererProps) {
 	const rafRef = useRef<number | null>(null);
 	const playStartMsRef = useRef<number>(0);
 	const playStartPosRef = useRef<number>(1);
+	const lastUiUpdateMsRef = useRef<number>(0);
 
 	// --- Refs for scroll sync + ruler math ---
 	const timelineRef = useRef<HTMLDivElement | null>(null);
 	const trackScrollRef = useRef<HTMLDivElement | null>(null);
 	const rulerInnerRef = useRef<HTMLDivElement | null>(null);
 	const syncing = useRef(false);
+	const laneResizeRef = useRef<{ trackId: string; pointerId: number; startY: number; startH: number } | null>(null);
 
-	const timelineWidth = BARS * BAR_W;
+	const timelineWidth = bars * BAR_W;
 
 	const timelineWideStyle = useMemo(
 		() =>
@@ -496,6 +489,7 @@ export default function DAW(_props: TabRendererProps) {
 			const nextIndex = prev.filter((t) => t.type === type).length + 1;
 			return [...prev, mkTrack(type, nextIndex, id)];
 		});
+		setTrackHeights((prev) => ({ ...prev, [id]: type === "audio" ? 96 : ROW_H }));
 		setSelectedTrackId(id);
 		setSelectedClipId(null);
 	};
@@ -513,6 +507,11 @@ export default function DAW(_props: TabRendererProps) {
 
 		// remove clips on that track
 		setClips((prev) => prev.filter((c) => c.trackId !== id));
+		setTrackHeights((prev) => {
+			const next = { ...prev };
+			delete next[id];
+			return next;
+		});
 	};
 
 	const toggle = (id: string, key: "mute" | "solo" | "arm") => {
@@ -574,7 +573,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	// --- Convert a clientX to a snapped bar position using a specific element's rect ---
 	// NOTE: maxBars lets us support "edges" up to BARS+1 for clip resizing.
-	const clientXToBarInEl = (clientX: number, el: HTMLElement | null, maxBars = BARS) => {
+	const clientXToBarInEl = (clientX: number, el: HTMLElement | null, maxBars = bars) => {
 		if (!el) return 1;
 
 		const rect = el.getBoundingClientRect();
@@ -587,15 +586,15 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	// Use ruler element for marker drags (flags can be the event target)
-	const clientXToBar = (clientX: number) => clientXToBarInEl(clientX, rulerInnerRef.current, BARS);
+	const clientXToBar = (clientX: number) => clientXToBarInEl(clientX, rulerInnerRef.current, bars);
 
 	// Playhead placement should use the element you clicked on (ruler or lanes)
 	const setPlayheadFromEvent = (e: React.PointerEvent) => {
-		setPlayheadPosBars(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, BARS));
+		setPlayheadPosBars(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, bars));
 	};
 
 	// --- RAW (no snap) bar conversion (needed for smooth drag when snap is off) ---
-	const clientXToRawBarInEl = (clientX: number, el: HTMLElement | null, maxBars = BARS) => {
+	const clientXToRawBarInEl = (clientX: number, el: HTMLElement | null, maxBars = bars) => {
 		if (!el) return 1;
 		const rect = el.getBoundingClientRect();
 		const x = clientX - rect.left;
@@ -604,7 +603,7 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	// Allow edges up to BARS+1 for clip moves/resizes (end boundary)
-	const clientXToRawBar = (clientX: number, maxBars = BARS + 1) =>
+	const clientXToRawBar = (clientX: number, maxBars = bars + 1) =>
 		clientXToRawBarInEl(clientX, rulerInnerRef.current, maxBars);
 
 	// Clip pointer actions (move + resize-right) ---
@@ -623,7 +622,6 @@ export default function DAW(_props: TabRendererProps) {
 
 	const clipPtrRef = useRef<ClipPointerState | null>(null);
 	const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
-	const trackResizeRef = useRef<{ trackId: string; pointerId: number; startY: number; startH: number } | null>(null);
 
 	const beginClipMove = (clipId: string) => (e: React.PointerEvent) => {
 		e.stopPropagation();
@@ -635,7 +633,7 @@ export default function DAW(_props: TabRendererProps) {
 		setSelectedTrackId(clip.trackId);
 		setSelectedClipId(clip.id);
 
-		const downRawBar = clientXToRawBar(e.clientX, BARS + 1);
+		const downRawBar = clientXToRawBar(e.clientX, bars + 1);
 
 		clipPtrRef.current = {
 			clipId,
@@ -661,7 +659,7 @@ export default function DAW(_props: TabRendererProps) {
 		setSelectedTrackId(clip.trackId);
 		setSelectedClipId(clip.id);
 
-		const downRawBar = clientXToRawBar(e.clientX, BARS + 1);
+		const downRawBar = clientXToRawBar(e.clientX, bars + 1);
 
 		clipPtrRef.current = {
 			clipId,
@@ -683,7 +681,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		e.preventDefault();
 
-		const rawNow = clientXToRawBar(e.clientX, BARS + 1);
+		const rawNow = clientXToRawBar(e.clientX, bars + 1);
 		const deltaBars = rawNow - st.downRawBar;
 
 		// ALT bypasses snap temporarily
@@ -695,7 +693,7 @@ export default function DAW(_props: TabRendererProps) {
 			if (doSnap) nextStart = applySnap(nextStart);
 
 			// keep clip inside song bounds (end boundary can reach BARS+1)
-			const maxStart = Math.max(1, BARS + 1 - st.clipLenBars);
+			const maxStart = Math.max(1, bars + 1 - st.clipLenBars);
 			nextStart = clamp(nextStart, 1, maxStart);
 
 			setClips((prev) => prev.map((c) => (c.id === st.clipId ? { ...c, startBar: nextStart } : c)));
@@ -709,11 +707,14 @@ export default function DAW(_props: TabRendererProps) {
 		const minLen = doSnap ? stepBars : 0.25; // small-but-usable minimum when snap is off
 		let nextLen = nextEnd - st.startClipBar;
 
-		// clamp so the end boundary never exceeds the asset length (until looping/time-stretch exists)
+		// clamp so the end boundary never exceeds the source duration or the song boundary
+		let maxLen = bars + 1 - st.startClipBar;
 		const clipNow = clips.find((c) => c.id === st.clipId);
-		const assetNow = clipNow?.assetId ? projectAssets.find((a) => a.id === clipNow.assetId) : undefined;
-		const assetBars = assetNow?.durationSec ? durationSecToBars(assetNow.durationSec) : Infinity;
-		const maxLen = Math.min(BARS + 1 - st.startClipBar, assetBars);
+		if (clipNow?.assetId) {
+			const assetNow = projectAssets.find((a) => a.id === clipNow.assetId);
+			const srcBars = assetNow?.durationSec ? durationSecToBars(assetNow.durationSec) : undefined;
+			if (srcBars && Number.isFinite(srcBars) && srcBars > 0) maxLen = Math.min(maxLen, srcBars);
+		}
 		nextLen = clamp(nextLen, minLen, Math.max(minLen, maxLen));
 
 		setClips((prev) => prev.map((c) => (c.id === st.clipId ? { ...c, lengthBars: nextLen } : c)));
@@ -727,41 +728,32 @@ export default function DAW(_props: TabRendererProps) {
 		setDraggingClipId(null);
 	};
 
-	const beginTrackResize = (trackId: string) => (e: React.PointerEvent) => {
+	const beginLaneResize = (trackId: string) => (e: React.PointerEvent) => {
 		e.stopPropagation();
 		e.preventDefault();
-		const track = tracks.find((t) => t.id === trackId);
-		if (!track || track.type !== "audio") return;
-		trackResizeRef.current = {
+		const t = tracks.find((x) => x.id === trackId);
+		laneResizeRef.current = {
 			trackId,
 			pointerId: e.pointerId,
 			startY: e.clientY,
-			startH: track.rowH ?? ROW_H,
+			startH: getTrackHeight(trackId, t?.type),
 		};
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 	};
 
-	useEffect(() => {
-		const onMove = (e: PointerEvent) => {
-			const st = trackResizeRef.current;
-			if (!st || st.pointerId !== e.pointerId) return;
-			e.preventDefault();
-			const nextH = clamp(st.startH + (e.clientY - st.startY), MIN_AUDIO_ROW_H, MAX_AUDIO_ROW_H);
-			setTracks((prev) => prev.map((t) => (t.id === st.trackId ? { ...t, rowH: nextH } : t)));
-		};
-		const onUp = (e: PointerEvent) => {
-			const st = trackResizeRef.current;
-			if (!st || st.pointerId !== e.pointerId) return;
-			trackResizeRef.current = null;
-		};
-		window.addEventListener("pointermove", onMove);
-		window.addEventListener("pointerup", onUp);
-		window.addEventListener("pointercancel", onUp);
-		return () => {
-			window.removeEventListener("pointermove", onMove);
-			window.removeEventListener("pointerup", onUp);
-			window.removeEventListener("pointercancel", onUp);
-		};
-	}, []);
+	const onLaneResizeMove = (e: React.PointerEvent) => {
+		const st = laneResizeRef.current;
+		if (!st || st.pointerId !== e.pointerId) return;
+		e.preventDefault();
+		const next = clamp(st.startH + (e.clientY - st.startY), ROW_H, 260);
+		setTrackHeights((prev) => ({ ...prev, [st.trackId]: next }));
+	};
+
+	const endLaneResize = (e: React.PointerEvent) => {
+		const st = laneResizeRef.current;
+		if (!st || st.pointerId !== e.pointerId) return;
+		laneResizeRef.current = null;
+	};
 
 	// --- Marker dragging ---
 	type DragType = "L" | "R" | "E" | null;
@@ -787,10 +779,10 @@ export default function DAW(_props: TabRendererProps) {
 			setLoopL(nextL);
 			if (loopEnabled && playheadPosBars < nextL) setPlayheadPosBars(nextL);
 		} else if (dragRef.current === "R") {
-			const nextR = clamp(bar, loopL + minGap, BARS);
+			const nextR = clamp(bar, loopL + minGap, bars);
 			setLoopR(nextR);
 		} else if (dragRef.current === "E") {
-			setEndBar(clamp(bar, 1, BARS));
+			setEndBar(clamp(bar, 1, bars));
 		}
 	};
 
@@ -888,6 +880,7 @@ export default function DAW(_props: TabRendererProps) {
 			const audioCount = tracks.filter((t) => t.type === "audio").length + 1;
 			const newTrack = mkTrack("audio", audioCount, trackId);
 			setTracks((prev) => (prev.some((t) => t.id === trackId) ? prev : [...prev, newTrack]));
+			setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? 96 }));
 			track = newTrack;
 		}
 		if (track.type !== "audio") return;
@@ -905,7 +898,7 @@ export default function DAW(_props: TabRendererProps) {
 					const clientX = e.clientX;
 					const laneEl = e.currentTarget as HTMLElement;
 					setSelectedTrackId(trackId);
-					let cursorStart = clientXToBarInEl(clientX, laneEl, BARS);
+					let cursorStart = clientXToBarInEl(clientX, laneEl, bars);
 
 					// Freeze snap/grid at drop time
 					const snapOnDrop = snapEnabled;
@@ -942,6 +935,8 @@ export default function DAW(_props: TabRendererProps) {
 										kind: "audio",
 										name: payload.name || "Audio",
 										objectKey: objectKeyToUse,
+										sizeMB: typeof payload.sizeMB === "number" ? payload.sizeMB : undefined,
+										url: objectKeyToUse ? undefined : (payload.publicUrl ?? payload.url),
 									},
 								];
 							});
@@ -960,12 +955,13 @@ export default function DAW(_props: TabRendererProps) {
 								name: payload.name || "Audio",
 								objectKey: objectKeyToUse,
 								url: payload.url,
+								sizeMB: typeof payload.sizeMB === "number" ? payload.sizeMB : undefined,
 							},
 						];
 					});
 
 					const clipStart = cursorStart;
-					const initLen = clamp(2, snapOnDrop ? stepOnDrop : 0.25, Math.max(0.25, BARS + 1 - cursorStart));
+					const initLen = clamp(2, snapOnDrop ? stepOnDrop : 0.25, Math.max(0.25, bars + 1 - cursorStart));
 					setClips((prev) => [
 						...prev,
 						{
@@ -995,10 +991,9 @@ export default function DAW(_props: TabRendererProps) {
 							const rawBarsLen = durationSecToBars(durSec);
 							const desiredEnd = clipStart + rawBarsLen;
 							const endSnapped = snapEnd(desiredEnd);
-							let nextLen = endSnapped - clipStart;
-							const minLen = snapOnDrop ? stepOnDrop : 0.25;
-							const maxLen = BARS + 1 - clipStart;
-							nextLen = clamp(nextLen, minLen, Math.max(minLen, maxLen));
+							setBars((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(endSnapped + 8))));
+							setEndBar((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(endSnapped + 1))));
+							let nextLen = Math.max(snapOnDrop ? stepOnDrop : 0.25, endSnapped - clipStart);
 							setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, lengthBars: nextLen } : c)));
 						}
 					})();
@@ -1020,7 +1015,7 @@ export default function DAW(_props: TabRendererProps) {
 		setSelectedTrackId(trackId);
 
 		// start position (uses your snap)
-		let cursorStart = clientXToBarInEl(clientX, laneEl, BARS);
+		let cursorStart = clientXToBarInEl(clientX, laneEl, bars);
 
 		// Freeze snap/grid at drop time (don’t change mid-decode)
 		const snapOnDrop = snapEnabled;
@@ -1037,20 +1032,26 @@ export default function DAW(_props: TabRendererProps) {
 			const clipId = crypto.randomUUID();
 			const url = URL.createObjectURL(file);
 
-			setProjectAssets((prev) => [...prev, { id: assetId, kind: "audio", name: file.name, url }]);
+			setProjectAssets((prev) => [
+				...prev,
+				{ id: assetId, kind: "audio", name: file.name, url, sizeMB: file.size / (1024 * 1024) },
+			]);
 
 			try {
 				const setGlobal = (window as any).__ysongSetProjectAssets;
 				if (typeof setGlobal === "function") {
 					setGlobal((prev: any[]) => {
 						if (prev?.some((p) => p.id === assetId)) return prev;
-						return [...(prev || []), { id: assetId, kind: "audio", name: file.name, url }];
+						return [
+							...(prev || []),
+							{ id: assetId, kind: "audio", name: file.name, url, sizeMB: file.size / (1024 * 1024) },
+						];
 					});
 				}
 			} catch {}
 
 			// optimistic initial length (real audio, just unknown duration yet)
-			const maxLenInit = BARS + 1 - cursorStart;
+			const maxLenInit = bars + 1 - cursorStart;
 			const initLen = clamp(2, 0.25, Math.max(0.25, maxLenInit));
 
 			const clipStart = cursorStart;
@@ -1077,11 +1078,9 @@ export default function DAW(_props: TabRendererProps) {
 					const rawBarsLen = durationSecToBars(sec);
 					const desiredEnd = clipStart + rawBarsLen;
 					const endSnapped = snapEnd(desiredEnd);
-					let nextLen = endSnapped - clipStart;
-
-					const minLen = snapOnDrop ? stepOnDrop : 0.25;
-					const maxLen = BARS + 1 - clipStart;
-					nextLen = clamp(nextLen, minLen, Math.max(minLen, maxLen));
+					setBars((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(endSnapped + 8))));
+					setEndBar((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(endSnapped + 1))));
+					let nextLen = Math.max(snapOnDrop ? stepOnDrop : 0.25, endSnapped - clipStart);
 
 					setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, lengthBars: nextLen } : c)));
 				})
@@ -1090,7 +1089,7 @@ export default function DAW(_props: TabRendererProps) {
 				});
 
 			// advance cursor so multi-file drops line up sequentially
-			cursorStart = clamp(clipStart + initLen, 1, BARS);
+			cursorStart = clamp(clipStart + initLen, 1, bars);
 		}
 	};
 
@@ -1114,6 +1113,7 @@ export default function DAW(_props: TabRendererProps) {
 			setLoopL(1);
 			setLoopR(5);
 			setEndBar(17);
+			setBars(MIN_BARS);
 			setLoopEnabled(false);
 			setBpm(120);
 			setSigNum(4);
@@ -1128,7 +1128,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		setTracks(data.tracks ?? []);
 		setClips(data.clips ?? []);
-		setProjectAssets(data.projectAssets ?? []);
+		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
 
 		setSelectedTrackId(data.selectedTrackId ?? data.tracks?.[0]?.id ?? null);
 		setSelectedClipId(data.selectedClipId ?? null);
@@ -1141,6 +1141,7 @@ export default function DAW(_props: TabRendererProps) {
 		setLoopL(data.loopL ?? 1);
 		setLoopR(data.loopR ?? 5);
 		setEndBar(data.endBar ?? 17);
+		setBars(MIN_BARS);
 		setLoopEnabled(!!data.loopEnabled);
 
 		setBpm(clamp(data.bpm ?? 120, 20, 400));
@@ -1154,7 +1155,7 @@ export default function DAW(_props: TabRendererProps) {
 			v: 1,
 			tracks,
 			clips,
-			projectAssets,
+			projectAssets: projectAssets.map(normalizeProjectAssetForPersist),
 			selectedTrackId,
 			selectedClipId,
 
@@ -1190,6 +1191,7 @@ export default function DAW(_props: TabRendererProps) {
 		tracks,
 		clips,
 		projectAssets,
+		trackHeights,
 		selectedTrackId,
 		selectedClipId,
 		snapEnabled,
@@ -1275,9 +1277,9 @@ export default function DAW(_props: TabRendererProps) {
 		const track = tracks.find((t) => t.id === trackId);
 		const baseName = track?.type === "instrument" ? "MIDI Clip" : "Audio Clip";
 
-		const snappedStart = clamp(Math.round(startBar), 1, BARS);
+		const snappedStart = clamp(Math.round(startBar), 1, bars);
 		const desiredLen = 2;
-		const safeLen = clamp(desiredLen, 1, BARS - snappedStart + 1);
+		const safeLen = clamp(desiredLen, 1, bars - snappedStart + 1);
 
 		const id = crypto.randomUUID();
 		setClips((prev) => [
@@ -1354,7 +1356,7 @@ export default function DAW(_props: TabRendererProps) {
 		const buf = await ctx.decodeAudioData(ab.slice(0));
 		audioBuffersRef.current.set(assetId, buf);
 		if (!waveformPeaksRef.current.has(assetId)) {
-			waveformPeaksRef.current.set(assetId, computeStereoPeaksFromBuffer(buf, 2048));
+			waveformPeaksRef.current.set(assetId, computeStereoPeaks(buf, 1024));
 			setWaveformVersion((v) => v + 1);
 		}
 		return buf;
@@ -1363,12 +1365,12 @@ export default function DAW(_props: TabRendererProps) {
 	useEffect(() => {
 		const ids = Array.from(new Set(clips.map((c) => c.assetId).filter(Boolean) as string[]));
 		ids.forEach((id) => {
-			if (waveformPeaksRef.current.has(id)) return;
-			ensureBufferForAsset(id).catch(() => {});
+			if (!waveformPeaksRef.current.has(id)) {
+				ensureBufferForAsset(id).catch(() => {});
+			}
 		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [clips, projectAssets]);
-
-	void waveformVersion;
 
 	const scheduleAudioFromBars = async (startBars: number) => {
 		// Only schedule audio clips (no midi yet)
@@ -1441,6 +1443,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		playStartMsRef.current = performance.now();
 		playStartPosRef.current = startPos;
+		lastUiUpdateMsRef.current = 0;
 		setPlayheadPosBars(startPos);
 		setIsPlaying(true);
 
@@ -1469,7 +1472,7 @@ export default function DAW(_props: TabRendererProps) {
 				}
 			}
 
-			pos = clamp(pos, 1, BARS + 0.999);
+			pos = clamp(pos, 1, bars + 0.999);
 
 			// If looping and we wrapped, reschedule audio for the next loop.
 			if (loopEnabled && pos < lastPosRef.current) {
@@ -1477,7 +1480,22 @@ export default function DAW(_props: TabRendererProps) {
 			}
 			lastPosRef.current = pos;
 
-			setPlayheadPosBars(pos);
+			const tl = timelineRef.current;
+			if (tl) {
+				const x = Math.max(0, barToLeftPx(pos));
+				const margin = Math.max(80, tl.clientWidth * 0.18);
+				const leftEdge = tl.scrollLeft + margin;
+				const rightEdge = tl.scrollLeft + tl.clientWidth - margin;
+				if (x < leftEdge || x > rightEdge) {
+					const target = clamp(x - tl.clientWidth * 0.18, 0, Math.max(0, tl.scrollWidth - tl.clientWidth));
+					tl.scrollLeft = target;
+				}
+			}
+
+			if (now - lastUiUpdateMsRef.current >= 1000 / 30) {
+				lastUiUpdateMsRef.current = now;
+				setPlayheadPosBars(pos);
+			}
 			rafRef.current = requestAnimationFrame(tick);
 		};
 
@@ -1550,6 +1568,7 @@ export default function DAW(_props: TabRendererProps) {
 		return sec / Math.max(0.0001, barSecNow);
 	};
 
+	void waveformVersion;
 	const loopableByAssetId = useMemo(() => {
 		const m = new Map<string, boolean>();
 		for (const a of projectAssets) {
@@ -1607,13 +1626,14 @@ export default function DAW(_props: TabRendererProps) {
 					>
 						{tracks.map((t) => {
 							const selected = t.id === selectedTrackId;
+							const trackH = getTrackHeight(t.id, t.type);
 							return (
 								<div
 									key={t.id}
-									className={`flex items-center gap-2 px-3 border-b border-neutral-200/10 dark:border-neutral-800 ${
+									className={`relative flex items-center gap-2 px-3 border-b border-neutral-200/10 dark:border-neutral-800 ${
 										selected ? "bg-neutral-100/5" : ""
 									}`}
-									style={{ height: t.rowH ?? ROW_H }}
+									style={{ height: trackH }}
 									onPointerDown={() => {
 										setSelectedTrackId(t.id);
 										setSelectedClipId(null);
@@ -1662,6 +1682,16 @@ export default function DAW(_props: TabRendererProps) {
 											✕
 										</YSButton>
 									</div>
+									{t.type === "audio" && (
+										<div
+											className="absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize"
+											onPointerDown={beginLaneResize(t.id)}
+											onPointerMove={onLaneResizeMove}
+											onPointerUp={endLaneResize}
+											onPointerCancel={endLaneResize}
+											title="Resize track height"
+										/>
+									)}
 								</div>
 							);
 						})}
@@ -1773,7 +1803,7 @@ export default function DAW(_props: TabRendererProps) {
 									onPointerCancel={endDrag}
 								>
 									<div className="absolute inset-0 flex">
-										{Array.from({ length: BARS }, (_, i) => {
+										{Array.from({ length: bars }, (_, i) => {
 											const n = i + 1;
 											return (
 												<div
@@ -1890,6 +1920,17 @@ export default function DAW(_props: TabRendererProps) {
 								// Child lanes stopPropagation(), so this only fires when dropping into empty timeline space.
 								e.preventDefault();
 								e.stopPropagation();
+								const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+								const y = e.clientY - rect.top + (timelineRef.current?.scrollTop || 0);
+								const totalTrackHeight = tracks.reduce(
+									(acc, t) => acc + getTrackHeight(t.id, t.type),
+									0,
+								);
+								if (tracks.length === 0 || y > totalTrackHeight) {
+									const newId = crypto.randomUUID();
+									onDropAudioOnTrack(newId)(e as any);
+									return;
+								}
 								const sel = selectedTrackId ? tracks.find((t) => t.id === selectedTrackId) : null;
 								const targetAudio =
 									sel && sel.type === "audio" ? sel.id : tracks.find((t) => t.type === "audio")?.id;
@@ -1942,6 +1983,7 @@ export default function DAW(_props: TabRendererProps) {
 								const laneSelected = t.id === selectedTrackId;
 								const laneBg = idx % 2 === 0 ? "bg-neutral-950/10" : "bg-neutral-950/5";
 								const trackClips = clips.filter((c) => c.trackId === t.id);
+								const trackH = getTrackHeight(t.id, t.type);
 
 								return (
 									<div
@@ -1960,7 +2002,7 @@ export default function DAW(_props: TabRendererProps) {
 											laneSelected ? "outline outline-neutral-200/15" : ""
 										}`}
 										style={{
-											height: t.rowH ?? ROW_H,
+											height: trackH,
 											...laneGridStyle,
 										}}
 										onPointerDown={() => {
@@ -1985,26 +2027,41 @@ export default function DAW(_props: TabRendererProps) {
 											const width = Math.max(24, c.lengthBars * BAR_W);
 											const loopable = !!(c.assetId && loopableByAssetId.get(c.assetId));
 											const hue = hashHue(String(c.assetId || c.name || c.id));
-											const rowH = t.rowH ?? ROW_H;
-											const stereo = c.assetId ? waveformPeaksRef.current.get(c.assetId) : undefined;
-											const assetNow = c.assetId ? projectAssets.find((a) => a.id === c.assetId) : undefined;
-											const assetBars = assetNow?.durationSec ? durationSecToBars(assetNow.durationSec) : c.lengthBars;
-											const visibleFrac = assetBars > 0 ? clamp(c.lengthBars / assetBars, 0.001, 1) : 1;
-											const columns = Math.max(24, Math.floor(Math.max(8, width - 6) / 2));
-											const topWave = stereo ? resamplePeaksRange(stereo.top, columns, 0, visibleFrac) : pseudoWaveHeights((c.assetId || c.id) + ":t", columns);
-											const bottomWave = stereo ? resamplePeaksRange(stereo.bottom, columns, 0, visibleFrac) : pseudoWaveHeights((c.assetId || c.id) + ":b", columns);
+											const stereo = c.assetId
+												? waveformPeaksRef.current.get(c.assetId)
+												: undefined;
+											const assetNow = c.assetId
+												? projectAssets.find((a) => a.id === c.assetId)
+												: undefined;
+											const assetBars = assetNow?.durationSec
+												? durationSecToBars(assetNow.durationSec)
+												: c.lengthBars;
+											const visibleFrac =
+												assetBars > 0 ? clamp(c.lengthBars / assetBars, 0.001, 1) : 1;
+											const columns = Math.max(24, Math.floor(Math.max(8, width - 8) / 2));
+											const topWave = stereo
+												? resamplePeaksRange(stereo.top, columns, 0, visibleFrac)
+												: pseudoWaveHeights((c.assetId || c.id) + ":t", columns);
+											const bottomWave = stereo
+												? resamplePeaksRange(stereo.bottom, columns, 0, visibleFrac)
+												: pseudoWaveHeights((c.assetId || c.id) + ":b", columns);
 											return (
 												<div
 													key={c.id}
-													className={`group absolute top-0 border flex items-start min-w-[24px] overflow-hidden ${isSelected ? "ring-2 ring-sky-300/25" : ""} ${draggingClipId === c.id ? "cursor-grabbing" : "cursor-grab"}`}
+													className={`group absolute border px-2 flex items-start min-w-[24px] overflow-hidden ${
+														isSelected
+															? "border-sky-300/50 ring-2 ring-sky-300/20"
+															: "border-white/18"
+													} ${draggingClipId === c.id ? "cursor-grabbing" : "cursor-grab"}`}
 													style={{
 														left,
 														width,
-														height: Math.max(18, rowH - 1),
-														borderRadius: loopable ? 12 : 0,
-														borderColor: isSelected ? `hsla(${hue}, 92%, 82%, 0.78)` : `hsla(${hue}, 88%, 68%, 0.34)`,
-														background: `linear-gradient(135deg, hsla(${hue}, 76%, 34%, 0.98) 0%, hsla(${(hue + 22) % 360}, 82%, 20%, 0.98) 100%)`,
-														boxShadow: `inset 0 1px 0 hsla(${hue}, 96%, 78%, 0.10), 0 10px 24px rgba(0,0,0,0.24)`,
+														top: 0,
+														height: trackH,
+														borderRadius: loopable ? 14 : 0,
+														background: `linear-gradient(135deg, hsla(${hue}, 82%, 42%, 0.98), hsla(${(hue + 26) % 360}, 82%, 28%, 0.98))`,
+														boxShadow:
+															"inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -14px 24px rgba(0,0,0,0.14)",
 													}}
 													onPointerDown={beginClipMove(c.id)}
 													onPointerMove={onClipPointerMove}
@@ -2012,37 +2069,60 @@ export default function DAW(_props: TabRendererProps) {
 													onPointerCancel={endClipPointer}
 													title={c.name}
 												>
-													<div className="absolute inset-0 pointer-events-none opacity-60 px-[2px] py-[2px] flex flex-col">
-														<div className="flex-1 flex items-center gap-[1px]">
+													<div
+														className="absolute inset-0 pointer-events-none"
+														aria-hidden="true"
+													>
+														<div className="absolute inset-x-0 top-0 bottom-1/2 flex items-end gap-px px-1 pt-2 opacity-40">
 															{topWave.map((h, i) => (
-																<div key={i} style={{ height: `${Math.max(4, Math.round(h * 100))}%`, width: 1, background: "rgba(10,10,18,0.42)" }} />
+																<div
+																	key={i}
+																	style={{
+																		height: `${Math.max(6, Math.round(h * (trackH * 0.42)))}px`,
+																		width: 2,
+																		background: "rgba(8,12,28,0.34)",
+																	}}
+																/>
 															))}
 														</div>
-														<div className="h-px bg-white/10 my-[1px]" />
-														<div className="flex-1 flex items-center gap-[1px]">
+														<div className="absolute left-0 right-0 top-1/2 h-px bg-white/18" />
+														<div className="absolute inset-x-0 top-1/2 bottom-0 flex items-start gap-px px-1 pb-2 opacity-40">
 															{bottomWave.map((h, i) => (
-																<div key={i} style={{ height: `${Math.max(4, Math.round(h * 100))}%`, width: 1, background: "rgba(10,10,18,0.42)" }} />
+																<div
+																	key={i}
+																	style={{
+																		height: `${Math.max(6, Math.round(h * (trackH * 0.42)))}px`,
+																		width: 2,
+																		background: "rgba(8,12,28,0.34)",
+																	}}
+																/>
 															))}
 														</div>
+														<div className="absolute inset-0 bg-gradient-to-b from-white/6 via-transparent to-black/10" />
 													</div>
-													<div className="absolute inset-0 pointer-events-none" style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(255,255,255,0.00) 42%, rgba(0,0,0,0.16) 100%)" }} />
-													<div className="text-[11px] text-white/92 drop-shadow-[0_1px_0_rgba(0,0,0,0.45)] truncate relative z-10 px-3 pt-2">{c.name}</div>
+													<div className="text-[11px] opacity-95 truncate relative z-10 pt-2 drop-shadow-[0_1px_1px_rgba(0,0,0,0.55)]">
+														{c.name}
+													</div>
 													<div
 														className="absolute top-0 right-0 h-full w-[10px] cursor-ew-resize opacity-0 group-hover:opacity-100"
 														onPointerDown={beginClipResizeR(c.id)}
 														title="Resize (hold ALT to bypass snap)"
-														style={{ background: "linear-gradient(to left, rgba(255,255,255,0.14), rgba(255,255,255,0))" }}
+														style={{
+															background:
+																"linear-gradient(to left, rgba(255,255,255,0.10), rgba(255,255,255,0))",
+														}}
 													/>
 												</div>
 											);
 										})}
-
 										{t.type === "audio" && (
 											<div
 												className="absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize z-20"
-												onPointerDown={beginTrackResize(t.id)}
+												onPointerDown={beginLaneResize(t.id)}
+												onPointerMove={onLaneResizeMove}
+												onPointerUp={endLaneResize}
+												onPointerCancel={endLaneResize}
 												title="Resize track height"
-												style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.08))" }}
 											/>
 										)}
 									</div>
