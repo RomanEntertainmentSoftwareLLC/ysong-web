@@ -108,36 +108,150 @@ export function normalizeGmProgram(program: number | undefined | null) {
   return Math.max(0, Math.min(127, Math.round(Number(program ?? 0) || 0)));
 }
 
+export type GmPreviewPartial = {
+  ratio: number;
+  gain: number;
+  oscillator?: OscillatorType;
+  detuneCents?: number;
+};
+
 export type GmPreviewProfile = {
-  oscillator: OscillatorType;
+  family: string;
+  partials: GmPreviewPartial[];
   filterHz: number;
   filterQ: number;
   attack: number;
   release: number;
+  // When present, the voice naturally decays even while the key remains held.
+  // This is what makes piano/guitar/mallet previews behave like struck/plucked
+  // instruments instead of the old endless generic oscillator.
   decay?: number;
+  sustain?: number;
+  vibratoHz?: number;
+  vibratoCents?: number;
 };
 
-// Browser fallback only. This is intentionally NOT pretending to be a sampled
-// GM sound module. It gives every GM program a recognisable family-level tone
-// until YSong Instruments / SoundFont playback or a Bridge-hosted VST is used.
+// Dependency-free browser fallback used only when no native VST is assigned.
+// This is still a synthesised preview rather than a multi-gigabyte sample bank,
+// but the timbre/envelope now follows the selected GM family: pianos are struck
+// additive voices, organs use drawbar-like harmonics, guitars/basses decay,
+// strings/choirs swell, brass/reeds carry brighter harmonic spectra, etc.
 export function gmPreviewProfile(programRaw: number): GmPreviewProfile {
   const p = normalizeGmProgram(programRaw);
   const family = Math.floor(p / 8);
-  if (family === 0) return { oscillator: "triangle", filterHz: 7200, filterQ: 0.4, attack: 0.004, release: 0.16, decay: 0.9 }; // pianos
-  if (family === 1) return { oscillator: "sine", filterHz: 9800, filterQ: 0.25, attack: 0.003, release: 0.8, decay: 1.8 }; // chromatic percussion
-  if (family === 2) return { oscillator: "square", filterHz: 5200, filterQ: 0.7, attack: 0.012, release: 0.22 }; // organs
-  if (family === 3) return { oscillator: p >= 29 ? "sawtooth" : "triangle", filterHz: 5600, filterQ: 0.5, attack: 0.003, release: 0.18, decay: 0.7 }; // guitars
-  if (family === 4) return { oscillator: "sawtooth", filterHz: 2700, filterQ: 0.8, attack: 0.004, release: 0.16 }; // basses
-  if (family === 5) return { oscillator: "sawtooth", filterHz: 4300, filterQ: 0.55, attack: p === 45 ? 0.002 : 0.045, release: 0.32 }; // strings
-  if (family === 6) return { oscillator: "sawtooth", filterHz: 3600, filterQ: 0.7, attack: 0.12, release: 0.45 }; // ensembles / choir
-  if (family === 7) return { oscillator: "square", filterHz: 5200, filterQ: 0.9, attack: 0.018, release: 0.20 }; // brass
-  if (family === 8 || family === 9) return { oscillator: "sine", filterHz: 8400, filterQ: 0.35, attack: 0.025, release: 0.18 }; // reeds / pipes
-  if (family === 10) return { oscillator: p % 2 ? "sawtooth" : "square", filterHz: 6800, filterQ: 0.55, attack: 0.005, release: 0.16 }; // synth leads
-  if (family === 11) return { oscillator: "sawtooth", filterHz: 2600, filterQ: 1.0, attack: 0.18, release: 0.55 }; // pads
-  if (family === 12) return { oscillator: "sine", filterHz: 5000, filterQ: 1.2, attack: 0.08, release: 0.7 }; // synth FX
-  if (family === 13) return { oscillator: "triangle", filterHz: 6500, filterQ: 0.45, attack: 0.008, release: 0.22 }; // ethnic
-  if (family === 14) return { oscillator: "triangle", filterHz: 7600, filterQ: 0.4, attack: 0.003, release: 0.16, decay: 0.5 }; // percussion
-  return { oscillator: "sine", filterHz: 9000, filterQ: 0.25, attack: 0.002, release: 0.20, decay: 0.35 }; // sound effects
+
+  if (family === 0) { // Piano
+    const bright = p === 1 || p === 3;
+    return {
+      family: "Piano",
+      partials: [
+        { ratio: 1, gain: 1, oscillator: "sine" },
+        { ratio: 2, gain: bright ? 0.48 : 0.36, oscillator: "sine" },
+        { ratio: 3, gain: bright ? 0.24 : 0.16, oscillator: "sine" },
+        { ratio: 4, gain: 0.10, oscillator: "sine" },
+        { ratio: 6, gain: 0.045, oscillator: "sine" },
+      ],
+      filterHz: bright ? 9800 : 7600, filterQ: 0.35, attack: 0.0025, release: 0.16, decay: p >= 4 ? 1.5 : 1.15, sustain: 0.035,
+    };
+  }
+
+  if (family === 1) { // Chromatic percussion
+    const bellLike = p === 8 || p === 9 || p === 10 || p === 14;
+    return {
+      family: "Chromatic Percussion",
+      partials: bellLike
+        ? [{ ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 2.76, gain: 0.42, oscillator: "sine" }, { ratio: 5.4, gain: 0.16, oscillator: "sine" }]
+        : [{ ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 2, gain: 0.24, oscillator: "sine" }, { ratio: 3, gain: 0.10, oscillator: "triangle" }],
+      filterHz: 11000, filterQ: 0.25, attack: 0.0015, release: bellLike ? 0.9 : 0.24, decay: bellLike ? 2.4 : 0.72, sustain: 0.012,
+    };
+  }
+
+  if (family === 2) { // Organ
+    const church = p === 19;
+    return {
+      family: "Organ",
+      partials: church
+        ? [{ ratio: 0.5, gain: 0.20, oscillator: "sine" }, { ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 2, gain: 0.72, oscillator: "sine" }, { ratio: 3, gain: 0.38, oscillator: "sine" }, { ratio: 4, gain: 0.26, oscillator: "sine" }]
+        : [{ ratio: 0.5, gain: 0.14, oscillator: "sine" }, { ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 2, gain: 0.58, oscillator: "sine" }, { ratio: 3, gain: 0.24, oscillator: "sine" }, { ratio: 4, gain: 0.16, oscillator: "sine" }, { ratio: 6, gain: 0.08, oscillator: "sine" }],
+      filterHz: church ? 6200 : 9000, filterQ: 0.3, attack: 0.008, release: church ? 0.38 : 0.10, sustain: 0.92, vibratoHz: p === 16 || p === 17 ? 6.2 : undefined, vibratoCents: p === 16 || p === 17 ? 5 : undefined,
+    };
+  }
+
+  if (family === 3) { // Guitar
+    const distorted = p >= 29;
+    return {
+      family: "Guitar",
+      partials: distorted
+        ? [{ ratio: 1, gain: 1, oscillator: "sawtooth" }, { ratio: 2, gain: 0.22, oscillator: "square", detuneCents: 2 }]
+        : [{ ratio: 1, gain: 1, oscillator: "triangle" }, { ratio: 2, gain: 0.30, oscillator: "sine" }, { ratio: 3, gain: 0.12, oscillator: "sine" }],
+      filterHz: distorted ? 5200 : 6800, filterQ: distorted ? 0.9 : 0.45, attack: 0.0018, release: 0.14, decay: distorted ? 1.4 : 0.72, sustain: distorted ? 0.18 : 0.025,
+    };
+  }
+
+  if (family === 4) { // Bass
+    return {
+      family: "Bass",
+      partials: [{ ratio: 1, gain: 1, oscillator: p >= 38 ? "sawtooth" : "triangle" }, { ratio: 2, gain: 0.22, oscillator: "sine" }, { ratio: 0.5, gain: 0.10, oscillator: "sine" }],
+      filterHz: p >= 38 ? 2600 : 1900, filterQ: 0.65, attack: 0.003, release: 0.12, decay: p === 32 ? 0.85 : undefined, sustain: p === 32 ? 0.06 : 0.78,
+    };
+  }
+
+  if (family === 5) { // Solo strings / harp / timpani
+    if (p === 45) return { family: "Pizzicato Strings", partials: [{ ratio: 1, gain: 1, oscillator: "triangle" }, { ratio: 2, gain: 0.28, oscillator: "sine" }], filterHz: 6200, filterQ: 0.4, attack: 0.002, release: 0.13, decay: 0.52, sustain: 0.02 };
+    if (p === 46) return { family: "Harp", partials: [{ ratio: 1, gain: 1, oscillator: "triangle" }, { ratio: 2, gain: 0.30, oscillator: "sine" }, { ratio: 3, gain: 0.12, oscillator: "sine" }], filterHz: 7600, filterQ: 0.3, attack: 0.002, release: 0.30, decay: 1.55, sustain: 0.02 };
+    if (p === 47) return { family: "Timpani", partials: [{ ratio: 0.5, gain: 0.55, oscillator: "sine" }, { ratio: 1, gain: 1, oscillator: "triangle" }], filterHz: 1800, filterQ: 1.0, attack: 0.002, release: 0.20, decay: 0.72, sustain: 0.01 };
+    return {
+      family: "Strings",
+      partials: [{ ratio: 1, gain: 1, oscillator: "sawtooth", detuneCents: -3 }, { ratio: 1, gain: 0.72, oscillator: "sawtooth", detuneCents: 3 }, { ratio: 2, gain: 0.12, oscillator: "sine" }],
+      filterHz: 4700, filterQ: 0.45, attack: p === 44 ? 0.028 : 0.055, release: 0.34, sustain: 0.82, vibratoHz: 5.2, vibratoCents: 4,
+    };
+  }
+
+  if (family === 6) { // Ensembles / choir
+    const choir = p >= 52 && p <= 54;
+    return {
+      family: choir ? "Choir" : "String Ensemble",
+      partials: choir
+        ? [{ ratio: 1, gain: 1, oscillator: "sine", detuneCents: -4 }, { ratio: 1, gain: 0.86, oscillator: "triangle", detuneCents: 4 }, { ratio: 2, gain: 0.16, oscillator: "sine" }]
+        : [{ ratio: 1, gain: 1, oscillator: "sawtooth", detuneCents: -5 }, { ratio: 1, gain: 0.72, oscillator: "sawtooth", detuneCents: 5 }],
+      filterHz: choir ? 3300 : 4400, filterQ: choir ? 1.05 : 0.55, attack: choir ? 0.13 : 0.09, release: 0.48, sustain: 0.80, vibratoHz: choir ? 5.0 : 5.4, vibratoCents: choir ? 3 : 4,
+    };
+  }
+
+  if (family === 7) { // Brass
+    return { family: "Brass", partials: [{ ratio: 1, gain: 1, oscillator: "sawtooth" }, { ratio: 1, gain: 0.25, oscillator: "square", detuneCents: 2 }], filterHz: p === 58 ? 2600 : 5200, filterQ: 0.8, attack: 0.018, release: 0.16, sustain: 0.82, vibratoHz: 5.1, vibratoCents: 2.5 };
+  }
+
+  if (family === 8) { // Reed
+    return { family: "Reed", partials: [{ ratio: 1, gain: 1, oscillator: "square" }, { ratio: 2, gain: 0.18, oscillator: "sawtooth" }], filterHz: 4300, filterQ: 1.1, attack: 0.018, release: 0.14, sustain: 0.78, vibratoHz: 5.3, vibratoCents: 4 };
+  }
+
+  if (family === 9) { // Pipe
+    return { family: "Pipe", partials: [{ ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 2, gain: 0.16, oscillator: "triangle" }], filterHz: 7800, filterQ: 0.28, attack: 0.026, release: 0.18, sustain: 0.84, vibratoHz: 5.0, vibratoCents: 3 };
+  }
+
+  if (family === 10) { // Synth lead
+    return { family: "Synth Lead", partials: [{ ratio: 1, gain: 1, oscillator: p % 2 ? "sawtooth" : "square" }, { ratio: 1, gain: 0.32, oscillator: "sawtooth", detuneCents: 7 }], filterHz: 7200, filterQ: 0.7, attack: 0.004, release: 0.12, sustain: 0.88, vibratoHz: 5.8, vibratoCents: 5 };
+  }
+
+  if (family === 11) { // Synth pad
+    return { family: "Synth Pad", partials: [{ ratio: 1, gain: 1, oscillator: "sawtooth", detuneCents: -8 }, { ratio: 1, gain: 0.90, oscillator: "triangle", detuneCents: 8 }, { ratio: 2, gain: 0.12, oscillator: "sine" }], filterHz: p === 93 ? 6200 : 2800, filterQ: 0.9, attack: 0.20, release: 0.65, sustain: 0.78, vibratoHz: 4.6, vibratoCents: 5 };
+  }
+
+  if (family === 12) { // Synth effects
+    return { family: "Synth FX", partials: [{ ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 1.5, gain: 0.24, oscillator: "triangle" }, { ratio: 2.01, gain: 0.14, oscillator: "sine" }], filterHz: 5400, filterQ: 1.2, attack: 0.08, release: 0.70, sustain: 0.68, vibratoHz: 3.7, vibratoCents: 10 };
+  }
+
+  if (family === 13) { // Ethnic
+    return { family: "Ethnic", partials: [{ ratio: 1, gain: 1, oscillator: "triangle" }, { ratio: 2, gain: 0.26, oscillator: "sine" }, { ratio: 3, gain: 0.09, oscillator: "sine" }], filterHz: 6500, filterQ: 0.5, attack: 0.003, release: 0.18, decay: p === 104 || p === 107 ? 0.78 : undefined, sustain: 0.70 };
+  }
+
+  if (family === 14) { // Percussive
+    return { family: "Percussive", partials: [{ ratio: 1, gain: 1, oscillator: "triangle" }, { ratio: 2.41, gain: 0.24, oscillator: "sine" }], filterHz: 7600, filterQ: 0.4, attack: 0.0015, release: 0.14, decay: 0.42, sustain: 0.015 };
+  }
+
+  // GM sound effects are intentionally short synthetic cues in the browser fallback.
+  return { family: "Sound FX", partials: [{ ratio: 1, gain: 1, oscillator: "sine" }, { ratio: 1.73, gain: 0.28, oscillator: "triangle" }], filterHz: 9000, filterQ: 0.25, attack: 0.0015, release: 0.20, decay: 0.35, sustain: 0.01 };
 }
 
 export function midiToName(midi: number) {

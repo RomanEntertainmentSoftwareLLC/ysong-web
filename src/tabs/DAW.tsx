@@ -438,6 +438,76 @@ function isEditableTarget(t: EventTarget | null) {
 	return tag === "input" || tag === "textarea" || t.isContentEditable;
 }
 
+type GmPreviewVoiceNodes = {
+	sources: OscillatorNode[];
+	gain: GainNode;
+	lfo?: OscillatorNode;
+	release: number;
+};
+
+/**
+ * Create the dependency-free General MIDI fallback voice. The old renderer used
+ * one generic oscillator per GM family, which made a piano, organ and guitar
+ * sound like barely-related beeps. This additive voice keeps the preview light
+ * enough for the browser while giving each GM family a musically appropriate
+ * harmonic spectrum and envelope. Native VSTs still bypass this completely.
+ */
+function createGmPreviewVoice(
+	ctx: AudioContext,
+	program: number,
+	baseHz: number,
+	velocity: number,
+	destination: AudioNode,
+	startAt: number,
+): GmPreviewVoiceNodes {
+	const profile = gmPreviewProfile(program);
+	const filter = ctx.createBiquadFilter();
+	const voiceGain = ctx.createGain();
+	filter.type = "lowpass";
+	filter.frequency.setValueAtTime(profile.filterHz, startAt);
+	filter.Q.setValueAtTime(profile.filterQ, startAt);
+	filter.connect(voiceGain);
+	voiceGain.connect(destination);
+
+	const partialTotal = Math.max(1, profile.partials.reduce((sum, partial) => sum + Math.max(0, partial.gain), 0));
+	const velocityAmp = clamp(velocity / 127, 0.01, 1) * Math.min(0.20, 0.30 / Math.sqrt(partialTotal));
+	const attackEnd = startAt + Math.max(0.001, profile.attack);
+	voiceGain.gain.setValueAtTime(0.0001, startAt);
+	voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0002, velocityAmp), attackEnd);
+	if (profile.decay) {
+		const sustainAmp = Math.max(0.0001, velocityAmp * Math.max(0.005, profile.sustain ?? 0.04));
+		voiceGain.gain.exponentialRampToValueAtTime(sustainAmp, startAt + Math.max(profile.attack + 0.01, profile.decay));
+	}
+
+	const sources: OscillatorNode[] = [];
+	for (const partial of profile.partials) {
+		const osc = ctx.createOscillator();
+		const partialGain = ctx.createGain();
+		osc.type = partial.oscillator ?? "sine";
+		osc.frequency.setValueAtTime(Math.max(8, baseHz * partial.ratio), startAt);
+		osc.detune.setValueAtTime(partial.detuneCents ?? 0, startAt);
+		partialGain.gain.setValueAtTime(Math.max(0, partial.gain) / partialTotal, startAt);
+		osc.connect(partialGain);
+		partialGain.connect(filter);
+		osc.start(startAt);
+		sources.push(osc);
+	}
+
+	let lfo: OscillatorNode | undefined;
+	if ((profile.vibratoCents ?? 0) > 0) {
+		lfo = ctx.createOscillator();
+		const lfoGain = ctx.createGain();
+		lfo.type = "sine";
+		lfo.frequency.setValueAtTime(profile.vibratoHz ?? 5.2, startAt);
+		lfoGain.gain.setValueAtTime(profile.vibratoCents ?? 0, startAt);
+		lfo.connect(lfoGain);
+		for (const osc of sources) lfoGain.connect(osc.detune);
+		lfo.start(startAt);
+	}
+
+	return { sources, gain: voiceGain, lfo, release: profile.release };
+}
+
 // --- Snap helpers (Absolute snapping only) ---
 function parseGridValue(v: GridValue): { kind: "bar" } | { kind: "note"; div: number; triplet: boolean } {
 	if (v === "bar") return { kind: "bar" };
@@ -748,7 +818,7 @@ export default function DAW(_props: TabRendererProps) {
 	const activeClipSourcesRef = useRef<Map<string, Set<AudioScheduledSourceNode>>>(new Map());
 	const audioScheduleGenerationRef = useRef(0);
 	const gmProgramOverrideRef = useRef<Map<string, number>>(new Map());
-	type LiveGmVoice = { osc: OscillatorNode; gain: GainNode; trackId: string };
+	type LiveGmVoice = GmPreviewVoiceNodes & { trackId: string };
 	const liveGmVoicesRef = useRef<Map<string, LiveGmVoice>>(new Map());
 	const liveVstNoteIdsRef = useRef<Map<string, number>>(new Map());
 	type RecordingSession = { clipId: string; trackId: string; startedAtMs: number; startBar: number; active: Map<number, { id: string; startBars: number; velocity: number }> };
@@ -1771,13 +1841,26 @@ export default function DAW(_props: TabRendererProps) {
 		setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: [...(c.midiNotes ?? []), { id: held.id, pitch, startBars: held.startBars, lengthBars, velocity: held.velocity }], lengthBars: Math.max(c.lengthBars, atBars + 1 / 32) } : c));
 	};
 
-	const currentMidiTargetTrack = () =>
-		tracks.find((t) => t.id === selectedTrackId && t.type === "instrument")
-		?? tracks.find((t) => t.type === "instrument" && t.arm)
-		?? tracks.find((t) => t.type === "instrument")
-		?? null;
+	// Live performance follows selection, period. Arm is a recording state, not an
+	// excuse to make an unselected synth play. "All Inputs" means every enabled
+	// hardware MIDI device may feed THIS selected instrument track.
+	const selectedMidiTarget = tracks.find((t) => t.id === selectedTrackId && t.type === "instrument") ?? null;
+	const currentMidiTargetTrack = () => selectedMidiTarget;
 
 	const liveNoteKey = (trackId: string, pitch: number) => `${trackId}:${pitch}`;
+
+	const releaseLiveGmVoice = (voice: LiveGmVoice, fast = false) => {
+		const now = voice.gain.context.currentTime;
+		const release = fast ? 0.045 : Math.max(0.06, Math.min(0.7, voice.release));
+		try {
+			voice.gain.gain.cancelScheduledValues(now);
+			voice.gain.gain.setTargetAtTime(0.0001, now, Math.max(0.008, release / 5));
+		} catch {}
+		for (const osc of voice.sources) {
+			try { osc.stop(now + release + 0.03); } catch {}
+		}
+		try { voice.lfo?.stop(now + release + 0.03); } catch {}
+	};
 
 	const liveMidiNoteOn = (pitch: number, velocity = 96, targetOverride?: Track | null) => {
 		const target = targetOverride ?? currentMidiTargetTrack();
@@ -1791,7 +1874,7 @@ export default function DAW(_props: TabRendererProps) {
 			const noteId = stablePositiveInt(`${target.id}:live:${normalizedPitch}:${Date.now()}:${Math.random()}`);
 			liveVstNoteIdsRef.current.set(key, noteId);
 			void ensureVstLoaded(target)
-				.then(() => bridgeApi.scheduleVst3Midi(target.id, [{ kind: "on", note: normalizedPitch, velocity: normalizedVelocity, noteId, whenUnixMs: Date.now() + 4 }]))
+				.then(() => bridgeApi.scheduleVst3Midi(target.id, [{ kind: "on", note: normalizedPitch, velocity: normalizedVelocity, noteId, whenUnixMs: Date.now() + 4, isLive: true }]))
 				.catch(() => {});
 			return;
 		}
@@ -1799,31 +1882,22 @@ export default function DAW(_props: TabRendererProps) {
 		// Replace an already-held browser voice for the same track/pitch cleanly.
 		const existing = liveGmVoicesRef.current.get(key);
 		if (existing) {
-			try { existing.gain.gain.cancelScheduledValues(existing.gain.context.currentTime); existing.gain.gain.setTargetAtTime(0.0001, existing.gain.context.currentTime, 0.008); } catch {}
-			try { existing.osc.stop(existing.osc.context.currentTime + 0.04); } catch {}
+			releaseLiveGmVoice(existing, true);
 			liveGmVoicesRef.current.delete(key);
 		}
 
 		const ctx = ensureAudioCtx();
 		void ctx.resume().catch(() => {});
-		const profile = gmPreviewProfile(target.gmProgram ?? 0);
-		const osc = ctx.createOscillator();
-		const filter = ctx.createBiquadFilter();
-		const gain = ctx.createGain();
-		osc.type = profile.oscillator;
-		osc.frequency.value = midiToFrequency(normalizedPitch);
-		filter.type = "lowpass";
-		filter.frequency.value = profile.filterHz;
-		filter.Q.value = profile.filterQ;
 		const now = ctx.currentTime;
-		const amp = clamp(normalizedVelocity / 127, 0.02, 1) * 0.16;
-		gain.gain.setValueAtTime(0.0001, now);
-		gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, amp), now + Math.max(0.002, Math.min(profile.attack, 0.08)));
-		osc.connect(filter);
-		filter.connect(gain);
-		gain.connect(ensureTrackAudioBus(target.id).gain);
-		osc.start(now);
-		liveGmVoicesRef.current.set(key, { osc, gain, trackId: target.id });
+		const voice = createGmPreviewVoice(
+			ctx,
+			normalizeGmProgram(target.gmProgram ?? 0),
+			midiToFrequency(normalizedPitch),
+			normalizedVelocity,
+			ensureTrackAudioBus(target.id).gain,
+			now,
+		);
+		liveGmVoicesRef.current.set(key, { ...voice, trackId: target.id });
 	};
 
 	const liveMidiNoteOff = (pitch: number, targetOverride?: Track | null) => {
@@ -1836,26 +1910,19 @@ export default function DAW(_props: TabRendererProps) {
 		if (target.vst3PluginPath) {
 			const noteId = liveVstNoteIdsRef.current.get(key);
 			liveVstNoteIdsRef.current.delete(key);
-			if (noteId != null) void bridgeApi.scheduleVst3Midi(target.id, [{ kind: "off", note: normalizedPitch, velocity: 0, noteId, whenUnixMs: Date.now() + 2 }]).catch(() => {});
+			if (noteId != null) void bridgeApi.scheduleVst3Midi(target.id, [{ kind: "off", note: normalizedPitch, velocity: 0, noteId, whenUnixMs: Date.now() + 2, isLive: true }]).catch(() => {});
 			return;
 		}
 
 		const voice = liveGmVoicesRef.current.get(key);
 		if (!voice) return;
 		liveGmVoicesRef.current.delete(key);
-		const ctx = voice.gain.context;
-		const now = ctx.currentTime;
-		try {
-			voice.gain.gain.cancelScheduledValues(now);
-			voice.gain.gain.setTargetAtTime(0.0001, now, 0.025);
-			voice.osc.stop(now + 0.18);
-		} catch {}
+		releaseLiveGmVoice(voice, false);
 	};
 
 	const panicLiveMidi = () => {
 		for (const [key, voice] of liveGmVoicesRef.current) {
-			const now = voice.gain.context.currentTime;
-			try { voice.gain.gain.cancelScheduledValues(now); voice.gain.gain.setTargetAtTime(0.0001, now, 0.006); voice.osc.stop(now + 0.05); } catch {}
+			releaseLiveGmVoice(voice, true);
 			liveGmVoicesRef.current.delete(key);
 		}
 		liveVstNoteIdsRef.current.clear();
@@ -1870,15 +1937,40 @@ export default function DAW(_props: TabRendererProps) {
 		window.setTimeout(() => liveMidiNoteOff(pitch, target), 420);
 	};
 
-	// Tell the native Bridge which YSong instrument track should receive hardware MIDI.
-	// Selected instrument wins; otherwise an armed instrument track is used as a fallback.
+	const previousLiveTargetIdRef = useRef<string | null>(null);
 	useEffect(() => {
-		const target = currentMidiTargetTrack();
-		void bridgeApi.setMidiRoute(target?.id ?? null, target?.midiInputName ?? null).catch(() => {});
-		return () => { void bridgeApi.setMidiRoute(null, null).catch(() => {}); };
-		// Track selection/arming/instrument assignment are the routing contract.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedTrackId, tracks]);
+		const previousId = previousLiveTargetIdRef.current;
+		const nextId = selectedMidiTarget?.id ?? null;
+		if (previousId && previousId !== nextId) {
+			// Release browser-generated GM voices belonging to the track we just left.
+			for (const [key, voice] of liveGmVoicesRef.current) {
+				if (voice.trackId !== previousId) continue;
+				releaseLiveGmVoice(voice, true);
+				liveGmVoicesRef.current.delete(key);
+			}
+
+			// YSong's on-screen keys schedule VST notes through HTTP rather than the native
+			// hardware route, so explicitly release those held notes as selection moves.
+			for (const [key, noteId] of liveVstNoteIdsRef.current) {
+				if (!key.startsWith(`${previousId}:`)) continue;
+				const pitch = Number(key.slice(key.lastIndexOf(":") + 1));
+				if (Number.isFinite(pitch)) void bridgeApi.scheduleVst3Midi(previousId, [{ kind: "off", note: clamp(pitch, 0, 127), velocity: 0, noteId, whenUnixMs: Date.now() + 2, isLive: true }]).catch(() => {});
+				liveVstNoteIdsRef.current.delete(key);
+			}
+			setHardwareActiveNotes(new Set());
+		}
+		previousLiveTargetIdRef.current = nextId;
+	}, [selectedMidiTarget?.id]);
+
+	// Tell the native Bridge which ONE YSong instrument track owns hardware MIDI.
+	// Selecting an audio track (or no track) clears the native route completely.
+	useEffect(() => {
+		void bridgeApi.setMidiRoute(selectedMidiTarget?.id ?? null, selectedMidiTarget?.midiInputName ?? null).catch(() => {});
+	}, [selectedMidiTarget?.id, selectedMidiTarget?.midiInputName]);
+
+	// Clear the native route only when the DAW itself unmounts. Do not clear/re-add the
+	// route on every ordinary track-state render; those tiny gaps can drop live notes.
+	useEffect(() => () => { void bridgeApi.setMidiRoute(null, null).catch(() => {}); }, []);
 
 	// Native hardware MIDI arrives as an SSE monitor stream. Bridge routes note events
 	// directly into loaded VST3 instances for low latency; browser-GM tracks are played
@@ -1905,7 +1997,7 @@ export default function DAW(_props: TabRendererProps) {
 			else liveMidiNoteOff(note, target);
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedTrackId, tracks]);
+	}, [selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
 
 	const finishMidiRecording = () => {
 		const session = recordingSessionRef.current;
@@ -1932,7 +2024,7 @@ export default function DAW(_props: TabRendererProps) {
 		}
 		const target = currentMidiTargetTrack();
 		if (!target) {
-			window.alert("Select or arm an Instrument Track before recording MIDI.");
+			window.alert("Select an Instrument Track before recording MIDI.");
 			return;
 		}
 		const clipId = crypto.randomUUID();
@@ -2872,70 +2964,59 @@ export default function DAW(_props: TabRendererProps) {
 				const localEndBars = playToBar - c.startBar;
 				const bendRange = Math.max(1, c.midiBendRange ?? 12);
 				const baseHz = midiToFrequency(note.pitch);
-				const bendToHz = (semi: number) => baseHz * Math.pow(2, clamp(semi, -bendRange, bendRange) / 12);
-
-				const osc = ctx.createOscillator();
-				const gain = ctx.createGain();
-				const filter = ctx.createBiquadFilter();
-				const lfo = ctx.createOscillator();
-				const lfoGain = ctx.createGain();
-
-				osc.type = profile.oscillator;
-				filter.type = "lowpass";
-				filter.frequency.value = profile.filterHz;
-				filter.Q.value = profile.filterQ;
-
-				const initialBend = interpolateAutomation(c.midiPitchBend, localStartBars, 0);
-				osc.frequency.setValueAtTime(bendToHz(initialBend), startAt);
-				for (const point of (c.midiPitchBend ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
-					if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
-					const at = startAt + (point.atBars - localStartBars) * barSec;
-					osc.frequency.linearRampToValueAtTime(bendToHz(point.value), at);
-				}
-
-				// CC1 modulation is mapped to a musical vibrato depth in the built-in synth.
-				// Native VST3 note playback is enabled in this pass; CC/pitch-bend mapping
-				// is intentionally deferred until the first instrument-hosting path is proven.
-				lfo.frequency.value = 5.2;
-				const modDepthHz = (cc: number) => baseHz * 0.018 * clamp(cc / 127, 0, 1);
-				const initialMod = interpolateAutomation(c.midiModulation, localStartBars, 0);
-				lfoGain.gain.setValueAtTime(modDepthHz(initialMod), startAt);
-				for (const point of (c.midiModulation ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
-					if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
-					const at = startAt + (point.atBars - localStartBars) * barSec;
-					lfoGain.gain.linearRampToValueAtTime(modDepthHz(point.value), at);
-				}
-
 				const trackBus = ensureTrackAudioBus(c.trackId);
-				osc.connect(filter);
-				filter.connect(gain);
-				lfo.connect(lfoGain);
-				lfoGain.connect(osc.frequency);
-				gain.connect(trackBus.gain);
+				const voice = createGmPreviewVoice(ctx, gmProgram, baseHz, note.velocity, trackBus.gain, startAt);
 
-				const velocityAmp = clamp(note.velocity / 127, 0.01, 1) * 0.17;
-				const attack = Math.min(profile.attack, durationSec * 0.4);
-				const release = Math.min(profile.release, durationSec * 0.6);
-				gain.gain.cancelScheduledValues(startAt);
-				gain.gain.setValueAtTime(0.0001, startAt);
-				gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, velocityAmp), startAt + Math.max(0.001, attack));
-				if (profile.decay) {
-					const decayAt = startAt + Math.max(0.04, Math.min(durationSec * 0.8, profile.decay));
-					gain.gain.exponentialRampToValueAtTime(0.0001, decayAt);
-				} else {
-					const releaseAt = startAt + Math.max(0.01, durationSec - release);
-					gain.gain.setValueAtTime(Math.max(0.0002, velocityAmp), releaseAt);
-					gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSec);
+				// Pitch bend is applied in cents so every additive partial bends together and
+				// keeps its harmonic ratio. This replaces the old single-oscillator bend.
+				const initialBend = clamp(interpolateAutomation(c.midiPitchBend, localStartBars, 0), -bendRange, bendRange);
+				voice.sources.forEach((osc, index) => {
+					const baseDetune = profile.partials[index]?.detuneCents ?? 0;
+					osc.detune.setValueAtTime(baseDetune + initialBend * 100, startAt);
+					for (const point of (c.midiPitchBend ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
+						if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
+						const at = startAt + (point.atBars - localStartBars) * barSec;
+						osc.detune.linearRampToValueAtTime(baseDetune + clamp(point.value, -bendRange, bendRange) * 100, at);
+					}
+				});
+
+				// CC1 adds vibrato depth on top of the family voice. Use cents instead of Hz
+				// so modulation depth remains musical across the keyboard.
+				let ccLfo: OscillatorNode | undefined;
+				if ((c.midiModulation?.length ?? 0) > 0) {
+					ccLfo = ctx.createOscillator();
+					const ccLfoGain = ctx.createGain();
+					ccLfo.type = "sine";
+					ccLfo.frequency.setValueAtTime(5.2, startAt);
+					const depthCents = (cc: number) => 30 * clamp(cc / 127, 0, 1);
+					const initialMod = interpolateAutomation(c.midiModulation, localStartBars, 0);
+					ccLfoGain.gain.setValueAtTime(depthCents(initialMod), startAt);
+					for (const point of (c.midiModulation ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
+						if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
+						const at = startAt + (point.atBars - localStartBars) * barSec;
+						ccLfoGain.gain.linearRampToValueAtTime(depthCents(point.value), at);
+					}
+					ccLfo.connect(ccLfoGain);
+					for (const osc of voice.sources) ccLfoGain.connect(osc.detune);
+					ccLfo.start(startAt);
 				}
 
+				const release = Math.min(voice.release, durationSec * 0.55);
+				const releaseAt = startAt + Math.max(0.006, durationSec - release);
 				try {
-					osc.start(startAt);
-					lfo.start(startAt);
-					osc.stop(startAt + durationSec + 0.02);
-					lfo.stop(startAt + durationSec + 0.02);
-					registerActiveSource(osc, c.id);
-					registerActiveSource(lfo, c.id);
-				} catch {}
+					voice.gain.gain.cancelAndHoldAtTime(releaseAt);
+					voice.gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSec);
+				} catch {
+					voice.gain.gain.cancelScheduledValues(releaseAt);
+					voice.gain.gain.setTargetAtTime(0.0001, releaseAt, Math.max(0.008, release / 5));
+				}
+
+				const stopAt = startAt + durationSec + 0.04;
+				for (const osc of voice.sources) {
+					try { osc.stop(stopAt); registerActiveSource(osc, c.id); } catch {}
+				}
+				try { voice.lfo?.stop(stopAt); if (voice.lfo) registerActiveSource(voice.lfo, c.id); } catch {}
+				try { ccLfo?.stop(stopAt); if (ccLfo) registerActiveSource(ccLfo, c.id); } catch {}
 			}
 		}
 	};
@@ -3309,7 +3390,7 @@ export default function DAW(_props: TabRendererProps) {
 												<select
 													className="h-7 min-w-0 flex-1 bg-neutral-950/50 border border-white/10 rounded-md px-1.5 text-[9px]"
 													value={t.vst3PluginPath ? `vst3:${t.vst3PluginPath}` : `gm:${normalizeGmProgram(t.gmProgram ?? 0)}`}
-													onPointerDown={(e) => e.stopPropagation()}
+													onPointerDown={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); }}
 													onChange={(e) => { void setTrackInstrumentSource(t, e.target.value); }}
 													title={t.vst3PluginPath ? `${t.vst3PluginVendor ? `${t.vst3PluginVendor} · ` : ""}${t.vst3PluginName ?? "VST3"}` : "YSong General MIDI preview instrument"}
 												>
@@ -3338,7 +3419,7 @@ export default function DAW(_props: TabRendererProps) {
 											<select
 												className="h-6 min-w-0 flex-1 bg-neutral-950/50 border border-white/10 rounded-md px-1.5 text-[9px]"
 												value={t.midiInputName ?? ""}
-												onPointerDown={(e) => e.stopPropagation()}
+												onPointerDown={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); }}
 												onChange={(e) => setTracks((prev) => prev.map((track) => track.id === t.id ? { ...track, midiInputName: e.target.value || undefined } : track))}
 												title="Hardware MIDI input for this track"
 											>
@@ -3353,7 +3434,7 @@ export default function DAW(_props: TabRendererProps) {
 
 									<div className="w-full mt-1 flex items-center gap-2 min-w-0">
 										<span className="text-[9px] opacity-55 shrink-0">Vol</span>
-										<input type="range" min={0} max={127} step={1} value={clamp(t.level ?? 100, 0, 127)} onPointerDown={(e) => e.stopPropagation()} onChange={(e) => setTrackLevel(t.id, Number(e.target.value))} className="min-w-0 flex-1 h-3 accent-cyan-300 cursor-ew-resize" aria-label={`${t.name} level`} />
+										<input type="range" min={0} max={127} step={1} value={clamp(t.level ?? 100, 0, 127)} onPointerDown={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); }} onChange={(e) => setTrackLevel(t.id, Number(e.target.value))} className="min-w-0 flex-1 h-3 accent-cyan-300 cursor-ew-resize" aria-label={`${t.name} level`} />
 										<span className="w-7 text-right text-[9px] font-mono opacity-75 shrink-0">{clamp(t.level ?? 100, 0, 127)}</span>
 									</div>
 
