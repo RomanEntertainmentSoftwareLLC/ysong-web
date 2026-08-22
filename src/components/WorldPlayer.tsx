@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
 	addTrackToWorldPlaylist,
 	countWorldPlay,
@@ -392,13 +393,21 @@ function SaveMenu({ current, playlists, loading, onSaveRelease, onFavoriteArtist
 }
 
 function ModalShell({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-	return <div className="fixed inset-0 z-[90] grid place-items-center p-4 bg-black/65 backdrop-blur-md" role="dialog" aria-modal="true" aria-label={title}>
-		<button type="button" className="absolute inset-0 cursor-default" onClick={onClose} aria-label="Close dialog" />
-		<div className="relative z-[1] w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl border border-neutral-700 bg-neutral-950 p-5 shadow-2xl">
-			<div className="flex items-center gap-3 mb-4"><h3 className="text-xl font-semibold flex-1">{title}</h3><button type="button" onClick={onClose} className="h-9 w-9 rounded-xl hover:bg-neutral-800" aria-label="Close">×</button></div>
-			{children}
-		</div>
-	</div>;
+	// WorldPlayer itself is fixed/transformed near the bottom of the viewport. A fixed
+	// modal nested under that player can therefore inherit the player's containing
+	// block and appear half off-screen. Portal dialogs to document.body so inset-0 is
+	// always the real browser viewport.
+	if (typeof document === "undefined") return null;
+	return createPortal(
+		<div className="fixed inset-0 z-[190] grid place-items-center p-4 bg-black/65 backdrop-blur-md" role="dialog" aria-modal="true" aria-label={title}>
+			<button type="button" className="absolute inset-0 cursor-default" onClick={onClose} aria-label="Close dialog" />
+			<div className="relative z-[1] w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-neutral-700 bg-neutral-950 p-5 shadow-2xl">
+				<div className="flex items-center gap-3 mb-4"><h3 className="text-xl font-semibold flex-1">{title}</h3><button type="button" onClick={onClose} className="h-9 w-9 rounded-xl hover:bg-neutral-800" aria-label="Close">×</button></div>
+				{children}
+			</div>
+		</div>,
+		document.body,
+	);
 }
 
 function NewPlaylistModal({ trackId, onCreated, onClose }: { trackId: string; onCreated: (playlist: WorldPlaylist) => void; onClose: () => void }) {

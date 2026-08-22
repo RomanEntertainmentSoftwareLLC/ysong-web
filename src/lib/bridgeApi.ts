@@ -19,6 +19,7 @@ export type BridgeHealth = {
 	midiInputCount?: number;
 	enabledMidiInputCount?: number;
 	midiRouteTrackId?: string | null;
+	midiRouteInputName?: string | null;
 };
 
 export type BridgePlugin = {
@@ -69,6 +70,7 @@ export type BridgeMidiSettings = {
 	masterMode: "SelectedTrack" | "Separate";
 	masterInputName?: string | null;
 	routeTrackId?: string | null;
+	routeInputName?: string | null;
 };
 
 export type Vst3InstanceStatus = {
@@ -152,7 +154,7 @@ export const bridgeApi = {
 		),
 	getPlugins: () => bridgeFetch<{ ok: true; plugins: BridgePlugin[] }>("/plugins", undefined, 10000),
 	loadVst3Instrument: (trackId: string, path: string) =>
-		bridgeFetch<{ ok: true; trackId: string; plugin: { name: string; path: string; vendor?: string | null; version?: string | null }; sampleRate: number; blockSize: number }>(
+		bridgeFetch<{ ok: true; trackId: string; plugin: { name: string; path: string; vendor?: string | null; version?: string | null; hasEditor?: boolean }; sampleRate: number; blockSize: number }>(
 			"/vst3/load",
 			{ method: "POST", body: JSON.stringify({ trackId, path }) },
 			30000,
@@ -161,16 +163,18 @@ export const bridgeApi = {
 		bridgeFetch<{ ok: true; removed: boolean }>("/vst3/unload", { method: "POST", body: JSON.stringify({ trackId }) }, 10000),
 	unloadAllVst3: () => bridgeFetch<{ ok: true }>("/vst3/unload-all", { method: "POST", body: "{}" }, 10000),
 	scheduleVst3Midi: (trackId: string, events: Vst3MidiEvent[]) =>
-		bridgeFetch<{ ok: true; queued: number }>("/vst3/schedule", { method: "POST", body: JSON.stringify({ trackId, events }) }, 10000),
+		bridgeFetch<{ ok: true; queued: number; loaded?: boolean }>("/vst3/schedule", { method: "POST", body: JSON.stringify({ trackId, events }) }, 10000),
 	setVst3Mixer: (trackId: string, muted: boolean, level: number) =>
 		bridgeFetch<{ ok: true; loaded?: boolean }>("/vst3/mixer", { method: "POST", body: JSON.stringify({ trackId, muted, level }) }, 5000),
 	stopVst3: () => bridgeFetch<{ ok: true }>("/vst3/stop", { method: "POST", body: "{}" }, 5000),
 	getVst3Status: () => bridgeFetch<{ ok: true; instances: Vst3InstanceStatus[] }>("/vst3/status", undefined, 5000),
+	openVst3Editor: (trackId: string) =>
+		bridgeFetch<{ ok: true; trackId: string; pluginName: string; opened: boolean }>("/vst3/editor/open", { method: "POST", body: JSON.stringify({ trackId }) }, 10000),
 	getMidiDevices: () => bridgeFetch<{ ok: true } & BridgeMidiSettings>("/midi/devices", undefined, 5000),
 	autoDetectMidi: () => bridgeFetch<{ ok: true } & BridgeMidiSettings>("/midi/autodetect", { method: "POST", body: "{}" }, 10000),
 	setMidiSettings: (settings: { enabledInputs: string[]; masterMode: "SelectedTrack" | "Separate"; masterInputName?: string | null }) =>
 		bridgeFetch<{ ok: true } & BridgeMidiSettings>("/midi/settings", { method: "PUT", body: JSON.stringify(settings) }, 10000),
-	setMidiRoute: (trackId: string | null) => bridgeFetch<{ ok: true; trackId?: string | null }>("/midi/route", { method: "POST", body: JSON.stringify({ trackId }) }, 5000),
+	setMidiRoute: (trackId: string | null, inputName?: string | null) => bridgeFetch<{ ok: true; trackId?: string | null; inputName?: string | null }>("/midi/route", { method: "POST", body: JSON.stringify({ trackId, inputName }) }, 5000),
 	midiPanic: () => bridgeFetch<{ ok: true }>("/midi/panic", { method: "POST", body: "{}" }, 5000),
 	subscribeMidiEvents: (onEvent: (event: BridgeMidiEvent) => void, onConnection?: (connected: boolean) => void) => {
 		const source = new EventSource(`${BRIDGE_BASE}/midi/events`);

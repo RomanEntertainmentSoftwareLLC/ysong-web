@@ -110,8 +110,8 @@ export default function TransportConsole({
           ●
         </YSButton>
         {onToggleKeyboard && (
-          <YSButton className={`px-2 py-1 text-sm rounded-md ${keyboardOpen ? "!bg-cyan-200 !text-neutral-950 opacity-100" : "opacity-70"}`} onClick={onToggleKeyboard} title="On-screen piano / computer keyboard">
-            ⌨
+          <YSButton className={`px-2.5 py-1 text-[11px] rounded-md ${keyboardOpen ? "!bg-cyan-200 !text-neutral-950 opacity-100" : "opacity-80"}`} onClick={onToggleKeyboard} title="Open On-Screen Keyboard">
+            🎹 Keys
           </YSButton>
         )}
         <YSButton

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useTabManager } from "./core";
 import { YSButton } from "../components/YSButton";
 import EmojiPickerButton from "../components/EmojiPicker";
-import worldWordmark from "../../../assets/ysong-world.png";
+import worldWordmark from "../assets/ysong-world.png";
 import { useWorldPlayer } from "../components/WorldPlayer";
 import {
 	addTrackToWorldPlaylist,

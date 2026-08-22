@@ -6,7 +6,7 @@ import { YSButton } from "../components/YSButton";
 import MidiEditor, { type MidiEditableClip } from "../components/MidiEditor";
 import TransportConsole from "../components/TransportConsole";
 import OnScreenKeyboard from "../components/OnScreenKeyboard";
-import { bridgeApi, type BridgeMidiEvent, type BridgePlugin, type Vst3MidiEvent } from "../lib/bridgeApi";
+import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type Vst3MidiEvent } from "../lib/bridgeApi";
 import {
 	GM_PROGRAMS,
 	gmPreviewProfile,
@@ -41,6 +41,8 @@ type Track = {
 	vst3PluginPath?: string;
 	vst3PluginName?: string;
 	vst3PluginVendor?: string;
+	// Optional per-track hardware MIDI filter. Undefined means every enabled input.
+	midiInputName?: string;
 };
 
 type ProjectAsset = {
@@ -102,8 +104,8 @@ type GridValue =
 
 type GridMode = "absolute" | "relative";
 
-const ROW_H = 108;
-const MIN_TRACK_H = 104;
+const ROW_H = 136;
+const MIN_TRACK_H = 132;
 const BASE_BAR_W = 96;
 const MIN_ZOOM_PCT = 25;
 const MAX_ZOOM_PCT = 400;
@@ -541,6 +543,7 @@ export default function DAW(_props: TabRendererProps) {
 	const [tracks, setTracks] = useState<Track[]>(() => []);
 	const [dawHydrated, setDawHydrated] = useState(false);
 	const [vst3Plugins, setVst3Plugins] = useState<BridgePlugin[]>([]);
+	const [midiInputDevices, setMidiInputDevices] = useState<BridgeMidiInputDevice[]>([]);
 	const [vstTrackState, setVstTrackState] = useState<Record<string, { status: "loading" | "ready" | "error"; message?: string }>>({});
 	const vstLoadedRef = useRef<Map<string, string>>(new Map());
 	const vstMetersRef = useRef<Record<string, number>>({});
@@ -565,6 +568,18 @@ export default function DAW(_props: TabRendererProps) {
 		};
 		refresh();
 		const timer = window.setInterval(refresh, 5000);
+		return () => { cancelled = true; window.clearInterval(timer); };
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		const refreshMidiInputs = () => {
+			bridgeApi.getMidiDevices()
+				.then((res) => { if (!cancelled) setMidiInputDevices(res.devices ?? []); })
+				.catch(() => { /* Native MIDI is optional while Bridge is offline. */ });
+		};
+		refreshMidiInputs();
+		const timer = window.setInterval(refreshMidiInputs, 4000);
 		return () => { cancelled = true; window.clearInterval(timer); };
 	}, []);
 
@@ -936,9 +951,24 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	};
 
+	const openVstEditor = async (track: Track) => {
+		if (track.type !== "instrument" || !track.vst3PluginPath) return;
+		try {
+			await ensureVstLoaded(track);
+			await bridgeApi.openVst3Editor(track.id);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "Could not open the VST3 editor.";
+			window.alert(`YSong Bridge could not open ${track.vst3PluginName ?? "that VST3"}.\n\n${message}`);
+		}
+	};
+
 	const setTrackInstrumentSource = async (track: Track, value: string) => {
 		if (value.startsWith("gm:")) {
 			const program = normalizeGmProgram(Number(value.slice(3)));
+			// Patch changes must hand the native audio device back immediately. ASIO4ALL
+			// can be exclusive; leaving a live VST stream open makes the browser GM/WebAudio
+			// path appear to wake up seconds later. Panic/stop native output before unload.
+			if (track.vst3PluginPath) { try { await bridgeApi.stopVst3(); } catch {} }
 			try { await bridgeApi.unloadVst3Instrument(track.id); } catch {}
 			vstLoadedRef.current.delete(track.id);
 			setVstTrackState((prev) => { const next = { ...prev }; delete next[track.id]; return next; });
@@ -1844,8 +1874,8 @@ export default function DAW(_props: TabRendererProps) {
 	// Selected instrument wins; otherwise an armed instrument track is used as a fallback.
 	useEffect(() => {
 		const target = currentMidiTargetTrack();
-		void bridgeApi.setMidiRoute(target?.id ?? null).catch(() => {});
-		return () => { void bridgeApi.setMidiRoute(null).catch(() => {}); };
+		void bridgeApi.setMidiRoute(target?.id ?? null, target?.midiInputName ?? null).catch(() => {});
+		return () => { void bridgeApi.setMidiRoute(null, null).catch(() => {}); };
 		// Track selection/arming/instrument assignment are the routing contract.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selectedTrackId, tracks]);
@@ -1857,6 +1887,7 @@ export default function DAW(_props: TabRendererProps) {
 		const target = currentMidiTargetTrack();
 		return bridgeApi.subscribeMidiEvents((event: BridgeMidiEvent) => {
 			if (event.note == null || (event.kind !== "noteon" && event.kind !== "noteoff")) return;
+			if (target?.midiInputName && event.device.toLowerCase() !== target.midiInputName.toLowerCase()) return;
 			const note = clamp(event.note, 0, 127);
 			setHardwareActiveNotes((prev) => {
 				const next = new Set(prev);
@@ -3270,29 +3301,55 @@ export default function DAW(_props: TabRendererProps) {
 										</div>
 									</div>
 
-									<div className="w-full mt-1 flex items-center gap-1.5 min-w-0">
+									<div className="w-full mt-1 flex items-center gap-1 min-w-0">
 										{t.type === "audio" ? (
 											<div className="h-7 flex-1 rounded-md border border-white/5 bg-black/10 px-2 flex items-center text-[10px] opacity-55">Audio track</div>
 										) : (
-											<select
-												className="h-7 min-w-0 flex-1 bg-neutral-950/50 border border-white/10 rounded-md px-2 text-[10px]"
-												value={t.vst3PluginPath ? `vst3:${t.vst3PluginPath}` : `gm:${normalizeGmProgram(t.gmProgram ?? 0)}`}
-												onPointerDown={(e) => e.stopPropagation()}
-												onChange={(e) => { void setTrackInstrumentSource(t, e.target.value); }}
-												title={t.vst3PluginPath ? `${t.vst3PluginVendor ? `${t.vst3PluginVendor} · ` : ""}${t.vst3PluginName ?? "VST3"}` : "YSong General MIDI preview instrument"}
-											>
-												<optgroup label="YSong / General MIDI">
-													{GM_PROGRAMS.map((inst) => <option key={`gm:${inst.program}`} value={`gm:${inst.program}`}>{String(inst.number).padStart(3, "0")} · {inst.label}</option>)}
-												</optgroup>
-												<optgroup label="VST3 Instruments">
-													{vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).length === 0 ? (
-														<option disabled value="">Scan VST3 in Settings first</option>
-													) : vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).map((plugin) => <option key={plugin.path} value={`vst3:${plugin.path}`}>{plugin.vendor ? `${plugin.vendor} · ` : ""}{plugin.name}</option>)}
-												</optgroup>
-											</select>
+											<>
+												<select
+													className="h-7 min-w-0 flex-1 bg-neutral-950/50 border border-white/10 rounded-md px-1.5 text-[9px]"
+													value={t.vst3PluginPath ? `vst3:${t.vst3PluginPath}` : `gm:${normalizeGmProgram(t.gmProgram ?? 0)}`}
+													onPointerDown={(e) => e.stopPropagation()}
+													onChange={(e) => { void setTrackInstrumentSource(t, e.target.value); }}
+													title={t.vst3PluginPath ? `${t.vst3PluginVendor ? `${t.vst3PluginVendor} · ` : ""}${t.vst3PluginName ?? "VST3"}` : "YSong General MIDI preview instrument"}
+												>
+													<optgroup label="YSong / General MIDI">
+														{GM_PROGRAMS.map((inst) => <option key={`gm:${inst.program}`} value={`gm:${inst.program}`}>{String(inst.number).padStart(3, "0")} · {inst.label}</option>)}
+													</optgroup>
+													<optgroup label="VST3 Instruments">
+														{vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).length === 0 ? (
+															<option disabled value="">Scan VST3 in Settings first</option>
+														) : vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).map((plugin) => <option key={plugin.path} value={`vst3:${plugin.path}`}>{plugin.vendor ? `${plugin.vendor} · ` : ""}{plugin.name}</option>)}
+													</optgroup>
+												</select>
+												{t.vst3PluginPath && (
+													<>
+														<span className={`w-5 text-center text-[8px] font-semibold shrink-0 ${vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>{vstTrackState[t.id]?.status === "loading" ? "…" : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}</span>
+														<YSButton className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={`Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
+													</>
+												)}
+											</>
 										)}
-										{t.vst3PluginPath && <span className={`w-7 text-center text-[8px] font-semibold shrink-0 ${vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>{vstTrackState[t.id]?.status === "loading" ? "…" : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}</span>}
 									</div>
+
+									{t.type === "instrument" ? (
+										<div className="w-full mt-1 flex items-center gap-1.5 min-w-0">
+											<span className="text-[9px] opacity-55 shrink-0">Device</span>
+											<select
+												className="h-6 min-w-0 flex-1 bg-neutral-950/50 border border-white/10 rounded-md px-1.5 text-[9px]"
+												value={t.midiInputName ?? ""}
+												onPointerDown={(e) => e.stopPropagation()}
+												onChange={(e) => setTracks((prev) => prev.map((track) => track.id === t.id ? { ...track, midiInputName: e.target.value || undefined } : track))}
+												title="Hardware MIDI input for this track"
+											>
+												<option value="">All Inputs</option>
+												{midiInputDevices.filter((device) => device.enabled).map((device) => <option key={`${device.index}:${device.name}`} value={device.name}>{device.name}</option>)}
+												{t.midiInputName && !midiInputDevices.some((device) => device.enabled && device.name.toLowerCase() === t.midiInputName!.toLowerCase()) && <option value={t.midiInputName}>{t.midiInputName} (offline)</option>}
+											</select>
+										</div>
+									) : (
+										<div className="w-full mt-1 h-6 flex items-center text-[9px] opacity-35">Native MIDI routing applies to instrument tracks</div>
+									)}
 
 									<div className="w-full mt-1 flex items-center gap-2 min-w-0">
 										<span className="text-[9px] opacity-55 shrink-0">Vol</span>
