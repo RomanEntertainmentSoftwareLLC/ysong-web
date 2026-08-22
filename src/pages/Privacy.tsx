@@ -77,18 +77,16 @@ export default function Privacy() {
 				</p>
 				<ul className="list-disc pl-6 space-y-2 opacity-80">
 					<li>
-						<span className="font-medium">Hosting & Compute:</span> Google Cloud Platform (VMs, storage),
-						Vercel (web hosting/deployment).
+						<span className="font-medium">Hosting & Compute:</span> this local build runs on your own computer.
 					</li>
 					<li>
-						<span className="font-medium">Database:</span> Neon (PostgreSQL).
+						<span className="font-medium">Database:</span> PostgreSQL running locally through Docker.
 					</li>
 					<li>
-						<span className="font-medium">Email Delivery:</span> Resend (transactional email).
+						<span className="font-medium">File Storage:</span> project uploads are stored on the local hard drive.
 					</li>
 					<li>
-						<span className="font-medium">Analytics/Monitoring:</span> tools we may add for performance and
-						error reporting.
+						<span className="font-medium">External AI:</span> disabled by default; data is sent externally only if you explicitly configure an AI provider.
 					</li>
 				</ul>
 				<p className="opacity-80 mt-3">

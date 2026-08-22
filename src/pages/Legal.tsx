@@ -68,9 +68,9 @@ export default function Legal() {
 			<section className="mb-10">
 				<h2 className="text-2xl font-semibold mb-3">6. Privacy & Data</h2>
 				<p className="opacity-80">
-					We collect only the information necessary to operate YSong, such as account credentials, usage
-					analytics, and files you choose to upload. Data is stored securely on cloud infrastructure and may
-					be processed in the United States. See our{" "}
+					This local development build stores account data, settings, chats, and files on the computer running
+					YSong. External processing occurs only for services you explicitly configure, such as an optional AI
+					provider. See our{" "}
 					<a href="/privacy" className="text-blue-400 hover:underline">
 						Privacy Policy
 					</a>{" "}

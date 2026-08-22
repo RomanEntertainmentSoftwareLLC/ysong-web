@@ -107,10 +107,10 @@ async function fetchSignedUrl(objectKey: string, purpose: SignedUrlPurpose): Pro
 	return signed;
 }
 
-function gcsPublicUrlFromObjectKey(objectKey?: string) {
-	if (!objectKey) return undefined;
-	// If your bucket is private, playback will rely on signed URLs.
-	return `https://storage.googleapis.com/ysong-assets/${encodeURI(objectKey)}`;
+function legacyPublicUrlFallback(_objectKey?: string) {
+	// Local YSong never constructs a Google Cloud URL. Persisted assets should
+	// resolve through the local signed-url endpoint using their objectKey.
+	return undefined;
 }
 
 export class AudioController {
@@ -352,7 +352,7 @@ export class AudioController {
 			return signed;
 		}
 
-		const fallback = gcsPublicUrlFromObjectKey(asset.objectKey);
+		const fallback = legacyPublicUrlFallback(asset.objectKey);
 		if (fallback) return fallback;
 
 		throw new Error("No playable URL for this asset");
@@ -509,7 +509,7 @@ export class AudioController {
 		if (key) {
 			url = await fetchSignedUrl(key, "download");
 		} else {
-			url = asset.publicUrl ?? gcsPublicUrlFromObjectKey(asset.objectKey) ?? "";
+			url = asset.publicUrl ?? legacyPublicUrlFallback(asset.objectKey) ?? "";
 		}
 
 		if (!url) throw new Error("No download URL");

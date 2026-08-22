@@ -1452,7 +1452,7 @@ export default function ChatPane({ tab, chats, setChats }: Props) {
 					})
 					.join("\n");
 
-				const res = await fetch("https://api.ysong.ai/chat", {
+				const res = await fetch(API ? `${API}/chat` : "/chat", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -2024,7 +2024,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 - Stay in your current in-chat persona/voice (do not become robotic). Vary phrasing for play/pause/stop/seek acknowledgements.`
 				: "";
 
-			const res = await fetch("https://api.ysong.ai/chat", {
+			const res = await fetch(API ? `${API}/chat` : "/chat", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({

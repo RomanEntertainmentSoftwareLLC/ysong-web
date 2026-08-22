@@ -2,8 +2,10 @@
 
 /* OUTER FIXED WRAPPER */
 .asset-drawer-shell {
-	@apply fixed bottom-0 right-0 left-0 lg:left-[280px] z-[60]
+	@apply fixed bottom-0 right-0 z-[60]
         flex justify-center pointer-events-none;
+	left: 0;
+	transition: left 200ms ease;
 }
 
 /* INNER LAYOUT CONTAINER */
@@ -115,4 +117,32 @@
 
 .asset-drawer-dropcard-sub {
 	@apply text-xs opacity-70 mt-1;
+}
+
+
+/* External drag feedback: make the destination unmistakable. */
+.asset-drawer-handle-wrap-drop-active {
+	filter: drop-shadow(0 0 12px rgba(250, 204, 21, 0.6));
+}
+
+.asset-drawer-handle-drop-active {
+	box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.75), 0 0 20px rgba(250, 204, 21, 0.45) !important;
+	background: rgba(250, 204, 21, 0.12) !important;
+}
+
+.asset-drawer-panel-drop-active {
+	box-shadow: inset 0 0 0 2px rgba(250, 204, 21, 0.65), 0 -8px 28px rgba(250, 204, 21, 0.18);
+}
+
+@media (max-width: 640px) {
+	.asset-drawer-panel-open {
+		max-height: 34vh;
+	}
+	.asset-drawer-scroll {
+		height: 30vh;
+		min-height: 130px;
+	}
+	.asset-pill-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }

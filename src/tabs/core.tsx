@@ -14,7 +14,7 @@ import { YSButton } from "../components/YSButton";
 
 /* -------------------------------- Types --------------------------------- */
 
-export type TabType = "chat" | "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "market" | "world";
+export type TabType = "chat" | "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
 
 export type TabRecord = {
 	id: string;
@@ -227,7 +227,7 @@ export function TabBar() {
 	// you can still bail out of rendering *after* all hooks ran
 	if (tabs.length === 0) {
 		return (
-			<div className="px-2 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md" />
+			<div className="pl-2 pr-14 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md" />
 		);
 	}
 
@@ -236,7 +236,7 @@ export function TabBar() {
 	const ordered = [...pinned, ...unpinned];
 
 	return (
-		<div className="px-2 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md">
+		<div className="pl-2 pr-14 border-b bg-white/75 dark:bg-neutral-950/60 border-neutral-200 dark:border-neutral-800 backdrop-blur supports-[backdrop-filter]:backdrop-blur-md">
 			<div
 				ref={barRef}
 				className="flex gap-1 items-end overflow-x-auto no-scrollbar py-2"

@@ -1,4 +1,4 @@
-const AUTH_BASE_RAW = import.meta.env.VITE_AUTH_API_URL ?? "https://api.ysong.ai";
+const AUTH_BASE_RAW = import.meta.env.VITE_AUTH_API_URL ?? "http://127.0.0.1:8081";
 
 export const AUTH_BASE = (AUTH_BASE_RAW || "").replace(/\/+$/, "");
 
@@ -82,7 +82,7 @@ async function handleError(res: Response): Promise<never> {
 
 		// Optional: same "hard reset" behavior, but scoped to /app
 		if (window.location.pathname.startsWith("/app")) {
-			window.location.replace("/login");
+			window.location.replace(`/login${window.location.search || ""}`);
 		}
 
 		throw new AuthError(res.status, errorCode);

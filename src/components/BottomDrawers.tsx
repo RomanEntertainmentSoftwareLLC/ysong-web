@@ -1,5 +1,5 @@
 // src/components/BottomDrawers.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import "../styles/asset-drawer.css";
 
 import type { Chat } from "./UISidebar";
@@ -21,14 +21,13 @@ type Props = {
 
 	projectAssets: ProjectAsset[];
 	setProjectAssets: React.Dispatch<React.SetStateAction<ProjectAsset[]>>;
+
+	// The drawer dock follows the actual workspace instead of assuming the old
+	// permanently-open 280px sidebar.
+	workspaceLeftPx?: number;
 };
 
-const env = (import.meta as any).env || {};
-const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
-const API = (API_BASE || "").replace(/\/+$/, "");
-
 function getActiveProjectId() {
-	// For now, MVP uses a single "default" project unless DAW sets a specific id.
 	try {
 		return localStorage.getItem("ysong:activeProjectId") || "default";
 	} catch {
@@ -36,48 +35,13 @@ function getActiveProjectId() {
 	}
 }
 
-async function copyUploadIntoProject(objectKey: string, projectId: string) {
-	const token = localStorage.getItem("ys_token");
-	if (!token) throw new Error("no_token");
-
-	const base = API ? API.replace(/\/+$/, "") + "/api/uploads/copy" : "/api/uploads/copy";
-	const res = await fetch(base, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${token}`,
-		},
-		body: JSON.stringify({ objectKey, projectId }),
-	});
-
-	if (!res.ok) throw new Error(`copy_failed_${res.status}`);
-	const data = await res.json();
-	const newKey = String(data?.objectKey || data?.newObjectKey || "");
-	if (!newKey) throw new Error("copy_missing_objectKey");
-	return newKey;
-}
-
-async function deleteProjectObject(objectKey: string) {
-	const token = localStorage.getItem("ys_token");
-	if (!token) throw new Error("no_token");
-	const base = API ? API.replace(/\/+$/, "") + "/api/uploads/delete" : "/api/uploads/delete";
-	const res = await fetch(base, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${token}`,
-		},
-		body: JSON.stringify({ objectKey }),
-	});
-	if (!res.ok) throw new Error(`delete_failed_${res.status}`);
-	return await res.json();
-}
-
 function normalizeProjectAssetForPersist<T extends { objectKey?: string; url?: string }>(asset: T): T {
-	if (asset?.objectKey) {
-		return { ...asset, url: undefined };
-	}
+	if (asset?.objectKey) return { ...asset, url: undefined };
 	return asset;
+}
+
+function hasExternalFiles(e: DragEvent) {
+	return Array.from(e.dataTransfer?.types || []).includes("Files");
 }
 
 export default function BottomDrawers({
@@ -88,12 +52,15 @@ export default function BottomDrawers({
 	activeChatId,
 	projectAssets,
 	setProjectAssets,
+	workspaceLeftPx = 0,
 }: Props) {
 	const [openDrawer, setOpenDrawer] = useState<DrawerId>(null);
+	const [drawerDragTarget, setDrawerDragTarget] = useState<"assets" | "project" | null>(null);
 
 	const projectId = useMemo(() => getActiveProjectId(), []);
 
-	// Load persisted project assets (MVP persistence)
+	// MVP persistence for the project reference list. These are references to
+	// global assets, not duplicate physical uploads.
 	useEffect(() => {
 		try {
 			const key = `ysong:projectAssets:${projectId}`;
@@ -103,9 +70,7 @@ export default function BottomDrawers({
 			if (Array.isArray(parsed) && parsed.length && projectAssets.length === 0) {
 				setProjectAssets(parsed.map(normalizeProjectAssetForPersist));
 			}
-		} catch {
-			// ignore
-		}
+		} catch {}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [projectId]);
 
@@ -113,61 +78,79 @@ export default function BottomDrawers({
 		try {
 			const key = `ysong:projectAssets:${projectId}`;
 			localStorage.setItem(key, JSON.stringify(projectAssets.map(normalizeProjectAssetForPersist)));
-		} catch {
-			// ignore
-		}
+		} catch {}
 	}, [projectAssets, projectId]);
 
 	const toggle = (id: Exclude<DrawerId, null>) => {
 		setOpenDrawer((prev) => (prev === id ? null : id));
 	};
 
+	// A project asset is a REFERENCE to the same backing asset. No /copy call.
 	const addDrawerAssetToProject = async (asset: DrawerAsset) => {
-		if (!asset.objectKey) return;
-
-		const base = {
-			id: asset.objectKey, // stable id
-			kind: "audio" as const,
-			name: asset.name,
-			objectKey: asset.objectKey,
-			sizeMB: asset.sizeMB,
-			url: undefined as any,
-		};
-
-		// Try to make a real cloud copy under project-assets/, but fall back to referencing the original.
-		let keyToUse = asset.objectKey;
-		try {
-			keyToUse = await copyUploadIntoProject(asset.objectKey, projectId);
-		} catch {
-			// ok to fall back for now
-		}
-
+		const id = asset.objectKey ?? asset.id;
 		setProjectAssets((prev) => {
-			if (prev.some((p) => p.objectKey === keyToUse || p.id === keyToUse)) return prev;
+			if (prev.some((p) => p.id === id || (!!asset.objectKey && p.objectKey === asset.objectKey))) return prev;
 			return [
 				...prev,
 				{
-					...base,
-					id: keyToUse,
-					objectKey: keyToUse,
+					id,
+					kind: "audio" as const,
+					name: asset.name,
+					objectKey: asset.objectKey,
+					sourceObjectKey: asset.objectKey,
+					sizeMB: asset.sizeMB,
+					url: asset.objectKey ? undefined : asset.publicUrl,
 				},
 			];
 		});
-
 		setOpenDrawer("project");
 	};
 
-	// Tune these if you change handle width or gap:
-	// gap-2 = 8px, width = 78px -> shift = (78 + 8)/2 = 43px
+	const registerGlobalAsset = (asset: DrawerAsset) => {
+		setDrawerAssets((prev) => {
+			const id = asset.objectKey ?? asset.id;
+			if ((prev || []).some((a) => a.id === id || (!!asset.objectKey && a.objectKey === asset.objectKey))) return prev;
+			return [{ ...asset, id }, ...(prev || [])];
+		});
+	};
+
+	const onHandleDragOver = (id: "assets" | "project") => (e: DragEvent<HTMLDivElement>) => {
+		if (!hasExternalFiles(e)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		e.dataTransfer.dropEffect = "copy";
+		setDrawerDragTarget(id);
+		setOpenDrawer(id);
+	};
+
+	const onHandleDragLeave = (id: "assets" | "project") => (e: DragEvent<HTMLDivElement>) => {
+		const next = e.relatedTarget as Node | null;
+		if (next && e.currentTarget.contains(next)) return;
+		setDrawerDragTarget((current) => (current === id ? null : current));
+	};
+
+	const onHandleDrop = (id: "assets" | "project") => (e: DragEvent<HTMLDivElement>) => {
+		if (!hasExternalFiles(e)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const files = Array.from(e.dataTransfer.files || []);
+		setDrawerDragTarget(null);
+		setOpenDrawer(id);
+		if (!files.length) return;
+		window.dispatchEvent(
+			new CustomEvent(id === "assets" ? "ysong:drop-files-assets" : "ysong:drop-files-project", {
+				detail: { files },
+			}),
+		);
+	};
+
 	const HANDLE_W = 78;
 
 	return (
-		<div className="asset-drawer-shell">
-			<div className="w-full max-w-[720px] px-4 pb-[env(safe-area-inset-bottom,0px)] flex flex-col items-center">
-				{/* HANDLE ROW */}
+		<div className="asset-drawer-shell" style={{ left: workspaceLeftPx }}>
+			<div className="w-full max-w-[720px] px-2 sm:px-4 pb-[env(safe-area-inset-bottom,0px)] flex flex-col items-center">
 				<div className="w-full flex justify-center">
 					<div className="pointer-events-auto inline-flex items-center gap-2">
-						{/* Personas (LEFT) */}
 						<YSButton
 							type="button"
 							onClick={() => toggle("personas")}
@@ -178,40 +161,53 @@ export default function BottomDrawers({
 							aria-label="Toggle Personas drawer"
 							title="Personas"
 						>
-							/=====\
+							/=====\\
 						</YSButton>
 
-						{/* Assets (CENTER) */}
-						<YSButton
-							type="button"
-							onClick={() => toggle("assets")}
-							className="asset-drawer-handle"
-							style={{ width: HANDLE_W }}
-							aria-expanded={openDrawer === "assets"}
-							aria-controls="asset-drawer-panel"
-							aria-label="Toggle Assets drawer"
-							title="Assets"
+						<div
+							className={drawerDragTarget === "assets" ? "asset-drawer-handle-wrap-drop-active" : ""}
+							onDragEnter={onHandleDragOver("assets")}
+							onDragOver={onHandleDragOver("assets")}
+							onDragLeave={onHandleDragLeave("assets")}
+							onDrop={onHandleDrop("assets")}
 						>
-							/=====\
-						</YSButton>
+							<YSButton
+								type="button"
+								onClick={() => toggle("assets")}
+								className={`asset-drawer-handle ${drawerDragTarget === "assets" ? "asset-drawer-handle-drop-active" : ""}`}
+								style={{ width: HANDLE_W }}
+								aria-expanded={openDrawer === "assets"}
+								aria-controls="asset-drawer-panel"
+								aria-label="Toggle Assets drawer"
+								title="Assets"
+							>
+								/=====\\
+							</YSButton>
+						</div>
 
-						{/* Project Assets (RIGHT) */}
-						<YSButton
-							type="button"
-							onClick={() => toggle("project")}
-							className="asset-drawer-handle"
-							style={{ width: HANDLE_W }}
-							aria-expanded={openDrawer === "project"}
-							aria-controls="project-asset-drawer-panel"
-							aria-label="Toggle Project Assets drawer"
-							title="Project Assets"
+						<div
+							className={drawerDragTarget === "project" ? "asset-drawer-handle-wrap-drop-active" : ""}
+							onDragEnter={onHandleDragOver("project")}
+							onDragOver={onHandleDragOver("project")}
+							onDragLeave={onHandleDragLeave("project")}
+							onDrop={onHandleDrop("project")}
 						>
-							/=====\
-						</YSButton>
+							<YSButton
+								type="button"
+								onClick={() => toggle("project")}
+								className={`asset-drawer-handle ${drawerDragTarget === "project" ? "asset-drawer-handle-drop-active" : ""}`}
+								style={{ width: HANDLE_W }}
+								aria-expanded={openDrawer === "project"}
+								aria-controls="project-asset-drawer-panel"
+								aria-label="Toggle Project Assets drawer"
+								title="Project Assets"
+							>
+								/=====\\
+							</YSButton>
+						</div>
 					</div>
 				</div>
 
-				{/* PANELS */}
 				<div className="w-full mt-2">
 					<PersonaAssetDrawer
 						embedded
@@ -219,6 +215,7 @@ export default function BottomDrawers({
 						open={openDrawer === "personas"}
 						onOpenChange={(v) => setOpenDrawer(v ? "personas" : null)}
 					/>
+
 					<AssetDrawer
 						embedded
 						hideHandle
@@ -239,14 +236,23 @@ export default function BottomDrawers({
 						onOpenChange={(v) => setOpenDrawer(v ? "project" : null)}
 						projectAssets={projectAssets}
 						setProjectAssets={setProjectAssets}
-						onDeleteAsset={async (assetId) => {
+						onGlobalAssetAdded={registerGlobalAsset}
+						onDeleteAsset={(assetId) => {
 							const hit = projectAssets.find((a) => a.id === assetId);
 							setProjectAssets((prev) => prev.filter((a) => a.id !== assetId));
-							if (hit?.objectKey) {
-								try {
-									await deleteProjectObject(hit.objectKey);
-								} catch {}
-							}
+							// Removing from Project Assets removes project clips/references, but
+							// deliberately leaves the global physical asset untouched.
+							window.dispatchEvent(
+								new CustomEvent("ysong:asset-deleted", {
+									detail: {
+										assetId,
+										objectKey: hit?.objectKey,
+										sourceObjectKey: hit?.sourceObjectKey,
+										name: hit?.name,
+										projectReferenceOnly: true,
+									},
+								}),
+							);
 						}}
 					/>
 				</div>

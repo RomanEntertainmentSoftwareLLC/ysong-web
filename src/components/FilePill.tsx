@@ -214,7 +214,6 @@ export function FilePill({
 	objectKey,
 	onDelete,
 	onDownload,
-	disableScrub,
 	onAddToProject,
 	className,
 	style,

@@ -21,7 +21,7 @@ export default function Home() {
 				"Built-in DAW: record, edit, comp, mix",
 				"Record any instrument via audio/MIDI interface",
 				"Import stems, MIDI, external tracks",
-				"Cloud Sync with version history & snapshots",
+				"Local project persistence with version-ready storage",
 				"Plugin Hub — use YSong inside other DAWs (VST/AU)",
 				"Macro Automator — record & replay workflows",
 				"Moodboard Studio — visual references for your project",
@@ -31,7 +31,7 @@ export default function Home() {
 				"Cross-platform desktop, mobile, and web",
 				"Offline mode for traveling musicians",
 				"API access for developers",
-				"Secure Cloud Storage — encrypted backups",
+				"Local-first storage for project files",
 			],
 		},
 		{

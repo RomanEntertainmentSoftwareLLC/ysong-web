@@ -13,14 +13,14 @@ export type Chat = {
 	}[];
 };
 
-type ModuleType = "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "market" | "world";
+type ModuleType = "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
 
 type Props = {
 	chats: Chat[];
 	activeId: string;
 	setActiveId: (id: string) => void;
 	newChat: () => void;
-	meEmail?: string | null;
+	meDisplayName?: string | null;
 	onLogout?: () => void;
 
 	// Optional callbacks supplied by parent (UI.tsx)
@@ -63,7 +63,7 @@ export default function UISidebar({
 	activeId,
 	setActiveId,
 	newChat,
-	meEmail,
+	meDisplayName,
 	onLogout,
 	onOpenModule,
 	onOpenChatTab,
@@ -145,8 +145,8 @@ export default function UISidebar({
         "
 			>
 				<div className="text-[10px] uppercase tracking-wide opacity-60">Signed in as</div>
-				<div className="truncate font-medium" title={meEmail || ""}>
-					{meEmail || "…"}
+				<div className="truncate font-medium" title={meDisplayName || ""}>
+					{meDisplayName || "…"}
 				</div>
 				<div className="mt-2 flex items-center gap-2">
 					{onLogout && (
@@ -257,8 +257,10 @@ export default function UISidebar({
 							["Band Creation", "band"],
 							["Artwork Studio", "artwork"],
 							["My Library", "library"],
+							["Achievements", "achievements"],
 							["Marketplace", "market"],
 							["YSong World", "world"],
+							["Upload Music", "upload"],
 						] as [string, ModuleType][]
 					).map(([label, type]) => (
 						<YSButton

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
 import { YSButton } from "../components/YSButton";
+import SocialAuthButtons from "../components/SocialAuthButtons";
 
 export default function Signup() {
 	const [show, setShow] = useState(false);
@@ -38,12 +39,12 @@ export default function Signup() {
 
 		try {
 			setStatus("loading");
-			// was: await api.signup(email, pw, name || undefined)
-			await apiPost("/auth/signup", {
+			const result = await apiPost<{ local?: boolean; message?: string }>("/auth/signup", {
 				email,
 				password: pw,
 				name: name || undefined,
 			});
+			try { sessionStorage.setItem("ysong:lastSignupWasLocal", result?.local ? "1" : "0"); } catch {}
 			setStatus("done");
 			form.reset();
 		} catch (err: any) {
@@ -51,6 +52,8 @@ export default function Signup() {
 			const msg =
 				err?.message === "account_exists"
 					? "An account with that email already exists. Try logging in."
+					: err?.message === "username_taken"
+					? "That username / display name is already in use."
 					: err?.message || "Something went wrong. Please try again.";
 			setErrorMsg(msg);
 		}
@@ -63,7 +66,7 @@ export default function Signup() {
 			<form className="mt-6 space-y-4" onSubmit={onSubmit}>
 				<div>
 					<label htmlFor="name" className="block text-sm font-medium mb-1">
-						Name
+						Username / display name
 					</label>
 					<input
 						id="name"
@@ -75,6 +78,7 @@ export default function Signup() {
                        bg-white dark:bg-neutral-900 px-3 py-2
                        focus:outline-none focus:ring-2 focus:ring-sky-500"
 					/>
+					<p className="mt-1 text-xs opacity-70">This is the name other YSong users can see. Your email stays private.</p>
 				</div>
 
 				<div>
@@ -160,8 +164,21 @@ export default function Signup() {
 						className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-50 dark:bg-emerald-900/20 p-3 text-sm"
 						role="status"
 					>
-						<p className="font-medium">Check your email</p>
-						<p>We sent a verification link. It expires in ~30 minutes.</p>
+						{(() => {
+							let local = false;
+							try { local = sessionStorage.getItem("ysong:lastSignupWasLocal") === "1"; } catch {}
+							return local ? (
+								<>
+									<p className="font-medium">Local account created</p>
+									<p>No email verification is needed. You can log in now.</p>
+								</>
+							) : (
+								<>
+									<p className="font-medium">Check your email</p>
+									<p>We sent a verification link. It expires in ~30 minutes.</p>
+								</>
+							);
+						})()}
 					</div>
 				)}
 
@@ -183,6 +200,8 @@ export default function Signup() {
 					.
 				</p>
 			</form>
+
+			<SocialAuthButtons mode="signup" />
 
 			<p className="mt-4 text-center text-sm opacity-80">
 				Already have an account?{" "}

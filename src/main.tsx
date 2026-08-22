@@ -4,6 +4,9 @@ import { ThemeProvider } from "./ThemeContext.tsx";
 import { BrowserRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App.tsx";
+import { installDevCrossWindowSync } from "./lib/devCrossWindowSync.ts";
+
+installDevCrossWindowSync();
 
 const container = document.getElementById("root")!;
 createRoot(container).render(

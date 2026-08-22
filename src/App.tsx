@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Routes, Route, Outlet, useLocation } from "react-router-dom";
 import { isMobile, isTablet, useMobileOrientation } from "react-device-detect";
 import Navbar from "./components/NavBar";
-import UINavbar from "./components/UINavBar";
 import Home from "./components/Home";
 import Footer from "./components/Footer";
 import Legal from "./pages/Legal";
@@ -19,6 +18,7 @@ import UI from "./pages/UI";
 import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
 import { apiGet, apiPost } from "./lib/authApi";
+import DevViewportBadge from "./components/DevViewportBadge";
 
 type CurrentUser = {
 	id: string;
@@ -29,12 +29,17 @@ type CurrentUser = {
 };
 
 function HomeResponsive() {
-	// Device class
-	const handheld = isMobile || isTablet;
+	// Device class. The dev cockpit can force the home-page device treatment
+	// while CSS media queries still react to each browser window's real width.
+	let devDevice = "";
+	try { devDevice = new URLSearchParams(window.location.search).get("devDevice") || ""; } catch {}
+	const forcedHandheld = devDevice === "mobile" || devDevice === "tablet";
+	const handheld = devDevice === "desktop" ? false : forcedHandheld ? true : isMobile || isTablet;
 
 	// Orientation (your working pattern)
 	const orientation = useMobileOrientation();
-	const isLandscape = !!orientation.isLandscape;
+	const forcedLandscape = window.innerWidth > window.innerHeight;
+	const isLandscape = devDevice ? forcedLandscape : !!orientation.isLandscape;
 
 	// Mirror the old Mobile.tsx/Desktop.tsx behavior:
 	// - Desktop: place-items-start, w-full, pt-6 sm:pt-10, Home directly
@@ -59,17 +64,17 @@ function HomeResponsive() {
 	);
 }
 
-/** Shell that chooses which header to show and preserves the header offset */
+/** Public pages keep the marketing navbar. The signed-in workspace owns every
+ * pixel of the viewport so the DAW does not lose a permanent 64px header. */
 function AppShell() {
 	const location = useLocation();
 	const inApp = location.pathname.startsWith("/app");
 
 	return (
 		<>
-			{inApp ? <UINavbar /> : <Navbar />}
+			{!inApp && <Navbar />}
 			<UseGradientBackground />
-			{/* keep content pushed below 4rem header */}
-			<div className="pt-16">
+			<div className={inApp ? "" : "pt-16"}>
 				<Outlet />
 			</div>
 		</>
@@ -124,6 +129,8 @@ function App() {
 	// ---------------------------------------------------------------------------
 
 	return (
+		<>
+		<DevViewportBadge />
 		<Routes>
 			{/* Everything renders inside the shell so the correct header shows */}
 			<Route element={<AppShell />}>
@@ -156,6 +163,7 @@ function App() {
 				/>
 			</Route>
 		</Routes>
+		</>
 	);
 }
 

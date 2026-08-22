@@ -3,6 +3,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../ThemeContext";
 import { loadUserSettings, saveUserSettings, type UserSettingsResponse } from "../lib/userPrefsApi";
 import { YSButton } from "../components/YSButton";
+import { apiGet, apiPost } from "../lib/authApi";
+import BridgeSettings from "../components/BridgeSettings";
+import MidiSettings from "../components/MidiSettings";
 
 /* ---------------- Entry ---------------- */
 export default function SettingsPane() {
@@ -147,6 +150,44 @@ function SmallSwitch({
 	);
 }
 
+
+function PublicIdentitySection() {
+	const [displayName, setDisplayName] = useState("");
+	const [savedName, setSavedName] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [message, setMessage] = useState("");
+
+	useEffect(() => {
+		apiGet<{ ok: boolean; user: { displayName?: string } }>("/auth/me")
+			.then((data) => { const name = String(data.user?.displayName || ""); setDisplayName(name); setSavedName(name); })
+			.catch(() => {});
+	}, []);
+
+	const save = async () => {
+		const clean = displayName.trim().replace(/\s+/g, " ");
+		if (!clean) { setMessage("Choose a username / display name first."); return; }
+		setBusy(true); setMessage("");
+		try {
+			const result = await apiPost<{ ok: true; displayName: string }>("/api/profile", { displayName: clean });
+			setDisplayName(result.displayName); setSavedName(result.displayName); setMessage("Saved.");
+		} catch (e: any) {
+			setMessage(e?.message === "username_taken" ? "That name is already in use." : "Could not save your public name.");
+		} finally { setBusy(false); }
+	};
+
+	return <Section title="Public identity" subtitle="Control the name other people see around YSong World.">
+		<div className="space-y-2">
+			<label htmlFor="settings-display-name" className="block text-sm font-medium">Username / display name</label>
+			<div className="flex flex-col sm:flex-row gap-2">
+				<input id="settings-display-name" value={displayName} maxLength={80} onChange={(e) => { setDisplayName(e.target.value); setMessage(""); }} className="min-w-0 flex-1 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" />
+				<YSButton disabled={busy || displayName.trim() === savedName.trim()} onClick={save} className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-4 py-2 disabled:opacity-40">{busy ? "Saving…" : "Save"}</YSButton>
+			</div>
+			<p className="text-xs text-neutral-500">This public name is used for comments, playlists, likes and other social activity. Your email address stays private.</p>
+			{message && <div className="text-xs text-indigo-300">{message}</div>}
+		</div>
+	</Section>;
+}
+
 /* ---------------- Main ---------------- */
 
 function SettingsCore() {
@@ -161,6 +202,19 @@ function SettingsCore() {
 	});
 
 	const [loadedFromServer, setLoadedFromServer] = useState(false);
+	const [twoFactorDraftEnabled, setTwoFactorDraftEnabled] = useState<boolean>(() => {
+		try { return localStorage.getItem("ysong:security:2fa:draft") === "1"; } catch { return false; }
+	});
+	const [twoFactorDraftMethod, setTwoFactorDraftMethod] = useState<"authenticator" | "sms">(() => {
+		try { return localStorage.getItem("ysong:security:2fa:method") === "sms" ? "sms" : "authenticator"; } catch { return "authenticator"; }
+	});
+
+	useEffect(() => {
+		try {
+			localStorage.setItem("ysong:security:2fa:draft", twoFactorDraftEnabled ? "1" : "0");
+			localStorage.setItem("ysong:security:2fa:method", twoFactorDraftMethod);
+		} catch {}
+	}, [twoFactorDraftEnabled, twoFactorDraftMethod]);
 
 	// ThemeContext boolean
 	const { dark, toggleDark } = useTheme();
@@ -284,6 +338,8 @@ function SettingsCore() {
 						</div>
 					</header>
 
+					<PublicIdentitySection />
+
 					<Section title="Appearance" subtitle="Choose how YSong looks on your device.">
 						<DarkModeRow
 							dark={dark}
@@ -300,12 +356,12 @@ function SettingsCore() {
 					<Section title="Chat" subtitle="Behavior and layout for conversations.">
 						<div className="space-y-2">
 							<Row
-								label="Save new chats to cloud"
-								description="Stores new conversations to your account automatically so they appear across devices."
+								label="Save new chats locally"
+								description="Stores new conversations in your local PostgreSQL database on this computer."
 								right={
 									<SmallSwitch
 										id="settings-save-cloud"
-										ariaLabel="Save new chats to cloud"
+										ariaLabel="Save new chats locally"
 										checked={settings.saveNewChatsToCloud}
 										onChange={(v) => {
 											// Update local React state + cache
@@ -382,6 +438,67 @@ function SettingsCore() {
 						</div>
 					</Section>
 
+					<BridgeSettings />
+
+					<MidiSettings />
+
+					<Section title="Security" subtitle="Account sign-in and two-factor authentication.">
+						<div className="rounded-xl border border-amber-400/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-100 mb-2">
+							<strong>Pre-alpha security wiring:</strong> this screen defines the YSong 2FA workflow, but it does not protect the account until the server-side authenticator/SMS verification pass is connected.
+						</div>
+
+						<Row
+							label="Two-factor authentication"
+							description="Require a second verification step after email/password login."
+							right={
+								<SmallSwitch
+									id="settings-2fa-draft"
+									ariaLabel="Preview two-factor authentication setup"
+									checked={twoFactorDraftEnabled}
+									onChange={setTwoFactorDraftEnabled}
+								/>
+							}
+							htmlFor="settings-2fa-draft"
+						/>
+
+						{twoFactorDraftEnabled && (
+							<div className="mt-2 space-y-3">
+								<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+									<button
+										type="button"
+										onClick={() => setTwoFactorDraftMethod("authenticator")}
+										className={`text-left rounded-xl border p-3 transition ${twoFactorDraftMethod === "authenticator" ? "border-indigo-400 bg-indigo-500/10" : "border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100/60 dark:hover:bg-neutral-800/60"}`}
+									>
+										<div className="font-medium">Authenticator app</div>
+										<div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">Scan a QR code, then enter a 6-digit code to confirm setup.</div>
+									</button>
+									<button
+										type="button"
+										onClick={() => setTwoFactorDraftMethod("sms")}
+										className={`text-left rounded-xl border p-3 transition ${twoFactorDraftMethod === "sms" ? "border-indigo-400 bg-indigo-500/10" : "border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100/60 dark:hover:bg-neutral-800/60"}`}
+									>
+										<div className="font-medium">Text message</div>
+										<div className="mt-1 text-xs text-neutral-600 dark:text-neutral-400">Send a one-time 6-digit verification code to the saved phone number.</div>
+									</button>
+								</div>
+
+								<div className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-3">
+									<div className="flex flex-wrap items-center justify-between gap-3">
+										<div>
+											<div className="font-medium">Recovery codes</div>
+											<div className="text-xs text-neutral-600 dark:text-neutral-400 mt-1">Generate a downloadable batch of single-use codes after 2FA is verified, for account recovery when the phone/authenticator is unavailable.</div>
+										</div>
+										<YSButton disabled className="opacity-50 cursor-not-allowed" title="Requires server-side 2FA setup">Generate codes</YSButton>
+									</div>
+								</div>
+
+								<div className="text-xs text-neutral-600 dark:text-neutral-400">
+									Selected setup: <strong>{twoFactorDraftMethod === "authenticator" ? "Authenticator app" : "Text message"}</strong>. The production pass will require verification before YSong marks 2FA as enabled.
+								</div>
+							</div>
+						)}
+					</Section>
+
 					<Section title="About" subtitle="Build details useful for debugging and support.">
 						<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 							<KV label="Mode" value={build.mode} />
@@ -399,7 +516,7 @@ function SettingsCore() {
 						>
 							Reset to defaults
 						</YSButton>
-						<span className="text-xs text-neutral-600 dark:text-neutral-400">Neon-backed settings</span>
+						<span className="text-xs text-neutral-600 dark:text-neutral-400">Local PostgreSQL settings</span>
 					</div>
 				</div>
 			</div>

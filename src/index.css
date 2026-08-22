@@ -89,3 +89,59 @@ body {
 	margin: 0;
 	padding: 0;
 }
+
+/* Horizontal discovery shelves stay swipeable/scrollable without showing
+   native browser scrollbars. Used by World, Library, Achievements, and tabs. */
+.no-scrollbar {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+	-webkit-overflow-scrolling: touch;
+	overscroll-behavior-inline: contain;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+	display: none;
+	width: 0;
+	height: 0;
+}
+
+
+/* Compact, modern range controls used by the persistent World player. */
+.ys-player-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+.ys-player-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(82 82 82);
+}
+.ys-player-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(245 245 245);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .25);
+  transition: transform 120ms ease;
+}
+.ys-player-range:hover::-webkit-slider-thumb { transform: scale(1.18); }
+.ys-player-range::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(82 82 82);
+}
+.ys-player-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(245 245 245);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .25);
+}

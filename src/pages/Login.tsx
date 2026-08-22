@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiPost } from "../lib/authApi";
 import { clearToken } from "../lib/authApi";
 import { YSButton } from "../components/YSButton";
+import SocialAuthButtons from "../components/SocialAuthButtons";
 
 type ApiUser = { id: string; email: string };
 
@@ -27,11 +28,19 @@ export default function Login() {
 			// cycle can pick it up.
 			clearToken();
 
-			// Expecting { token, user: { id, email } }
-			const resp = await apiPost<{ token: string; user: ApiUser }>("/auth/login", {
-				email,
-				password,
-			});
+			// A local dev startup can briefly race the API/DB connection. Retry one
+			// transient server/network failure automatically instead of making the
+			// user press Enter a second time. Never retry credential/verification errors.
+			const doLogin = () => apiPost<{ token: string; user: ApiUser }>("/auth/login", { email, password });
+			let resp: { token: string; user: ApiUser };
+			try {
+				resp = await doLogin();
+			} catch (firstErr: any) {
+				const code = String(firstErr?.message ?? "request_failed");
+				if (code !== "server_error" && code !== "request_failed") throw firstErr;
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+				resp = await doLogin();
+			}
 
 			// Always replace the token we use everywhere
 			localStorage.setItem("ys_token", resp.token);
@@ -45,7 +54,8 @@ export default function Login() {
 			} catch {}
 
 			// Hard redirect avoids any race with state that might still hold the old user
-			window.location.replace("/app");
+			const devDevice = new URLSearchParams(window.location.search).get("devDevice");
+			window.location.replace(devDevice ? `/app?devDevice=${encodeURIComponent(devDevice)}` : "/app");
 			// If you prefer SPA navigation, you can keep:
 			// navigate("/app", { replace: true });
 		} catch (err: any) {
@@ -135,6 +145,8 @@ export default function Login() {
 					</p>
 				)}
 			</form>
+
+			<SocialAuthButtons mode="login" />
 
 			<p className="mt-4 text-center text-sm opacity-80">
 				New to {import.meta.env.VITE_APP_NAME}?{" "}

@@ -14,10 +14,16 @@ import {
 import ChatPane, { YSONG_WELCOME } from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
 import BottomDrawers from "../components/BottomDrawers";
+import { WorldPlayerDock, WorldPlayerProvider, useWorldPlayer } from "../components/WorldPlayer";
 import type { ProjectAsset } from "../components/ProjectAssetDrawer";
 import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
 import DAWPane from "../tabs/DAW";
+import WorldPane from "../tabs/World";
+import UploadMusicPane from "../tabs/UploadMusic";
+import LibraryPane from "../tabs/Library";
+import AchievementsPane from "../tabs/Achievements";
+import NotificationBell from "../components/NotificationBell";
 import { fetchChatMessages } from "../lib/chatApi";
 
 const ZWSP = "\u200B";
@@ -67,7 +73,7 @@ function BootTabs({
 	chatsHydrated,
 	onLayoutHydrated,
 }: {
-	me: { email: string } | null;
+	me: { email: string; displayName: string } | null;
 	chats: Chat[];
 	ensureChat: () => string;
 	chatsHydrated: boolean;
@@ -113,8 +119,10 @@ function BootTabs({
 						band: "Band Creation",
 						artwork: "Artwork Studio",
 						library: "My Library",
+						achievements: "Achievements",
 						market: "Marketplace",
 						world: "YSong World",
+						upload: "Upload Music",
 					};
 
 					const normalizeRestoredTab = (t: any) => {
@@ -278,7 +286,7 @@ function PrefetchChatMessagesFromTabs({
 }
 
 export default function UI() {
-	const [me, setMe] = useState<{ email: string } | null>(null);
+	const [me, setMe] = useState<{ email: string; displayName: string } | null>(null);
 
 	const [chats, setChats] = useState<Chat[]>([]);
 	const [chatsHydrated, setChatsHydrated] = useState(false);
@@ -286,15 +294,19 @@ export default function UI() {
 	const [layoutHydrated, setLayoutHydrated] = useState(false);
 	const [saveChatsEnabled, setSaveChatsEnabled] = useState(false);
 
-	// responsive + mobile drawer
+	// responsive sidebar/drawer. Both desktop and mobile start collapsed so the
+	// workspace gets the maximum amount of screen real estate by default.
 	const isLgUp = useMediaQuery("(min-width: 1024px)");
 	const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+	const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(() => {
+		try { return sessionStorage.getItem("ysong:sidebar:desktopOpen") === "1"; } catch { return false; }
+	});
 	const ensureWelcomeChat = useEnsureWelcomeChat(setChats);
 
 	// Fetch minimal profile (email)
 	useEffect(() => {
-		apiGet<{ ok: boolean; user: { id: string; email: string } }>("/auth/me")
-			.then((u) => setMe({ email: u.user.email }))
+		apiGet<{ ok: boolean; user: { id: string; email: string; displayName: string } }>("/auth/me")
+			.then((u) => setMe({ email: u.user.email, displayName: u.user.displayName }))
 			.catch(() => {});
 	}, []);
 
@@ -340,7 +352,11 @@ export default function UI() {
 		};
 	}, []);
 
-	// --- mobile drawer UX ---
+	// --- sidebar UX ---
+	useEffect(() => {
+		try { sessionStorage.setItem("ysong:sidebar:desktopOpen", desktopSidebarOpen ? "1" : "0"); } catch {}
+	}, [desktopSidebarOpen]);
+
 	useEffect(() => {
 		if (!isLgUp && mobileSidebarOpen) setMobileSidebarOpen(false);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -369,6 +385,22 @@ export default function UI() {
 			body.style.overflow = prevBody || "";
 		};
 	}, [mobileSidebarOpen]);
+
+	// Never let the browser navigate to / play a file just because the user
+	// missed a DAW lane or drawer by a few pixels. Child drop targets still
+	// handle the same event normally; this only suppresses the browser default.
+	useEffect(() => {
+		const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types || []).includes("Files");
+		const preventFileNavigation = (e: DragEvent) => {
+			if (hasFiles(e)) e.preventDefault();
+		};
+		window.addEventListener("dragover", preventFileNavigation);
+		window.addEventListener("drop", preventFileNavigation);
+		return () => {
+			window.removeEventListener("dragover", preventFileNavigation);
+			window.removeEventListener("drop", preventFileNavigation);
+		};
+	}, []);
 
 	function PersistLayout({ ready }: { ready: boolean }) {
 		const { tabs, activeId } = useTabManager();
@@ -411,19 +443,22 @@ export default function UI() {
 		mixer: (_props: TabRendererProps) => <Stub title="Mixer" />,
 		band: (_props: TabRendererProps) => <Stub title="Band Creation" />,
 		artwork: (_props: TabRendererProps) => <Stub title="Artwork Studio" />,
-		library: (_props: TabRendererProps) => <Stub title="My Library" />,
+		library: LibraryPane,
+		achievements: AchievementsPane,
 		market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
-		world: (_props: TabRendererProps) => <Stub title="YSong World" />,
+		world: WorldPane,
+		upload: UploadMusicPane,
 	} as const;
 
 	/* Bridge so UISidebar buttons open/activate tabs */
 	function SidebarWithTabsBridge(p: {
-		meEmail?: string | null;
+		meDisplayName?: string | null;
 		chats: Chat[];
 		activeId: string;
 		setActiveId: (id: string) => void;
 		setChats: Dispatch<SetStateAction<Chat[]>>;
 		onLogout: () => void;
+		onNavigate?: () => void;
 	}) {
 		const { tabs, openTab, activateTab, updateTab, closeTab } = useTabManager();
 
@@ -438,12 +473,15 @@ export default function UI() {
 
 		const onOpenChatTab = (c: Chat) => {
 			const existing = tabs.find((t) => t.type === "chat" && t.payload?.chatId === c.id);
-			if (existing) return activateTab(existing.id);
-			openTab({
-				type: "chat",
-				title: smartTitle(c),
-				payload: { chatId: c.id },
-			});
+			if (existing) activateTab(existing.id);
+			else {
+				openTab({
+					type: "chat",
+					title: smartTitle(c),
+					payload: { chatId: c.id },
+				});
+			}
+			p.onNavigate?.();
 		};
 
 		const onOpenModule = (type: Exclude<TabType, "chat"> | "chat") => {
@@ -460,6 +498,7 @@ export default function UI() {
 					title: "New Chat",
 					payload: { chatId: id },
 				});
+				p.onNavigate?.();
 				return;
 			}
 			const titles = {
@@ -469,12 +508,15 @@ export default function UI() {
 				band: "Band Creation",
 				artwork: "Artwork Studio",
 				library: "My Library",
+				achievements: "Achievements",
 				market: "Marketplace",
 				world: "YSong World",
+				upload: "Upload Music",
 			} as const;
 			const existing = tabs.find((t) => t.type === type);
-			if (existing) return activateTab(existing.id);
-			openTab({ type, title: titles[type], pinned: true });
+			if (existing) activateTab(existing.id);
+			else openTab({ type, title: titles[type], pinned: true });
+			p.onNavigate?.();
 		};
 
 		const handleRenameChat = (chatId: string, newTitle: string) => {
@@ -514,7 +556,7 @@ export default function UI() {
 				activeId={p.activeId}
 				setActiveId={p.setActiveId}
 				newChat={() => onOpenModule("chat")}
-				meEmail={p.meEmail}
+				meDisplayName={p.meDisplayName}
 				onLogout={p.onLogout}
 				onOpenChatTab={onOpenChatTab}
 				onOpenModule={onOpenModule as any}
@@ -527,8 +569,11 @@ export default function UI() {
 	const [drawerAssets, setDrawerAssets] = useState<DrawerAsset[]>([]);
 	const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
 
+	const workspaceLeftPx = isLgUp ? (desktopSidebarOpen ? 280 : 48) : 40;
+
 	return (
 		<TabManagerProvider>
+			<WorldPlayerProvider>
 			<SyncActiveChatFromTabs activeChatId={activeId} setActiveChatId={setActiveId} />
 			<PrefetchChatMessagesFromTabs
 				enabled={saveChatsEnabled}
@@ -536,48 +581,95 @@ export default function UI() {
 				chats={chats}
 				setChats={setChats}
 			/>
+			<NotificationBell />
 
-			<div className="fixed inset-x-0 top-[4rem] bottom-0 flex">
-				{/* Desktop sidebar */}
+			<div className="fixed inset-0 flex bg-neutral-950/10">
+				{/* Desktop: a compact rail replaces the old full-width top navbar. */}
 				{isLgUp && (
-					<div className="shrink-0 w-[280px] border-r border-neutral-200 dark:border-neutral-800">
-						<SidebarWithTabsBridge
-							meEmail={me?.email}
-							chats={chats}
-							activeId={activeId}
-							setActiveId={setActiveId}
-							setChats={setChats}
-							onLogout={logout}
-						/>
+					<div
+						className={`relative shrink-0 border-r border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/35 backdrop-blur transition-[width] duration-200 ${
+							desktopSidebarOpen ? "w-[280px]" : "w-12"
+						}`}
+					>
+						<div className={`h-11 border-b border-neutral-200/10 dark:border-neutral-800 flex items-center ${desktopSidebarOpen ? "px-2 gap-2" : "justify-center"}`}>
+							{desktopSidebarOpen ? (
+								<>
+									<img src="/ysong-logo-with-title.png" alt="YSong" className="dark:hidden h-6 w-auto object-contain object-left" />
+									<img src="/ysong-logo-with-title-darkmode.png" alt="YSong" className="hidden dark:block h-6 w-auto object-contain object-left" />
+								</>
+							) : (
+								<>
+									<img src="/ysong-logo.png" alt="YSong" className="dark:hidden h-6 w-6 object-contain" />
+									<img src="/ysong-logo-darkmode.png" alt="YSong" className="hidden dark:block h-6 w-6 object-contain" />
+								</>
+							)}
+							<YSButton
+								type="button"
+								aria-label={desktopSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+								title={desktopSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+								onClick={() => setDesktopSidebarOpen((v) => !v)}
+								className={`${desktopSidebarOpen ? "ml-auto" : "absolute top-12"} h-8 w-8 inline-flex items-center justify-center rounded-lg border bg-white/80 dark:bg-neutral-950/80 backdrop-blur`}
+							>
+								<span className="text-lg leading-none">{desktopSidebarOpen ? "‹" : "›"}</span>
+							</YSButton>
+						</div>
+						{desktopSidebarOpen && (
+							<div className="absolute inset-x-0 top-11 bottom-0 min-h-0 overflow-hidden">
+								<SidebarWithTabsBridge
+									meDisplayName={me?.displayName}
+									chats={chats}
+									activeId={activeId}
+									setActiveId={setActiveId}
+									setChats={setChats}
+									onLogout={logout}
+								/>
+							</div>
+						)}
 					</div>
 				)}
 
-				{/* Mobile hamburger + drawer */}
-				{/* Note to Self, move this MobileDrawer inside the UINav bar. It is covering the tabs. */}
+				{/* Mobile/tablet: same pull-out rail concept as desktop; no hamburger. */}
 				{!isLgUp && (
 					<>
-						<MobileHamburger open={mobileSidebarOpen} setOpen={setMobileSidebarOpen} />
+						<div className="relative z-[72] w-10 shrink-0 border-r border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/35 backdrop-blur flex flex-col items-center">
+							<img src="/ysong-logo.png" alt="YSong" className="dark:hidden mt-2 h-5 w-5 object-contain" />
+							<img src="/ysong-logo-darkmode.png" alt="YSong" className="hidden dark:block mt-2 h-5 w-5 object-contain" />
+							<YSButton
+								type="button"
+								aria-controls="mobile-sidebar"
+								aria-expanded={mobileSidebarOpen}
+								aria-label={mobileSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+								onClick={() => setMobileSidebarOpen((v) => !v)}
+								className="mt-2 h-8 w-8 inline-flex items-center justify-center rounded-lg border bg-white/80 dark:bg-neutral-950/80"
+							>
+								<span className="text-lg leading-none">{mobileSidebarOpen ? "‹" : "›"}</span>
+							</YSButton>
+						</div>
 						<MobileDrawer open={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)}>
+							<div className="h-11 px-3 border-b border-neutral-200/10 dark:border-neutral-800 flex items-center">
+								<img src="/ysong-logo-with-title.png" alt="YSong" className="dark:hidden h-6 w-auto object-contain object-left" />
+								<img src="/ysong-logo-with-title-darkmode.png" alt="YSong" className="hidden dark:block h-6 w-auto object-contain object-left" />
+							</div>
 							<SidebarWithTabsBridge
-								meEmail={me?.email}
+								meDisplayName={me?.displayName}
 								chats={chats}
 								activeId={activeId}
 								setActiveId={setActiveId}
 								setChats={setChats}
 								onLogout={logout}
+								onNavigate={() => setMobileSidebarOpen(false)}
 							/>
 						</MobileDrawer>
 					</>
 				)}
 
-				{/* Main: Tab bar + active tab */}
-				<main className="flex-1 min-w-0 h-full min-h-0 flex flex-col">
-					<TabBar />
-					<TabContentHost registry={registry} extraProps={{ chats, setChats }} />
-				</main>
+				<PlayerAwareMain
+					registry={registry}
+					extraProps={{ chats, setChats, projectAssets, setProjectAssets }}
+				/>
 			</div>
 
-			<BottomDrawers
+			<WorkspaceBottomChrome
 				chats={chats}
 				setChats={setChats}
 				drawerAssets={drawerAssets}
@@ -585,9 +677,9 @@ export default function UI() {
 				activeChatId={activeId}
 				projectAssets={projectAssets}
 				setProjectAssets={setProjectAssets}
+				workspaceLeftPx={workspaceLeftPx}
 			/>
 
-			{/* auto-open first Chat tab */}
 			<BootTabs
 				me={me}
 				chats={chats}
@@ -596,75 +688,77 @@ export default function UI() {
 				onLayoutHydrated={() => setLayoutHydrated(true)}
 			/>
 			<PersistLayout ready={layoutHydrated} />
+			</WorldPlayerProvider>
 		</TabManagerProvider>
 	);
+
 }
 
-/* ------------------- tiny mobile helpers (unchanged look) ------------------ */
 
-function MobileHamburger({ open, setOpen }: { open: boolean; setOpen: (v: boolean) => void }) {
-	const menuBtnRef = useRef<HTMLButtonElement>(null);
-	useEffect(() => {
-		const el = menuBtnRef.current;
-		if (!el) return;
-		el.setAttribute("aria-expanded", open ? "true" : "false");
-	}, [open]);
-
-	const wasOpenRef = useRef(false);
-	useEffect(() => {
-		if (wasOpenRef.current && !open) {
-			menuBtnRef.current?.focus();
-		}
-		wasOpenRef.current = open;
-	}, [open]);
+function PlayerAwareMain({ registry, extraProps }: { registry: any; extraProps: Record<string, any> }) {
+	const { current } = useWorldPlayer();
+	const { tabs, activeId } = useTabManager();
+	const activeType = tabs.find((t) => t.id === activeId)?.type;
+	const playerVisible = !!current && activeType !== "daw";
 
 	return (
-		<YSButton
-			ref={menuBtnRef}
-			type="button"
-			aria-controls="mobile-sidebar"
-			aria-haspopup="dialog"
-			aria-label={open ? "Close sidebar" : "Open sidebar"}
-			onClick={() => setOpen(!open)}
-			className="lg:hidden fixed top-[4rem] right-[max(0.75rem,env(safe-area-inset-right))] z-[70] inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-black/25 dark:bg-white/10 backdrop-blur"
+		<main
+			className={`flex-1 min-w-0 h-full min-h-0 flex flex-col transition-[padding-bottom] duration-150 ${playerVisible ? "pb-[124px] md:pb-[78px]" : "pb-0"}`}
 		>
-			{/* hamburger */}
-			<svg
-				viewBox="0 0 24 24"
-				className={`${open ? "hidden" : "block"} h-6 w-6`}
-				fill="none"
-				stroke="currentColor"
-				strokeWidth={2}
-				strokeLinecap="round"
-				aria-hidden="true"
-			>
-				<path d="M4 6h16M4 12h16M4 18h16" />
-			</svg>
-
-			{/* close (X) */}
-			<svg
-				viewBox="0 0 24 24"
-				className={`${open ? "block" : "hidden"} h-6 w-6`}
-				fill="none"
-				stroke="currentColor"
-				strokeWidth={2}
-				strokeLinecap="round"
-				aria-hidden="true"
-			>
-				<path d="M6 6l12 12M6 18L18 6" />
-			</svg>
-		</YSButton>
+			<TabBar />
+			<TabContentHost registry={registry} extraProps={extraProps} />
+		</main>
 	);
 }
+
+function WorkspaceBottomChrome({
+	chats, setChats, drawerAssets, setDrawerAssets, activeChatId, projectAssets, setProjectAssets, workspaceLeftPx,
+}: {
+	chats: Chat[];
+	setChats: Dispatch<SetStateAction<Chat[]>>;
+	drawerAssets: DrawerAsset[];
+	setDrawerAssets: Dispatch<SetStateAction<DrawerAsset[]>>;
+	activeChatId: string;
+	projectAssets: ProjectAsset[];
+	setProjectAssets: Dispatch<SetStateAction<ProjectAsset[]>>;
+	workspaceLeftPx: number;
+}) {
+	const { tabs, activeId } = useTabManager();
+	const { pause } = useWorldPlayer();
+	const activeType = tabs.find((t) => t.id === activeId)?.type;
+	const inDaw = activeType === "daw";
+
+	// World playback survives World -> Upload/Settings/Chat/Library navigation.
+	// Entering the DAW pauses it to prevent two independent transports fighting.
+	useEffect(() => { if (inDaw) pause(); }, [inDaw, pause]);
+
+	return (
+		<>
+			{inDaw && (
+				<BottomDrawers
+					chats={chats}
+					setChats={setChats}
+					drawerAssets={drawerAssets}
+					setDrawerAssets={setDrawerAssets}
+					activeChatId={activeChatId}
+					projectAssets={projectAssets}
+					setProjectAssets={setProjectAssets}
+					workspaceLeftPx={workspaceLeftPx}
+				/>
+			)}
+			<WorldPlayerDock hidden={inDaw} workspaceLeftPx={workspaceLeftPx} />
+		</>
+	);
+}
+
+/* --------------------------- mobile side drawer --------------------------- */
 
 function MobileDrawer({ open, onClose, children }: { open: boolean; onClose: () => void; children: React.ReactNode }) {
 	return (
-		<div className={`lg:hidden fixed left-0 right-0 top-[4rem] bottom-0 z-40 ${open ? "" : "pointer-events-none"}`}>
+		<div className={`lg:hidden fixed left-10 right-0 top-0 bottom-0 z-[70] ${open ? "" : "pointer-events-none"}`}>
 			<div
 				aria-hidden="true"
-				className={`absolute inset-0 bg-black/40 transition-opacity duration-200 ${
-					open ? "opacity-100" : "opacity-0"
-				}`}
+				className={`absolute inset-0 bg-black/45 transition-opacity duration-200 ${open ? "opacity-100" : "opacity-0"}`}
 				onClick={onClose}
 			/>
 			<div
@@ -672,35 +766,12 @@ function MobileDrawer({ open, onClose, children }: { open: boolean; onClose: () 
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="mobile-sidebar-title"
-				className={`absolute inset-y-0 left-0 w-[85%] max-w-[360px] bg-white dark:bg-neutral-950 shadow-xl transition-transform duration-300 ${
+				className={`absolute inset-y-0 left-0 w-[78%] max-w-[320px] bg-white dark:bg-neutral-950 shadow-2xl border-r border-neutral-200/15 dark:border-neutral-800 transition-transform duration-250 ${
 					open ? "translate-x-0" : "-translate-x-full"
 				}`}
 			>
-				<div className="relative h-full">
-					<h2 id="mobile-sidebar-title" className="sr-only">
-						Sidebar
-					</h2>
-					<YSButton
-						type="button"
-						aria-label="Close sidebar"
-						className="absolute right-3 top-3 h-9 w-9 inline-flex items-center justify-center rounded-lg border"
-						onClick={onClose}
-					>
-						<svg
-							viewBox="0 0 24 24"
-							className="h-5 w-5"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth={2}
-							strokeLinecap="round"
-							aria-hidden="true"
-						>
-							<path d="M6 6l12 12M6 18L18 6" />
-						</svg>
-					</YSButton>
-
-					<div className="h-full overflow-y-auto">{children}</div>
-				</div>
+				<h2 id="mobile-sidebar-title" className="sr-only">Sidebar</h2>
+				<div className="h-full min-h-0 overflow-y-auto">{children}</div>
 			</div>
 		</div>
 	);

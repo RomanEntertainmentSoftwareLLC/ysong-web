@@ -202,54 +202,13 @@ function deriveObjectKeyFromPublicUrl(url?: string): string | undefined {
 	return;
 }
 
-function makeDragGhost(label: string) {
+function setTransparentDragImage(dt: DataTransfer) {
 	try {
-		const el = document.createElement("div");
-		el.textContent = label;
-		el.style.position = "absolute";
-		el.style.top = "-1000px";
-		el.style.left = "-1000px";
-		el.style.padding = "8px 10px";
-		el.style.background = "rgba(10,10,12,0.85)";
-		el.style.border = "1px solid rgba(255,255,255,0.18)";
-		el.style.borderRadius = "12px";
-		el.style.color = "rgba(255,255,255,0.92)";
-		el.style.fontSize = "12px";
-		el.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-		el.style.pointerEvents = "none";
-		el.style.opacity = "0.82";
-		el.style.maxWidth = "280px";
-		el.style.whiteSpace = "nowrap";
-		el.style.overflow = "hidden";
-		el.style.textOverflow = "ellipsis";
-		document.body.appendChild(el);
-		return el;
-	} catch {
-		return null;
-	}
-}
-
-function makePillCloneGhost(pillEl: HTMLElement) {
-	try {
-		const clone = pillEl.cloneNode(true) as HTMLElement;
-		// Remove interactive bits so the ghost looks like a clean clip preview
-		clone.querySelectorAll("button, .fp-controls, .fp-more, .fp-toast-portal").forEach((n) => {
-			try {
-				(n as HTMLElement).remove();
-			} catch {}
-		});
-		clone.style.position = "absolute";
-		clone.style.top = "-1000px";
-		clone.style.left = "-1000px";
-		clone.style.pointerEvents = "none";
-		clone.style.opacity = "0.72";
-		clone.style.transform = "translateZ(0)";
-		clone.style.filter = "drop-shadow(0 10px 22px rgba(0,0,0,0.35))";
-		document.body.appendChild(clone);
-		return clone;
-	} catch {
-		return null;
-	}
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		dt.setDragImage(canvas, 0, 0);
+	} catch {}
 }
 
 function normalizeAttachment(raw: any): Attachment {
@@ -673,8 +632,39 @@ export default function AssetDrawer(props: Props) {
 		});
 	}
 
+	// Bottom drawer handles forward external file drops here. This makes the
+	// closed handle itself a real drop target instead of letting Chrome open
+	// the audio in a new tab.
+	useEffect(() => {
+		const onForwardedDrop = (event: Event) => {
+			const files = Array.from((event as CustomEvent<{ files?: File[] }>).detail?.files || []);
+			if (files.length) void addAssetsToDrawer(files);
+		};
+		window.addEventListener("ysong:drop-files-assets", onForwardedDrop as EventListener);
+		return () => window.removeEventListener("ysong:drop-files-assets", onForwardedDrop as EventListener);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	// Imports made directly into the DAW or Project Assets are registered here
+	// as the SAME global asset. No duplicate upload is created.
+	useEffect(() => {
+		const onGlobalAssetAdded = (event: Event) => {
+			const a = (event as CustomEvent<DrawerAsset>).detail;
+			if (!a?.id) return;
+			setDrawerAssets((prev) => {
+				if ((prev || []).some((x) => x.id === a.id || (!!a.objectKey && x.objectKey === a.objectKey))) return prev;
+				return [a, ...(prev || [])];
+			});
+		};
+		window.addEventListener("ysong:global-asset-added", onGlobalAssetAdded as EventListener);
+		return () => window.removeEventListener("ysong:global-asset-added", onGlobalAssetAdded as EventListener);
+	}, [setDrawerAssets]);
+
 	async function deleteAssetEverywhere(objectKey: string) {
 		if (!objectKey) return;
+
+		const deletingAsset = assets.find((a) => a.objectKey === objectKey);
+		const deletingName = deletingAsset?.name;
 
 		// Snapshot which messages reference this objectKey (for server cleanup)
 		const messageIds: string[] = [];
@@ -718,6 +708,45 @@ export default function AssetDrawer(props: Props) {
 		);
 
 		setDrawerAssets((prev) => (prev ?? []).filter((a) => a.objectKey !== objectKey));
+
+		// A source audio asset may have been copied into the active project when
+		// it was dragged into the DAW. Remove those project-owned copies too.
+		// New v6 assets carry sourceObjectKey; name is only a legacy fallback for
+		// older projects created before that link existed.
+		try {
+			const globalAssets = Array.isArray((window as any).__ysongProjectAssets)
+				? ((window as any).__ysongProjectAssets as any[])
+				: [];
+			let linked = globalAssets.filter((a) =>
+				a?.sourceObjectKey === objectKey || a?.objectKey === objectKey || a?.id === objectKey,
+			);
+
+			// Legacy migration aid: if there is no key relationship, an exact filename
+			// match is enough to remove the old ghost that v5 could leave behind.
+			if (!linked.length && deletingName) {
+				linked = globalAssets.filter((a) => a?.name === deletingName);
+			}
+
+			const linkedIds = new Set(linked.map((a) => a?.id).filter(Boolean));
+			const setGlobal = (window as any).__ysongSetProjectAssets;
+			if (typeof setGlobal === "function" && linkedIds.size) {
+				setGlobal((prev: any[]) => (prev || []).filter((a) => !linkedIds.has(a?.id)));
+			}
+
+			for (const a of linked) {
+				if (a?.objectKey && a.objectKey !== objectKey) {
+					try { await deleteUploadFromCloud(a.objectKey); } catch {}
+				}
+			}
+
+			window.dispatchEvent(new CustomEvent("ysong:asset-deleted", {
+				detail: {
+					objectKey,
+					name: deletingName,
+					linkedAssetIds: [...linkedIds],
+				},
+			}));
+		} catch {}
 	}
 
 	function triggerPicker() {
@@ -770,7 +799,11 @@ export default function AssetDrawer(props: Props) {
 	const panel = (
 		<div
 			id="asset-drawer-panel"
-			className={`asset-drawer-panel ${open ? "asset-drawer-panel-open" : "asset-drawer-panel-closed"}`}
+			className={`asset-drawer-panel ${open ? "asset-drawer-panel-open" : "asset-drawer-panel-closed"} ${dragActive ? "asset-drawer-panel-drop-active" : ""}`}
+			onDragEnter={onDragEnter}
+			onDragLeave={onDragLeave}
+			onDragOver={onDragOver}
+			onDrop={onDrop}
 		>
 			{/* header */}
 			<div className="asset-drawer-header">
@@ -811,13 +844,7 @@ export default function AssetDrawer(props: Props) {
 			</div>
 
 			{/* scrollable content + dropzone */}
-			<div
-				className="asset-drawer-scroll asset-drawer-dropzone"
-				onDragEnter={onDragEnter}
-				onDragLeave={onDragLeave}
-				onDragOver={onDragOver}
-				onDrop={onDrop}
-			>
+			<div className="asset-drawer-scroll asset-drawer-dropzone">
 				{(dragActive || isUploading) && (
 					<div className="asset-drawer-dropoverlay">
 						<div className="asset-drawer-dropcard">
@@ -852,26 +879,15 @@ export default function AssetDrawer(props: Props) {
 									draggable={canDrag}
 									onDragStart={(e) => {
 										if (!canDrag) return;
-										e.dataTransfer.effectAllowed = "copy";
+										e.dataTransfer.effectAllowed = "link";
 										e.dataTransfer.setData("application/x-ysong-asset", JSON.stringify(payload));
 										e.dataTransfer.setData("text/plain", "");
-										const pill = (e.currentTarget as HTMLElement).querySelector(
-											".asset-pill",
-										) as HTMLElement | null;
-										const ghost = pill ? makePillCloneGhost(pill) : makeDragGhost(asset.name);
-										if (ghost) {
-											const rect = ghost.getBoundingClientRect();
-											e.dataTransfer.setDragImage(
-												ghost,
-												Math.min(28, rect.width / 2),
-												Math.min(18, rect.height / 2),
-											);
-											setTimeout(() => {
-												try {
-													ghost.remove();
-												} catch {}
-											}, 600);
-										}
+										(window as any).__ysongDragAsset = payload;
+										setTransparentDragImage(e.dataTransfer);
+									}}
+									onDragEnd={() => {
+										try { delete (window as any).__ysongDragAsset; } catch {}
+										window.dispatchEvent(new Event("ysong:asset-drag-end"));
 									}}
 									title={canDrag ? `Drag: ${asset.name}` : asset.name}
 								>
