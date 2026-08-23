@@ -7,14 +7,17 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "prepare:gm": "node scripts/prepare-gm-assets.mjs",
+    "postinstall": "npm run prepare:gm"
   },
   "dependencies": {
     "react": "^19.1.1",
     "react-device-detect": "^2.2.3",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.3",
-    "resend": "^6.1.2"
+    "resend": "^6.1.2",
+    "spessasynth_lib": "^4.3.13"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

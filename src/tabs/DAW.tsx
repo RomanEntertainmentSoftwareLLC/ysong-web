@@ -7,11 +7,9 @@ import MidiEditor, { type MidiEditableClip } from "../components/MidiEditor";
 import TransportConsole from "../components/TransportConsole";
 import OnScreenKeyboard from "../components/OnScreenKeyboard";
 import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type Vst3MidiEvent } from "../lib/bridgeApi";
+import { gmSoundFontNoteOff, gmSoundFontNoteOn, prepareGmSoundFont, scheduleGmSoundFontNote, stopGmSoundFontPlayback } from "../lib/gmSoundFont";
 import {
 	GM_PROGRAMS,
-	gmPreviewProfile,
-	interpolateAutomation,
-	midiToFrequency,
 	normalizeGmProgram,
 	type BuiltinInstrument,
 	type MidiAutomationPoint,
@@ -120,6 +118,16 @@ const MENU_H = 112;
 
 // Bottom-center drawer handle(s) sit on top of the app; reserve space so transport text isn't covered.
 const BOTTOM_DOCK_SAFE_PX = 56;
+
+// The DAW can be mounted under React StrictMode in development. StrictMode intentionally
+// runs an extra setup -> cleanup -> setup cycle for Effects on first mount. A cleanup-only
+// Effect that immediately cleared the Bridge MIDI route therefore looked like a real DAW
+// unmount and could erase the freshly-restored selected-instrument route on cold startup.
+// Keep a tiny module-level ownership count and defer the final clear by one task. A real
+// unmount still clears the native route, while StrictMode's probe (or a fast DAW remount)
+// reclaims ownership before the clear is allowed to fire.
+let dawMidiRouteOwnerCount = 0;
+let dawMidiRouteClearTimer: number | null = null;
 
 const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
@@ -438,76 +446,6 @@ function isEditableTarget(t: EventTarget | null) {
 	return tag === "input" || tag === "textarea" || t.isContentEditable;
 }
 
-type GmPreviewVoiceNodes = {
-	sources: OscillatorNode[];
-	gain: GainNode;
-	lfo?: OscillatorNode;
-	release: number;
-};
-
-/**
- * Create the dependency-free General MIDI fallback voice. The old renderer used
- * one generic oscillator per GM family, which made a piano, organ and guitar
- * sound like barely-related beeps. This additive voice keeps the preview light
- * enough for the browser while giving each GM family a musically appropriate
- * harmonic spectrum and envelope. Native VSTs still bypass this completely.
- */
-function createGmPreviewVoice(
-	ctx: AudioContext,
-	program: number,
-	baseHz: number,
-	velocity: number,
-	destination: AudioNode,
-	startAt: number,
-): GmPreviewVoiceNodes {
-	const profile = gmPreviewProfile(program);
-	const filter = ctx.createBiquadFilter();
-	const voiceGain = ctx.createGain();
-	filter.type = "lowpass";
-	filter.frequency.setValueAtTime(profile.filterHz, startAt);
-	filter.Q.setValueAtTime(profile.filterQ, startAt);
-	filter.connect(voiceGain);
-	voiceGain.connect(destination);
-
-	const partialTotal = Math.max(1, profile.partials.reduce((sum, partial) => sum + Math.max(0, partial.gain), 0));
-	const velocityAmp = clamp(velocity / 127, 0.01, 1) * Math.min(0.20, 0.30 / Math.sqrt(partialTotal));
-	const attackEnd = startAt + Math.max(0.001, profile.attack);
-	voiceGain.gain.setValueAtTime(0.0001, startAt);
-	voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0002, velocityAmp), attackEnd);
-	if (profile.decay) {
-		const sustainAmp = Math.max(0.0001, velocityAmp * Math.max(0.005, profile.sustain ?? 0.04));
-		voiceGain.gain.exponentialRampToValueAtTime(sustainAmp, startAt + Math.max(profile.attack + 0.01, profile.decay));
-	}
-
-	const sources: OscillatorNode[] = [];
-	for (const partial of profile.partials) {
-		const osc = ctx.createOscillator();
-		const partialGain = ctx.createGain();
-		osc.type = partial.oscillator ?? "sine";
-		osc.frequency.setValueAtTime(Math.max(8, baseHz * partial.ratio), startAt);
-		osc.detune.setValueAtTime(partial.detuneCents ?? 0, startAt);
-		partialGain.gain.setValueAtTime(Math.max(0, partial.gain) / partialTotal, startAt);
-		osc.connect(partialGain);
-		partialGain.connect(filter);
-		osc.start(startAt);
-		sources.push(osc);
-	}
-
-	let lfo: OscillatorNode | undefined;
-	if ((profile.vibratoCents ?? 0) > 0) {
-		lfo = ctx.createOscillator();
-		const lfoGain = ctx.createGain();
-		lfo.type = "sine";
-		lfo.frequency.setValueAtTime(profile.vibratoHz ?? 5.2, startAt);
-		lfoGain.gain.setValueAtTime(profile.vibratoCents ?? 0, startAt);
-		lfo.connect(lfoGain);
-		for (const osc of sources) lfoGain.connect(osc.detune);
-		lfo.start(startAt);
-	}
-
-	return { sources, gain: voiceGain, lfo, release: profile.release };
-}
-
 // --- Snap helpers (Absolute snapping only) ---
 function parseGridValue(v: GridValue): { kind: "bar" } | { kind: "note"; div: number; triplet: boolean } {
 	if (v === "bar") return { kind: "bar" };
@@ -818,8 +756,7 @@ export default function DAW(_props: TabRendererProps) {
 	const activeClipSourcesRef = useRef<Map<string, Set<AudioScheduledSourceNode>>>(new Map());
 	const audioScheduleGenerationRef = useRef(0);
 	const gmProgramOverrideRef = useRef<Map<string, number>>(new Map());
-	type LiveGmVoice = GmPreviewVoiceNodes & { trackId: string };
-	const liveGmVoicesRef = useRef<Map<string, LiveGmVoice>>(new Map());
+	const liveGmNoteKeysRef = useRef<Set<string>>(new Set());
 	const liveVstNoteIdsRef = useRef<Map<string, number>>(new Map());
 	type RecordingSession = { clipId: string; trackId: string; startedAtMs: number; startBar: number; active: Map<number, { id: string; startBars: number; velocity: number }> };
 	const recordingSessionRef = useRef<RecordingSession | null>(null);
@@ -1005,6 +942,15 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			const loaded = await bridgeApi.loadVst3Instrument(track.id, track.vst3PluginPath);
 			vstLoadedRef.current.set(track.id, track.vst3PluginPath);
+
+			// Selection owns live hardware MIDI. On a cold YSong launch the selection
+			// effect can run before Bridge is ready and its one-shot /midi/route request
+			// is lost. Successful native load is a reliable convergence point, so reassert
+			// the route here for the currently-selected VST instrument.
+			if (selectedTrackId === track.id) {
+				await bridgeApi.setMidiRoute(track.id, track.midiInputName ?? null);
+			}
+
 			setVstTrackState((prev) => ({ ...prev, [track.id]: { status: "ready" } }));
 			if (loaded.plugin?.name && loaded.plugin.name !== track.vst3PluginName) {
 				setTracks((prev) => prev.map((t) => t.id === track.id ? {
@@ -1672,7 +1618,7 @@ export default function DAW(_props: TabRendererProps) {
 	useEffect(() => {
 		syncTrackAudioBuses(tracks);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tracks]);
+	}, [dawHydrated, tracks]);
 
 	// Persisted VST assignments are part of the DAW project. Once project state is
 	// hydrated, reconcile the native Bridge instances with those assignments.
@@ -1845,22 +1791,24 @@ export default function DAW(_props: TabRendererProps) {
 	// excuse to make an unselected synth play. "All Inputs" means every enabled
 	// hardware MIDI device may feed THIS selected instrument track.
 	const selectedMidiTarget = tracks.find((t) => t.id === selectedTrackId && t.type === "instrument") ?? null;
-	const currentMidiTargetTrack = () => selectedMidiTarget;
+	// Keep a live ref so Bridge reconnect callbacks never capture a stale pre-hydration
+	// selection. This matters on cold startup where the MIDI SSE connection can open
+	// while persisted DAW state is still being restored.
+	const selectedMidiTargetRef = useRef<Track | null>(null);
+	selectedMidiTargetRef.current = selectedMidiTarget;
+	const currentMidiTargetTrack = () => selectedMidiTargetRef.current;
+
+	// Warm the real GM engine as soon as a GM track is selected. The SoundFont is
+	// ~31 MB, so doing the parse before the first actual key press keeps live MIDI
+	// from feeling like the first note was swallowed. AudioContext resume still occurs
+	// on the user's performance gesture.
+	useEffect(() => {
+		if (!selectedMidiTarget || selectedMidiTarget.vst3PluginPath) return;
+		const ctx = ensureAudioCtx();
+		void prepareGmSoundFont(ctx).catch((error) => console.error("YSong General MIDI SoundFont preload failed", error));
+	}, [selectedMidiTarget?.id, selectedMidiTarget?.vst3PluginPath]);
 
 	const liveNoteKey = (trackId: string, pitch: number) => `${trackId}:${pitch}`;
-
-	const releaseLiveGmVoice = (voice: LiveGmVoice, fast = false) => {
-		const now = voice.gain.context.currentTime;
-		const release = fast ? 0.045 : Math.max(0.06, Math.min(0.7, voice.release));
-		try {
-			voice.gain.gain.cancelScheduledValues(now);
-			voice.gain.gain.setTargetAtTime(0.0001, now, Math.max(0.008, release / 5));
-		} catch {}
-		for (const osc of voice.sources) {
-			try { osc.stop(now + release + 0.03); } catch {}
-		}
-		try { voice.lfo?.stop(now + release + 0.03); } catch {}
-	};
 
 	const liveMidiNoteOn = (pitch: number, velocity = 96, targetOverride?: Track | null) => {
 		const target = targetOverride ?? currentMidiTargetTrack();
@@ -1874,30 +1822,26 @@ export default function DAW(_props: TabRendererProps) {
 			const noteId = stablePositiveInt(`${target.id}:live:${normalizedPitch}:${Date.now()}:${Math.random()}`);
 			liveVstNoteIdsRef.current.set(key, noteId);
 			void ensureVstLoaded(target)
-				.then(() => bridgeApi.scheduleVst3Midi(target.id, [{ kind: "on", note: normalizedPitch, velocity: normalizedVelocity, noteId, whenUnixMs: Date.now() + 4, isLive: true }]))
+				.then(() => bridgeApi.scheduleVst3Midi(target.id, [{ kind: "on", note: normalizedPitch, velocity: normalizedVelocity, noteId, whenUnixMs: Date.now() + 4 }]))
 				.catch(() => {});
 			return;
 		}
 
-		// Replace an already-held browser voice for the same track/pitch cleanly.
-		const existing = liveGmVoicesRef.current.get(key);
-		if (existing) {
-			releaseLiveGmVoice(existing, true);
-			liveGmVoicesRef.current.delete(key);
-		}
-
+		// v31: real General MIDI playback. One GeneralUser GS SoundFont engine is
+		// shared across melodic channels; the selected track owns this live note.
 		const ctx = ensureAudioCtx();
 		void ctx.resume().catch(() => {});
-		const now = ctx.currentTime;
-		const voice = createGmPreviewVoice(
+		liveGmNoteKeysRef.current.add(key);
+		const gmAudible = computedTrackGain(target) > 0;
+		void gmSoundFontNoteOn(
 			ctx,
-			normalizeGmProgram(target.gmProgram ?? 0),
-			midiToFrequency(normalizedPitch),
+			target.id,
+			normalizeGmProgram(gmProgramOverrideRef.current.get(target.id) ?? target.gmProgram ?? 0),
+			normalizedPitch,
 			normalizedVelocity,
-			ensureTrackAudioBus(target.id).gain,
-			now,
-		);
-		liveGmVoicesRef.current.set(key, { ...voice, trackId: target.id });
+			target.level ?? 100,
+			!gmAudible,
+		).catch((error) => console.error("YSong General MIDI SoundFont note-on failed", error));
 	};
 
 	const liveMidiNoteOff = (pitch: number, targetOverride?: Track | null) => {
@@ -1910,21 +1854,18 @@ export default function DAW(_props: TabRendererProps) {
 		if (target.vst3PluginPath) {
 			const noteId = liveVstNoteIdsRef.current.get(key);
 			liveVstNoteIdsRef.current.delete(key);
-			if (noteId != null) void bridgeApi.scheduleVst3Midi(target.id, [{ kind: "off", note: normalizedPitch, velocity: 0, noteId, whenUnixMs: Date.now() + 2, isLive: true }]).catch(() => {});
+			if (noteId != null) void bridgeApi.scheduleVst3Midi(target.id, [{ kind: "off", note: normalizedPitch, velocity: 0, noteId, whenUnixMs: Date.now() + 2 }]).catch(() => {});
 			return;
 		}
 
-		const voice = liveGmVoicesRef.current.get(key);
-		if (!voice) return;
-		liveGmVoicesRef.current.delete(key);
-		releaseLiveGmVoice(voice, false);
+		liveGmNoteKeysRef.current.delete(key);
+		const ctx = ensureAudioCtx();
+		void gmSoundFontNoteOff(ctx, target.id, normalizedPitch).catch(() => {});
 	};
 
 	const panicLiveMidi = () => {
-		for (const [key, voice] of liveGmVoicesRef.current) {
-			releaseLiveGmVoice(voice, true);
-			liveGmVoicesRef.current.delete(key);
-		}
+		liveGmNoteKeysRef.current.clear();
+		stopGmSoundFontPlayback();
 		liveVstNoteIdsRef.current.clear();
 		setHardwareActiveNotes(new Set());
 		void bridgeApi.midiPanic().catch(() => {});
@@ -1942,11 +1883,14 @@ export default function DAW(_props: TabRendererProps) {
 		const previousId = previousLiveTargetIdRef.current;
 		const nextId = selectedMidiTarget?.id ?? null;
 		if (previousId && previousId !== nextId) {
-			// Release browser-generated GM voices belonging to the track we just left.
-			for (const [key, voice] of liveGmVoicesRef.current) {
-				if (voice.trackId !== previousId) continue;
-				releaseLiveGmVoice(voice, true);
-				liveGmVoicesRef.current.delete(key);
+			// Selection owns live performance. Release any SoundFont notes still held
+			// by the track we just left so another instrument never plays accidentally.
+			const ctx = ensureAudioCtx();
+			for (const key of [...liveGmNoteKeysRef.current]) {
+				if (!key.startsWith(`${previousId}:`)) continue;
+				const pitch = Number(key.slice(key.lastIndexOf(":") + 1));
+				liveGmNoteKeysRef.current.delete(key);
+				if (Number.isFinite(pitch)) void gmSoundFontNoteOff(ctx, previousId, clamp(pitch, 0, 127)).catch(() => {});
 			}
 
 			// YSong's on-screen keys schedule VST notes through HTTP rather than the native
@@ -1954,7 +1898,7 @@ export default function DAW(_props: TabRendererProps) {
 			for (const [key, noteId] of liveVstNoteIdsRef.current) {
 				if (!key.startsWith(`${previousId}:`)) continue;
 				const pitch = Number(key.slice(key.lastIndexOf(":") + 1));
-				if (Number.isFinite(pitch)) void bridgeApi.scheduleVst3Midi(previousId, [{ kind: "off", note: clamp(pitch, 0, 127), velocity: 0, noteId, whenUnixMs: Date.now() + 2, isLive: true }]).catch(() => {});
+				if (Number.isFinite(pitch)) void bridgeApi.scheduleVst3Midi(previousId, [{ kind: "off", note: clamp(pitch, 0, 127), velocity: 0, noteId, whenUnixMs: Date.now() + 2 }]).catch(() => {});
 				liveVstNoteIdsRef.current.delete(key);
 			}
 			setHardwareActiveNotes(new Set());
@@ -1962,15 +1906,56 @@ export default function DAW(_props: TabRendererProps) {
 		previousLiveTargetIdRef.current = nextId;
 	}, [selectedMidiTarget?.id]);
 
-	// Tell the native Bridge which ONE YSong instrument track owns hardware MIDI.
-	// Selecting an audio track (or no track) clears the native route completely.
+	// Only Bridge-hosted VST3 tracks need a native low-latency MIDI route.
+	// General MIDI stays in the browser and consumes the same hardware events from
+	// the SSE monitor stream, so do not point Bridge at a GM track and spam false
+	// "VST not loaded" drops. Selection still owns both paths.
 	useEffect(() => {
-		void bridgeApi.setMidiRoute(selectedMidiTarget?.id ?? null, selectedMidiTarget?.midiInputName ?? null).catch(() => {});
-	}, [selectedMidiTarget?.id, selectedMidiTarget?.midiInputName]);
+		// Do not clear/rewrite the Bridge route from the empty pre-hydration render.
+		// Once the saved project selection exists, converge the Bridge toward that route.
+		if (!dawHydrated) return;
+		let cancelled = false;
+		const syncRoute = async () => {
+			// Startup ordering is intentionally loose (Bridge, Vite and the DAW restore in
+			// parallel). If Bridge is not listening on the first attempt, retry briefly
+			// instead of leaving hardware MIDI dead until the user clicks the track.
+			for (let attempt = 0; attempt < 20 && !cancelled; attempt += 1) {
+				const current = selectedMidiTargetRef.current;
+				const nativeTrackId = current?.vst3PluginPath ? current.id : null;
+				try {
+					await bridgeApi.setMidiRoute(nativeTrackId, current?.midiInputName ?? null);
+					return;
+				} catch {
+					if (attempt < 19) await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+				}
+			}
+		};
+		void syncRoute();
+		return () => { cancelled = true; };
+	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
 
-	// Clear the native route only when the DAW itself unmounts. Do not clear/re-add the
-	// route on every ordinary track-state render; those tiny gaps can drop live notes.
-	useEffect(() => () => { void bridgeApi.setMidiRoute(null, null).catch(() => {}); }, []);
+	// Own the native route for the lifetime of a mounted DAW. React StrictMode deliberately
+	// probes Effects with setup -> cleanup -> setup on the initial development mount. The old
+	// cleanup-only Effect posted route=null during that probe and could win the startup race
+	// after the saved instrument route had already been restored. Defer the final clear by one
+	// macrotask and cancel it as soon as any DAW instance owns the route again.
+	useEffect(() => {
+		dawMidiRouteOwnerCount += 1;
+		if (dawMidiRouteClearTimer != null) {
+			window.clearTimeout(dawMidiRouteClearTimer);
+			dawMidiRouteClearTimer = null;
+		}
+
+		return () => {
+			dawMidiRouteOwnerCount = Math.max(0, dawMidiRouteOwnerCount - 1);
+			if (dawMidiRouteClearTimer != null) window.clearTimeout(dawMidiRouteClearTimer);
+			dawMidiRouteClearTimer = window.setTimeout(() => {
+			dawMidiRouteClearTimer = null;
+			if (dawMidiRouteOwnerCount !== 0) return;
+			void bridgeApi.setMidiRoute(null, null).catch(() => {});
+		}, 0);
+		};
+	}, []);
 
 	// Native hardware MIDI arrives as an SSE monitor stream. Bridge routes note events
 	// directly into loaded VST3 instances for low latency; browser-GM tracks are played
@@ -1995,9 +1980,17 @@ export default function DAW(_props: TabRendererProps) {
 			}
 			if (event.kind === "noteon") liveMidiNoteOn(note, event.velocity ?? 96, target);
 			else liveMidiNoteOff(note, target);
+		}, (connected) => {
+			if (!connected || !dawHydrated) return;
+			// SSE onopen is the authoritative "Bridge is alive now" signal. Read the live
+			// selection ref (not the render that created this EventSource) and reassert the
+			// route after cold startup or any later Bridge restart.
+			const current = selectedMidiTargetRef.current;
+			const nativeTrackId = current?.vst3PluginPath ? current.id : null;
+			void bridgeApi.setMidiRoute(nativeTrackId, current?.midiInputName ?? null).catch(() => {});
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
+	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
 
 	const finishMidiRecording = () => {
 		const session = recordingSessionRef.current;
@@ -2409,6 +2402,12 @@ export default function DAW(_props: TabRendererProps) {
 	}, [DAW_STORAGE_KEY]);
 
 	useEffect(() => {
+		// Never autosave the component's empty pre-hydration render. On cold start,
+		// the restore Effect and other mount Effects run from the same initial commit;
+		// persisting before hydration can overwrite the saved selection/project with
+		// transient defaults before React has committed the restored state.
+		if (!dawHydrated) return;
+
 		const payload: DawPersistV1 = {
 			v: 1,
 			tracks,
@@ -2447,6 +2446,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		return () => window.clearTimeout(t);
 	}, [
+		dawHydrated,
 		DAW_STORAGE_KEY,
 		tracks,
 		clips,
@@ -2661,8 +2661,14 @@ export default function DAW(_props: TabRendererProps) {
 		sigDenRef.current = sigDen;
 	}, [bpm, sigNum, sigDen]);
 
-	// Keep selection sane if tracks change
+	// Keep selection sane if tracks change, but only after project hydration.
+	// On the initial mount the closure still sees tracks=[] even though the earlier
+	// hydration Effect has just queued restored tracks + selectedTrackId. Without this
+	// guard, this Effect queues selectedTrackId=null in the same mount pass; the next
+	// render then falls back to tracks[0] (usually Audio 1), which intentionally clears
+	// the Bridge MIDI route and makes the LPK25 silent until Instrument 1 is clicked.
 	useEffect(() => {
+		if (!dawHydrated) return;
 		if (!tracks.length) {
 			setSelectedTrackId(null);
 			setSelectedClipId(null);
@@ -2709,6 +2715,7 @@ export default function DAW(_props: TabRendererProps) {
 	const stopScheduledAudio = () => {
 		audioScheduleGenerationRef.current += 1;
 		bridgeApi.stopVst3().catch(() => {});
+		stopGmSoundFontPlayback();
 		if (loopSchedulerTimerRef.current != null) {
 			window.clearInterval(loopSchedulerTimerRef.current);
 			loopSchedulerTimerRef.current = null;
@@ -2942,83 +2949,35 @@ export default function DAW(_props: TabRendererProps) {
 			}
 		}
 
-		// Tracks without a native VST3 assignment keep using the lightweight browser
-		// General MIDI preview renderer.
+		// Tracks without a native VST3 assignment now use a real SoundFont-backed
+		// General MIDI renderer. Program numbers 0..127 map directly to GeneralUser GS.
 		const midiClips = clips.filter((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && tracks.some((t) => t.id === c.trackId && t.type === "instrument"));
-		for (const c of midiClips) {
-			const track = tracks.find((t) => t.id === c.trackId);
-			if (!track || track.vst3PluginPath) continue;
-			const gmProgram = normalizeGmProgram(gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0);
-			const profile = gmPreviewProfile(gmProgram);
-			const clipEndBar = c.startBar + c.lengthBars;
-			for (const note of c.midiNotes ?? []) {
-				const noteStartBar = c.startBar + note.startBars;
-				const noteEndBar = Math.min(clipEndBar, noteStartBar + Math.max(1 / 128, note.lengthBars));
-				const playFromBar = Math.max(startBars, noteStartBar);
-				const playToBar = Math.min(segmentEnd, noteEndBar);
-				if (playToBar - playFromBar <= 0.0001) continue;
-
-				const startAt = t0 + Math.max(0, (playFromBar - startBars) * barSec);
-				const durationSec = Math.max(0.015, (playToBar - playFromBar) * barSec);
-				const localStartBars = playFromBar - c.startBar;
-				const localEndBars = playToBar - c.startBar;
-				const bendRange = Math.max(1, c.midiBendRange ?? 12);
-				const baseHz = midiToFrequency(note.pitch);
-				const trackBus = ensureTrackAudioBus(c.trackId);
-				const voice = createGmPreviewVoice(ctx, gmProgram, baseHz, note.velocity, trackBus.gain, startAt);
-
-				// Pitch bend is applied in cents so every additive partial bends together and
-				// keeps its harmonic ratio. This replaces the old single-oscillator bend.
-				const initialBend = clamp(interpolateAutomation(c.midiPitchBend, localStartBars, 0), -bendRange, bendRange);
-				voice.sources.forEach((osc, index) => {
-					const baseDetune = profile.partials[index]?.detuneCents ?? 0;
-					osc.detune.setValueAtTime(baseDetune + initialBend * 100, startAt);
-					for (const point of (c.midiPitchBend ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
-						if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
-						const at = startAt + (point.atBars - localStartBars) * barSec;
-						osc.detune.linearRampToValueAtTime(baseDetune + clamp(point.value, -bendRange, bendRange) * 100, at);
+		const gmClips = midiClips.filter((c) => !tracks.find((t) => t.id === c.trackId)?.vst3PluginPath);
+		if (gmClips.length) {
+			try {
+				await prepareGmSoundFont(ctx);
+				for (const c of gmClips) {
+					const track = tracks.find((t) => t.id === c.trackId);
+					if (!track || track.vst3PluginPath) continue;
+					const gmProgram = normalizeGmProgram(gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0);
+					const clipEndBar = c.startBar + c.lengthBars;
+					for (const note of c.midiNotes ?? []) {
+						const noteStartBar = c.startBar + note.startBars;
+						const noteEndBar = Math.min(clipEndBar, noteStartBar + Math.max(1 / 128, note.lengthBars));
+						const playFromBar = Math.max(startBars, noteStartBar);
+						const playToBar = Math.min(segmentEnd, noteEndBar);
+						if (playToBar - playFromBar <= 0.0001) continue;
+						const startAt = t0 + Math.max(0, (playFromBar - startBars) * barSec);
+						const durationSec = Math.max(0.015, (playToBar - playFromBar) * barSec);
+						const gmAudible = computedTrackGain(track) > 0;
+						scheduleGmSoundFontNote(ctx, track.id, gmProgram, note.pitch, note.velocity, track.level ?? 100, !gmAudible, startAt, durationSec);
 					}
-				});
-
-				// CC1 adds vibrato depth on top of the family voice. Use cents instead of Hz
-				// so modulation depth remains musical across the keyboard.
-				let ccLfo: OscillatorNode | undefined;
-				if ((c.midiModulation?.length ?? 0) > 0) {
-					ccLfo = ctx.createOscillator();
-					const ccLfoGain = ctx.createGain();
-					ccLfo.type = "sine";
-					ccLfo.frequency.setValueAtTime(5.2, startAt);
-					const depthCents = (cc: number) => 30 * clamp(cc / 127, 0, 1);
-					const initialMod = interpolateAutomation(c.midiModulation, localStartBars, 0);
-					ccLfoGain.gain.setValueAtTime(depthCents(initialMod), startAt);
-					for (const point of (c.midiModulation ?? []).slice().sort((a, b) => a.atBars - b.atBars)) {
-						if (point.atBars <= localStartBars || point.atBars > localEndBars) continue;
-						const at = startAt + (point.atBars - localStartBars) * barSec;
-						ccLfoGain.gain.linearRampToValueAtTime(depthCents(point.value), at);
-					}
-					ccLfo.connect(ccLfoGain);
-					for (const osc of voice.sources) ccLfoGain.connect(osc.detune);
-					ccLfo.start(startAt);
 				}
-
-				const release = Math.min(voice.release, durationSec * 0.55);
-				const releaseAt = startAt + Math.max(0.006, durationSec - release);
-				try {
-					voice.gain.gain.cancelAndHoldAtTime(releaseAt);
-					voice.gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durationSec);
-				} catch {
-					voice.gain.gain.cancelScheduledValues(releaseAt);
-					voice.gain.gain.setTargetAtTime(0.0001, releaseAt, Math.max(0.008, release / 5));
-				}
-
-				const stopAt = startAt + durationSec + 0.04;
-				for (const osc of voice.sources) {
-					try { osc.stop(stopAt); registerActiveSource(osc, c.id); } catch {}
-				}
-				try { voice.lfo?.stop(stopAt); if (voice.lfo) registerActiveSource(voice.lfo, c.id); } catch {}
-				try { ccLfo?.stop(stopAt); if (ccLfo) registerActiveSource(ccLfo, c.id); } catch {}
+			} catch (error) {
+				console.error("YSong General MIDI SoundFont renderer could not start", error);
 			}
 		}
+
 	};
 
 	// --- Transport playback loop (audio + structured MIDI + visual) ---
@@ -3030,16 +2989,32 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 	};
 
-	const start = (loopOverride?: boolean) => {
+	const start = async (loopOverride?: boolean) => {
 		const loopOn = loopOverride ?? loopEnabled;
 		const activeLoopLen = Math.max(0.0001, loopR - loopL);
 		const startPos = loopOn ? clamp(playheadPosBars, loopL, loopR - 0.0001) : clamp(playheadPosBars, 1, endBar);
 		const ctx = ensureAudioCtx();
-		ctx.resume().catch(() => {});
+		await ctx.resume().catch(() => {});
 		stopScheduledAudio();
 
-		// Give decoding/scheduling a tiny runway. The visual transport uses the same
-		// delayed start so the line and the sound begin together.
+		// Cold-start preparation must finish BEFORE we establish the transport epoch.
+		// Previously t0/playStart were fixed first and then we awaited VST restoration,
+		// SoundFont worklet setup and first audio-buffer decode. On the first play after
+		// launch those waits could push MIDI scheduling past t0 while WebAudio had already
+		// started, producing the brief "MIDI is mistimed" startup glitch.
+		const vstTracksToWarm = tracks.filter((t) => t.type === "instrument" && !!t.vst3PluginPath);
+		for (const track of vstTracksToWarm) {
+			try { await ensureVstLoaded(track); } catch { /* failed VSTs are skipped by scheduler */ }
+		}
+		const hasGmMidi = clips.some((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && !!tracks.find((t) => t.id === c.trackId && t.type === "instrument" && !t.vst3PluginPath));
+		if (hasGmMidi) {
+			try { await prepareGmSoundFont(ctx); } catch { /* scheduler will report/skip below */ }
+		}
+		const audioClipsToWarm = clips.filter((c) => !!c.assetId && tracks.some((t) => t.id === c.trackId && t.type === "audio"));
+		await Promise.allSettled(audioClipsToWarm.map((clip) => ensurePlaybackBufferForClip(clip)));
+
+		// Give final scheduling a tiny runway only after every cold engine is ready.
+		// The visual transport uses this same epoch so line, audio, GM and VST MIDI align.
 		const leadSec = 0.12;
 		playStartMsRef.current = performance.now() + leadSec * 1000;
 		playStartPosRef.current = startPos;
@@ -3049,7 +3024,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		const firstBoundary = loopOn ? loopR : endBar;
 		const firstStartAt = ctx.currentTime + leadSec;
-		scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, clearExisting: false }).catch(() => {});
+		void scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, clearExisting: false }).catch(() => {});
 		lastPosRef.current = startPos;
 
 		const beatSecNow = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
@@ -3405,7 +3380,11 @@ export default function DAW(_props: TabRendererProps) {
 												</select>
 												{t.vst3PluginPath && (
 													<>
-														<span className={`w-5 text-center text-[8px] font-semibold shrink-0 ${vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>{vstTrackState[t.id]?.status === "loading" ? "…" : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}</span>
+														<span className={`w-5 h-5 flex items-center justify-center text-[8px] font-semibold shrink-0 ${vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={vstTrackState[t.id]?.status === "loading" ? `Loading ${t.vst3PluginName ?? "VST3"}…` : vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>
+															{vstTrackState[t.id]?.status === "loading" ? (
+																<span className="inline-block h-3 w-3 rounded-full border border-amber-200/40 border-t-amber-200 animate-spin" aria-label={`Loading ${t.vst3PluginName ?? "VST3"}`} />
+															) : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}
+														</span>
 														<YSButton className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={`Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
 													</>
 												)}

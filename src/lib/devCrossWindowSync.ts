@@ -132,12 +132,17 @@ function devLog(message: string, ...rest: unknown[]) {
 function stableStorageValue(key: string, raw: string | null): string | null {
 	if (raw == null) return null;
 	try {
-		// DAW playback continuously changes playheadPosBars. Transport motion is
-		// not a cross-device edit, so do not persist/reload for that alone.
+		// DAW transport/selection are LOCAL workflow state, not musical project data.
+		// Mirroring them through /api/client-state lets a stale server snapshot replace
+		// the desktop's selected instrument during cold boot, which in turn leaves the
+		// native hardware-MIDI route null even though the VST itself loaded correctly.
+		// Keep these fields out of cross-device comparison + server mirroring entirely.
 		if (key.startsWith("ysong:daw:")) {
 			const value = JSON.parse(raw);
 			if (value && typeof value === "object") {
 				delete value.playheadPosBars;
+				delete value.selectedTrackId;
+				delete value.selectedClipId;
 				return JSON.stringify(value);
 			}
 		}
@@ -153,6 +158,29 @@ function stableStorageValue(key: string, raw: string | null): string | null {
 		// Non-JSON values are compared/persisted as-is.
 	}
 	return raw;
+}
+
+function mergeRemoteStateWithLocalWorkflow(key: string, localRaw: string | null, remoteRaw: string): string {
+	if (!key.startsWith("ysong:daw:") || localRaw == null) return remoteRaw;
+	try {
+		const localValue = JSON.parse(localRaw);
+		const remoteValue = JSON.parse(remoteRaw);
+		if (!localValue || typeof localValue !== "object" || !remoteValue || typeof remoteValue !== "object") return remoteRaw;
+
+		// Project/music data may come from another authenticated YSong device, but
+		// selection and transport position belong to THIS window/device. Preserve them
+		// whenever a remote DAW snapshot is applied so server hydration cannot silently
+		// move live MIDI from an instrument track to Audio 1 during startup.
+		if (Object.prototype.hasOwnProperty.call(localValue, "selectedTrackId"))
+			remoteValue.selectedTrackId = localValue.selectedTrackId;
+		if (Object.prototype.hasOwnProperty.call(localValue, "selectedClipId"))
+			remoteValue.selectedClipId = localValue.selectedClipId;
+		if (Object.prototype.hasOwnProperty.call(localValue, "playheadPosBars"))
+			remoteValue.playheadPosBars = localValue.playheadPosBars;
+		return JSON.stringify(remoteValue);
+	} catch {
+		return remoteRaw;
+	}
 }
 
 function isYSongStateKey(key: string): boolean {
@@ -222,8 +250,9 @@ async function hydrateClientStateFromServer(seedMissingLocalKeys: boolean): Prom
 		for (const [key, remoteValue] of Object.entries(remote)) {
 			if (!isYSongStateKey(key)) continue;
 			const localValue = localStorage.getItem(key);
-			if (stableStorageValue(key, localValue) !== stableStorageValue(key, remoteValue)) {
-				localStorage.setItem(key, remoteValue);
+			const mergedValue = mergeRemoteStateWithLocalWorkflow(key, localValue, remoteValue);
+			if (stableStorageValue(key, localValue) !== stableStorageValue(key, mergedValue)) {
+				localStorage.setItem(key, mergedValue);
 				changed = true;
 			}
 		}

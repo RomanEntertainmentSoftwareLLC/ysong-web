@@ -29,3 +29,8 @@ dist-ssr
 
 .vercel
 .env*.local
+# v31 generated General MIDI runtime assets
+public/spessasynth_processor.min.js
+public/soundfonts/GeneralUser-GS.sf2
+public/soundfonts/GENERALUSER-NOTICE.txt
+

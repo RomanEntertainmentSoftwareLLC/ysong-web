@@ -42,7 +42,6 @@ export type Vst3MidiEvent = {
 	whenUnixMs: number;
 	noteId: number;
 	channel?: number;
-	isLive?: boolean;
 };
 
 
