@@ -4,6 +4,8 @@ type SpessaSynth = {
   soundBankManager: { addSoundBank(data: ArrayBuffer, id: string): Promise<unknown> };
   isReady: Promise<unknown>;
   connect(destination: AudioNode): void;
+  connectChannel(destination: AudioNode, channelNumber: number): AudioNode;
+  disconnectChannel(destination: AudioNode, channelNumber: number): void;
   programChange(channel: number, program: number): void;
   noteOn(channel: number, note: number, velocity: number): void;
   noteOff(channel: number, note: number): void;
@@ -14,6 +16,8 @@ const MELODIC_CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15] as 
 const trackChannels = new Map<string, number>();
 const activeNotes = new Map<string, number>();
 const scheduledTimers = new Set<number>();
+const trackDestinations = new Map<string, AudioNode>();
+const connectedChannelDestinations = new Map<number, AudioNode>();
 let nextChannelIndex = 0;
 let synth: SpessaSynth | null = null;
 let synthContext: AudioContext | null = null;
@@ -27,6 +31,33 @@ function channelForTrack(trackId: string) {
   nextChannelIndex += 1;
   trackChannels.set(trackId, channel);
   return channel;
+}
+
+function ensureTrackChannelConnection(context: AudioContext, engine: SpessaSynth, trackId: string) {
+  const channel = channelForTrack(trackId);
+  const destination = trackDestinations.get(trackId) ?? context.destination;
+  const connected = connectedChannelDestinations.get(channel);
+  if (connected === destination) return channel;
+  if (connected) {
+    try { engine.disconnectChannel(connected, channel); } catch {}
+  }
+  engine.connectChannel(destination, channel);
+  connectedChannelDestinations.set(channel, destination);
+  return channel;
+}
+
+export function setGmSoundFontTrackDestination(context: AudioContext, trackId: string, destination: AudioNode) {
+  trackDestinations.set(trackId, destination);
+  if (synth && synthContext === context) ensureTrackChannelConnection(context, synth, trackId);
+}
+
+export function clearGmSoundFontTrackDestination(trackId: string) {
+  const destination = trackDestinations.get(trackId);
+  trackDestinations.delete(trackId);
+  const channel = trackChannels.get(trackId);
+  if (channel == null || !destination || !synth) return;
+  try { synth.disconnectChannel(destination, channel); } catch {}
+  connectedChannelDestinations.delete(channel);
 }
 
 function activeKey(channel: number, pitch: number) {
@@ -75,10 +106,12 @@ export async function prepareGmSoundFont(context: AudioContext): Promise<SpessaS
     await next.soundBankManager.addSoundBank(bank, "GeneralUser-GS");
     await next.isReady;
 
-    // A WorkletSynthesizer is not audible until its outputs are actually
-    // connected into the WebAudio graph. This was the missing v31 GM hop.
-    next.connect(context.destination);
+    // YSong routes each melodic MIDI channel independently so an instrument track
+    // can own the same insert chain as an audio track. Tracks without a custom
+    // destination still fall back to the AudioContext destination when a note plays.
     synth = next;
+    connectedChannelDestinations.clear();
+    for (const trackId of trackDestinations.keys()) ensureTrackChannelConnection(context, next, trackId);
     return next;
   })();
 
@@ -102,9 +135,14 @@ export async function gmSoundFontNoteOn(
   if (context.state !== "running") await context.resume();
   const engine = await prepareGmSoundFont(context);
   if (muted) return;
-  const channel = channelForTrack(trackId);
+  const channel = ensureTrackChannelConnection(context, engine, trackId);
   const note = Math.max(0, Math.min(127, Math.round(pitch)));
-  const vel = velocityWithLevel(velocity, level, muted);
+  // A DAW track destination means volume/mute/solo are already applied by the
+  // shared track bus after the insert chain. Do not scale MIDI velocity a second
+  // time or GM tracks would become disproportionately quiet as the fader moves.
+  const vel = trackDestinations.has(trackId)
+    ? Math.max(1, Math.min(127, Math.round(velocity)))
+    : velocityWithLevel(velocity, level, muted);
   engine.programChange(channel, normalizeGmProgram(program));
   engine.noteOn(channel, note, vel);
   const key = activeKey(channel, note);
@@ -113,7 +151,7 @@ export async function gmSoundFontNoteOn(
 
 export async function gmSoundFontNoteOff(context: AudioContext, trackId: string, pitch: number) {
   const engine = await prepareGmSoundFont(context);
-  const channel = channelForTrack(trackId);
+  const channel = ensureTrackChannelConnection(context, engine, trackId);
   const note = Math.max(0, Math.min(127, Math.round(pitch)));
   engine.noteOff(channel, note);
   const key = activeKey(channel, note);

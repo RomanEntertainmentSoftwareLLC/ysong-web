@@ -7,6 +7,13 @@ const workspaceRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({
   plugins: [react(), tailwind()],
+  // stb-vorbis@0.0.6 publishes a broken entry point. YSong uses SF2 for GM,
+  // so keep SpessaSynth stable and make the unused Vorbis import resolvable.
+  resolve: {
+    alias: {
+      "stb-vorbis": fileURLToPath(new URL("./src/vendor/stbVorbisShim.ts", import.meta.url)),
+    },
+  },
   server: {
     // Listen on the LAN so a real phone/tablet can open YSong from the same Wi-Fi.
     host: "0.0.0.0",

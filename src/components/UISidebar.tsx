@@ -13,7 +13,7 @@ export type Chat = {
 	}[];
 };
 
-type ModuleType = "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
+type ModuleType = "settings" | "daw" | "mixer" | "createSong" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
 
 type Props = {
 	chats: Chat[];
@@ -254,6 +254,7 @@ export default function UISidebar({
 							["Settings", "settings"],
 							["DAW", "daw"],
 							["Mixer", "mixer"],
+							["Create Song", "createSong"],
 							["Band Creation", "band"],
 							["Artwork Studio", "artwork"],
 							["My Library", "library"],

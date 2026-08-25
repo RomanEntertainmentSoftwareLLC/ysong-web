@@ -68,6 +68,16 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		try { localStorage.setItem("ysong:world-repeat", repeatMode); } catch { /* best-effort local UI action */ }
 	}, [repeatMode]);
 
+	const claimWorldPlayback = useCallback(() => {
+		window.dispatchEvent(new Event("ysong:world-play-request"));
+	}, []);
+
+	useEffect(() => {
+		const onDawPlay = () => { audioRef.current?.pause(); };
+		window.addEventListener("ysong:daw-play-request", onDawPlay);
+		return () => window.removeEventListener("ysong:daw-play-request", onDawPlay);
+	}, []);
+
 	const countAndSelect = useCallback((track: WorldTrack) => {
 		setCurrent(track);
 		countWorldPlay(track.id)
@@ -81,20 +91,22 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	const playTrack = useCallback((track: WorldTrack) => {
 		const audio = audioRef.current;
 		if (current?.id === track.id && audio) {
-			if (audio.paused) audio.play().catch(() => {});
+			if (audio.paused) { claimWorldPlayback(); audio.play().catch(() => {}); }
 			else audio.pause();
 			return;
 		}
+		claimWorldPlayback();
 		setQueue([track]);
 		setQueueIndex(0);
 		setQueueLabel("");
 		countAndSelect(track);
-	}, [current?.id, countAndSelect]);
+	}, [current?.id, countAndSelect, claimWorldPlayback]);
 
 	const startQueue = useCallback((tracks: WorldTrack[], label: string, startTrackId?: string) => {
 		const seen = new Set<string>();
 		const clean = tracks.filter((t) => t?.id && !seen.has(t.id) && seen.add(t.id));
 		if (!clean.length) return;
+		claimWorldPlayback();
 		let index = startTrackId ? clean.findIndex((t) => t.id === startTrackId) : 0;
 		if (index < 0) index = 0;
 		setQueue(clean);
@@ -104,7 +116,7 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 			audioRef.current.currentTime = 0;
 			audioRef.current.play().catch(() => {});
 		} else countAndSelect(clean[index]);
-	}, [countAndSelect, current?.id]);
+	}, [countAndSelect, current?.id, claimWorldPlayback]);
 
 	const canPrevious = queue.length > 1 && (queueIndex > 0 || repeatMode === "all");
 	const canNext = queue.length > 1 && (queueIndex < queue.length - 1 || repeatMode === "all");
@@ -115,9 +127,10 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		if (index < queue.length - 1) index += 1;
 		else if (repeatMode === "all" && queue.length > 1) index = 0;
 		else return;
+		claimWorldPlayback();
 		setQueueIndex(index);
 		countAndSelect(queue[index]);
-	}, [queue, queueIndex, repeatMode, countAndSelect]);
+	}, [queue, queueIndex, repeatMode, countAndSelect, claimWorldPlayback]);
 
 	const previous = useCallback(() => {
 		const audio = audioRef.current;
@@ -130,9 +143,10 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		if (index > 0) index -= 1;
 		else if (repeatMode === "all" && queue.length > 1) index = queue.length - 1;
 		else { if (audio) audio.currentTime = 0; return; }
+		claimWorldPlayback();
 		setQueueIndex(index);
 		countAndSelect(queue[index]);
-	}, [queue, queueIndex, repeatMode, countAndSelect]);
+	}, [queue, queueIndex, repeatMode, countAndSelect, claimWorldPlayback]);
 
 	const cycleRepeat = useCallback(() => setRepeatMode((mode) => mode === "off" ? "all" : mode === "all" ? "one" : "off"), []);
 	const patchCurrent = useCallback((patch: Partial<WorldTrack>) => setCurrent((cur) => cur ? { ...cur, ...patch } : cur), []);
@@ -140,9 +154,9 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	const toggle = useCallback(() => {
 		const audio = audioRef.current;
 		if (!audio || !current) return;
-		if (audio.paused) audio.play().catch(() => {});
+		if (audio.paused) { claimWorldPlayback(); audio.play().catch(() => {}); }
 		else audio.pause();
-	}, [current]);
+	}, [current, claimWorldPlayback]);
 
 	const handleEnded = useCallback(() => {
 		const audio = audioRef.current;

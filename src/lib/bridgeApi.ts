@@ -45,6 +45,35 @@ export type Vst3MidiEvent = {
 };
 
 
+
+export type Vst3OfflineRenderEvent = {
+	kind: "on" | "off";
+	note: number;
+	velocity: number;
+	atSeconds: number;
+	noteId: number;
+	channel?: number;
+};
+
+export type Vst3OfflineRenderTrack = {
+	trackId: string;
+	events: Vst3OfflineRenderEvent[];
+};
+
+
+export type Vst3TrackEffect = {
+	id: string;
+	type: "compressor";
+	enabled: boolean;
+	inputGainDb: number;
+	thresholdDb: number;
+	ratio: number;
+	attackMs: number;
+	releaseMs: number;
+	kneeDb: number;
+	outputGainDb: number;
+};
+
 export type BridgeMidiInputDevice = {
 	index: number;
 	name: string;
@@ -80,6 +109,7 @@ export type Vst3InstanceStatus = {
 	peak: number;
 	muted: boolean;
 	level: number;
+	gainReductionDb?: number;
 	error?: string | null;
 };
 
@@ -128,6 +158,62 @@ async function bridgeFetch<T>(path: string, init?: RequestInit, timeoutMs = 1800
 	}
 }
 
+
+async function bridgeFetchArrayBuffer(path: string, init?: RequestInit, timeoutMs = 120000): Promise<ArrayBuffer> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		const res = await fetch(`${BRIDGE_BASE}${path}`, { ...init, signal: controller.signal });
+		if (!res.ok) {
+			let detail = "";
+			try {
+				const body = await res.json() as { detail?: string; title?: string };
+				detail = body.detail || body.title || "";
+			} catch {
+				try { detail = await res.text(); } catch { /* ignore */ }
+			}
+			throw new BridgeRequestError(detail || `YSong Bridge returned HTTP ${res.status}.`, res.status);
+		}
+		return await res.arrayBuffer();
+	} catch (error) {
+		if (error instanceof BridgeRequestError) throw error;
+		if (error instanceof DOMException && error.name === "AbortError") throw new BridgeRequestError("YSong Bridge export request timed out.");
+		throw new BridgeRequestError(error instanceof Error ? error.message : "Could not reach YSong Bridge.");
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function bridgePostAudioForEncode(wav: Blob, format: "flac" | "mp3", bitrateKbps?: number): Promise<Blob> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 300000);
+	try {
+		const qs = new URLSearchParams({ format });
+		if (format === "mp3" && bitrateKbps) qs.set("bitrateKbps", String(bitrateKbps));
+		const res = await fetch(`${BRIDGE_BASE}/audio/encode?${qs.toString()}`, {
+			method: "POST",
+			body: wav,
+			headers: { "Content-Type": "audio/wav" },
+			signal: controller.signal,
+		});
+		if (!res.ok) {
+			let detail = "";
+			try {
+				const body = await res.json() as { detail?: string; title?: string };
+				detail = body.detail || body.title || "";
+			} catch { try { detail = await res.text(); } catch { /* ignore */ } }
+			throw new BridgeRequestError(detail || `YSong Bridge returned HTTP ${res.status}.`, res.status);
+		}
+		return await res.blob();
+	} catch (error) {
+		if (error instanceof BridgeRequestError) throw error;
+		if (error instanceof DOMException && error.name === "AbortError") throw new BridgeRequestError("YSong Bridge encoder timed out.");
+		throw new BridgeRequestError(error instanceof Error ? error.message : "Could not reach YSong Bridge encoder.");
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 export const bridgeApi = {
 	health: () => bridgeFetch<BridgeHealth>("/health"),
 	getPluginPaths: () => bridgeFetch<{ paths: string[] }>("/settings/plugin-paths"),
@@ -164,10 +250,27 @@ export const bridgeApi = {
 	unloadAllVst3: () => bridgeFetch<{ ok: true }>("/vst3/unload-all", { method: "POST", body: "{}" }, 10000),
 	scheduleVst3Midi: (trackId: string, events: Vst3MidiEvent[]) =>
 		bridgeFetch<{ ok: true; queued: number; loaded?: boolean }>("/vst3/schedule", { method: "POST", body: JSON.stringify({ trackId, events }) }, 10000),
-	setVst3Mixer: (trackId: string, muted: boolean, level: number) =>
-		bridgeFetch<{ ok: true; loaded?: boolean }>("/vst3/mixer", { method: "POST", body: JSON.stringify({ trackId, muted, level }) }, 5000),
+	setVst3Mixer: (trackId: string, muted: boolean, level: number, channel?: {
+		inputGainDb?: number; phaseInvert?: boolean; hpfEnabled?: boolean; hpfHz?: number; lpfEnabled?: boolean; lpfHz?: number;
+		eqEnabled?: boolean; lowGainDb?: number; lowFreqHz?: number; lowMidGainDb?: number; lowMidFreqHz?: number; lowMidQ?: number;
+		highMidGainDb?: number; highMidFreqHz?: number; highMidQ?: number; highGainDb?: number; highFreqHz?: number;
+		compressorEnabled?: boolean; compressorThresholdDb?: number; compressorRatio?: number; compressorAttackMs?: number; compressorReleaseMs?: number;
+		pan?: number; width?: number;
+	}) =>
+		bridgeFetch<{ ok: true; loaded?: boolean }>("/vst3/mixer", { method: "POST", body: JSON.stringify({ trackId, muted, level, ...(channel ?? {}) }) }, 5000),
+	setVst3Master: (level: number) =>
+		bridgeFetch<{ ok: true }>("/vst3/master", { method: "POST", body: JSON.stringify({ level }) }, 5000),
+	setVst3Effects: (trackId: string, effects: Vst3TrackEffect[]) =>
+		bridgeFetch<{ ok: true; loaded?: boolean }>("/vst3/effects", { method: "POST", body: JSON.stringify({ trackId, effects }) }, 5000),
 	stopVst3: () => bridgeFetch<{ ok: true }>("/vst3/stop", { method: "POST", body: "{}" }, 5000),
 	getVst3Status: () => bridgeFetch<{ ok: true; instances: Vst3InstanceStatus[] }>("/vst3/status", undefined, 5000),
+	renderVst3Mix: (durationSeconds: number, tracks: Vst3OfflineRenderTrack[]) =>
+		bridgeFetchArrayBuffer("/vst3/render-mix", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ durationSeconds, tracks }),
+		}, 300000),
+	encodeAudio: (wav: Blob, format: "flac" | "mp3", bitrateKbps?: number) => bridgePostAudioForEncode(wav, format, bitrateKbps),
 	openVst3Editor: (trackId: string) =>
 		bridgeFetch<{ ok: true; trackId: string; pluginName: string; opened: boolean }>("/vst3/editor/open", { method: "POST", body: JSON.stringify({ trackId }) }, 10000),
 	getMidiDevices: () => bridgeFetch<{ ok: true } & BridgeMidiSettings>("/midi/devices", undefined, 5000),

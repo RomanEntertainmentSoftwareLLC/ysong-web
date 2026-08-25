@@ -9,7 +9,6 @@ import {
 	TabContentHost,
 	useTabManager,
 	type TabType,
-	type TabRendererProps,
 } from "../tabs/core";
 import ChatPane, { YSONG_WELCOME } from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
@@ -19,6 +18,11 @@ import type { ProjectAsset } from "../components/ProjectAssetDrawer";
 import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
 import DAWPane from "../tabs/DAW";
+import MixerPane from "../tabs/Mixer";
+import MarketplacePane from "../tabs/Marketplace";
+import CreateSongPane from "../tabs/CreateSong";
+import BandCreationPane from "../tabs/BandCreation";
+import ArtworkStudioPane from "../tabs/ArtworkStudio";
 import WorldPane from "../tabs/World";
 import UploadMusicPane from "../tabs/UploadMusic";
 import LibraryPane from "../tabs/Library";
@@ -116,6 +120,7 @@ function BootTabs({
 						settings: "Settings",
 						daw: "DAW",
 						mixer: "Mixer",
+						createSong: "Create Song",
 						band: "Band Creation",
 						artwork: "Artwork Studio",
 						library: "My Library",
@@ -440,12 +445,13 @@ export default function UI() {
 		daw: DAWPane,
 
 		// These are lightweight stubs; leaving them as trivial components is fine.
-		mixer: (_props: TabRendererProps) => <Stub title="Mixer" />,
-		band: (_props: TabRendererProps) => <Stub title="Band Creation" />,
-		artwork: (_props: TabRendererProps) => <Stub title="Artwork Studio" />,
+		mixer: MixerPane,
+		createSong: CreateSongPane,
+		band: BandCreationPane,
+		artwork: ArtworkStudioPane,
 		library: LibraryPane,
 		achievements: AchievementsPane,
-		market: (_props: TabRendererProps) => <Stub title="Marketplace" />,
+		market: MarketplacePane,
 		world: WorldPane,
 		upload: UploadMusicPane,
 	} as const;
@@ -501,10 +507,17 @@ export default function UI() {
 				p.onNavigate?.();
 				return;
 			}
+			// Mixer controls the live DAW session. If Mixer is the first studio view the
+			// user opens, quietly create the DAW session tab first and leave Mixer active.
+			if (type === "mixer" && !tabs.some((tab) => tab.type === "daw")) {
+				openTab({ type: "daw", title: "DAW", pinned: true });
+			}
+
 			const titles = {
 				settings: "Settings",
 				daw: "DAW",
 				mixer: "Mixer",
+				createSong: "Create Song",
 				band: "Band Creation",
 				artwork: "Artwork Studio",
 				library: "My Library",
@@ -696,10 +709,10 @@ export default function UI() {
 
 
 function PlayerAwareMain({ registry, extraProps }: { registry: any; extraProps: Record<string, any> }) {
-	const { current } = useWorldPlayer();
+	const { current, playing } = useWorldPlayer();
 	const { tabs, activeId } = useTabManager();
 	const activeType = tabs.find((t) => t.id === activeId)?.type;
-	const playerVisible = !!current && activeType !== "daw";
+	const playerVisible = !!current && (activeType !== "daw" || playing);
 
 	return (
 		<main
@@ -724,13 +737,10 @@ function WorkspaceBottomChrome({
 	workspaceLeftPx: number;
 }) {
 	const { tabs, activeId } = useTabManager();
-	const { pause } = useWorldPlayer();
+	const { playing } = useWorldPlayer();
 	const activeType = tabs.find((t) => t.id === activeId)?.type;
 	const inDaw = activeType === "daw";
 
-	// World playback survives World -> Upload/Settings/Chat/Library navigation.
-	// Entering the DAW pauses it to prevent two independent transports fighting.
-	useEffect(() => { if (inDaw) pause(); }, [inDaw, pause]);
 
 	return (
 		<>
@@ -746,7 +756,7 @@ function WorkspaceBottomChrome({
 					workspaceLeftPx={workspaceLeftPx}
 				/>
 			)}
-			<WorldPlayerDock hidden={inDaw} workspaceLeftPx={workspaceLeftPx} />
+			<WorldPlayerDock hidden={inDaw && !playing} workspaceLeftPx={workspaceLeftPx} />
 		</>
 	);
 }
@@ -773,16 +783,6 @@ function MobileDrawer({ open, onClose, children }: { open: boolean; onClose: () 
 				<h2 id="mobile-sidebar-title" className="sr-only">Sidebar</h2>
 				<div className="h-full min-h-0 overflow-y-auto">{children}</div>
 			</div>
-		</div>
-	);
-}
-
-/* ------------------------------ simple stubs ------------------------------ */
-function Stub({ title }: { title: string }) {
-	return (
-		<div className="h-full p-6 text-sm opacity-80">
-			<div className="text-lg font-semibold mb-2">{title}</div>
-			<div>Coming soon…</div>
 		</div>
 	);
 }

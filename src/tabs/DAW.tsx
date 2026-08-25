@@ -6,8 +6,23 @@ import { YSButton } from "../components/YSButton";
 import MidiEditor, { type MidiEditableClip } from "../components/MidiEditor";
 import TransportConsole from "../components/TransportConsole";
 import OnScreenKeyboard from "../components/OnScreenKeyboard";
-import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type Vst3MidiEvent } from "../lib/bridgeApi";
-import { gmSoundFontNoteOff, gmSoundFontNoteOn, prepareGmSoundFont, scheduleGmSoundFontNote, stopGmSoundFontPlayback } from "../lib/gmSoundFont";
+import FxChainPanel from "../components/FxChainPanel";
+import DynamicsC1Editor from "../components/DynamicsC1Editor";
+import DawAgentPanel from "../components/DawAgentPanel";
+import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type Vst3MidiEvent, type Vst3OfflineRenderTrack, type Vst3TrackEffect } from "../lib/bridgeApi";
+import { clearGmSoundFontTrackDestination, gmSoundFontNoteOff, gmSoundFontNoteOn, prepareGmSoundFont, scheduleGmSoundFontNote, setGmSoundFontTrackDestination, stopGmSoundFontPlayback } from "../lib/gmSoundFont";
+import {
+	buildStandardMidiFile,
+	decodeStereoFloatWav,
+	downloadBlob,
+	encodeStereoWav,
+	safeExportFileName,
+	type DawExportMidiTrack,
+} from "../lib/dawExport";
+import { connectWebAudioEffects, createDynamicsC1Effect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type WebAudioEffectRuntime } from "../lib/dawEffects";
+import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
+import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
+import { consumeGeneratedSession, type GeneratedSessionManifest } from "../lib/generatedSession";
 import {
 	GM_PROGRAMS,
 	normalizeGmProgram,
@@ -39,8 +54,15 @@ type Track = {
 	vst3PluginPath?: string;
 	vst3PluginName?: string;
 	vst3PluginVendor?: string;
+	// AI/session-generation target. Bridge preset enumeration is not universal yet,
+	// so preserve the producer hint without pretending it was loaded.
+	vstPresetHint?: string;
 	// Optional per-track hardware MIDI filter. Undefined means every enabled input.
 	midiInputName?: string;
+	// Ordered insert chain. Audio flows through this array from first to last.
+	effects?: DawTrackEffect[];
+	// Full console channel-strip state shared by the DAW and YC-9000 mixer.
+	mixer?: DawMixerStripState;
 };
 
 type ProjectAsset = {
@@ -111,6 +133,7 @@ const MIN_BARS = 64;
 const MAX_BARS = 512;
 // Position 65 is the boundary immediately after measure 64.
 const DEFAULT_END_BAR = 65;
+const GM_EXPORT_CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15] as const;
 
 // Add-track menu sizing (used for viewport clamping)
 const MENU_W = 240;
@@ -180,6 +203,7 @@ function mkTrack(type: TrackType, index: number, id?: string): Track {
 		level: 100,
 		instrument: type === "instrument" ? "triangle" : undefined,
 		gmProgram: type === "instrument" ? 0 : undefined,
+		mixer: createDefaultMixerStrip(),
 	};
 }
 
@@ -516,6 +540,7 @@ export default function DAW(_props: TabRendererProps) {
 		sigDen: number;
 		trackHeights?: Record<string, number>;
 		zoomPct?: number;
+		masterLevel?: number;
 	};
 
 	function safeParse<T>(raw: string | null): T | null {
@@ -551,10 +576,12 @@ export default function DAW(_props: TabRendererProps) {
 	const [tracks, setTracks] = useState<Track[]>(() => []);
 	const [dawHydrated, setDawHydrated] = useState(false);
 	const [vst3Plugins, setVst3Plugins] = useState<BridgePlugin[]>([]);
+	const [bridgeAvailable, setBridgeAvailable] = useState<boolean | null>(null);
 	const [midiInputDevices, setMidiInputDevices] = useState<BridgeMidiInputDevice[]>([]);
 	const [vstTrackState, setVstTrackState] = useState<Record<string, { status: "loading" | "ready" | "error"; message?: string }>>({});
 	const vstLoadedRef = useRef<Map<string, string>>(new Map());
 	const vstMetersRef = useRef<Record<string, number>>({});
+	const vstGainReductionRef = useRef<Record<string, number>>({});
 	const [trackPanelOpen, setTrackPanelOpen] = useState<boolean>(() => {
 		try {
 			const saved = sessionStorage.getItem("ysong:daw:trackPanelOpen");
@@ -571,8 +598,8 @@ export default function DAW(_props: TabRendererProps) {
 		let cancelled = false;
 		const refresh = () => {
 			bridgeApi.getPlugins()
-				.then((res) => { if (!cancelled) setVst3Plugins(res.plugins ?? []); })
-				.catch(() => { /* Bridge can legitimately be offline while editing. */ });
+				.then((res) => { if (!cancelled) { setVst3Plugins(res.plugins ?? []); setBridgeAvailable(true); } })
+				.catch(() => { if (!cancelled) setBridgeAvailable(false); });
 		};
 		refresh();
 		const timer = window.setInterval(refresh, 5000);
@@ -621,6 +648,22 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	});
 	const [projectSheetOpen, setProjectSheetOpen] = useState(false);
+	const [fileMenuOpen, setFileMenuOpen] = useState(false);
+	const fileMenuRef = useRef<HTMLDivElement | null>(null);
+	const projectFileHandleRef = useRef<any>(null);
+	const [fxChainTrackId, setFxChainTrackId] = useState<string | null>(null);
+	const [fxEditorEffectId, setFxEditorEffectId] = useState<string | null>(null);
+	const [exportOpen, setExportOpen] = useState(false);
+	type ExportFormat = "wav16" | "wav24" | "flac" | "mp3" | "midi";
+	const [exportFormat, setExportFormat] = useState<ExportFormat>("wav24");
+	const [exportMp3Bitrate, setExportMp3Bitrate] = useState(320);
+	const [exporting, setExporting] = useState(false);
+	const [exportStatus, setExportStatus] = useState("");
+	const [dawAgentOpen, setDawAgentOpen] = useState(false);
+	const generatedSessionPendingRef = useRef<GeneratedSessionManifest | null>(null);
+	const generatedSessionTargetProjectRef = useRef<string | null>(null);
+	const [generatedSessionRevision, setGeneratedSessionRevision] = useState(0);
+	const exportSampleRate = 48000;
 	const [isSavingUi, setIsSavingUi] = useState(false);
 	const projectDirty = false; // placeholder until cloud project persistence
 
@@ -696,8 +739,12 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			localStorage.setItem(`ysong:projectName:${id}`, "Untitled Project");
 		} catch {}
+		projectFileHandleRef.current = null;
+		setFxChainTrackId(null);
+		setFxEditorEffectId(null);
 		setActiveProjectId(id);
 		setProjectSheetOpen(false);
+		setFileMenuOpen(false);
 	};
 
 	const clearProject = () => {
@@ -717,11 +764,19 @@ export default function DAW(_props: TabRendererProps) {
 		setLoopR(5);
 		setEndBar(DEFAULT_END_BAR);
 		setLoopEnabled(false);
+		setMasterLevel(100);
+		setFxChainTrackId(null);
+		setFxEditorEffectId(null);
+		setFileMenuOpen(false);
 	};
 
 	const loadProject = (id: string) => {
+		projectFileHandleRef.current = null;
+		setFxChainTrackId(null);
+		setFxEditorEffectId(null);
 		setActiveProjectId(id);
 		setProjectSheetOpen(false);
+		setFileMenuOpen(false);
 	};
 
 	const [localProjectAssets, setLocalProjectAssets] = useState<ProjectAsset[]>([]);
@@ -735,16 +790,27 @@ export default function DAW(_props: TabRendererProps) {
 	const waveformPeaksRef = useRef<Map<string, StereoPeaks>>(new Map());
 	const [waveformVersion, setWaveformVersion] = useState(0);
 	const [trackMeters, setTrackMeters] = useState<Record<string, number>>({});
+	const [masterLevel, setMasterLevel] = useState(100);
 	const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
 	const [renamingTrackName, setRenamingTrackName] = useState("");
 
 	const getTrackHeight = (trackId: string, _type?: TrackType) =>
 		Math.max(MIN_TRACK_H, trackHeights[trackId] ?? ROW_H);
 
+	useEffect(() => {
+		const staged = () => setGeneratedSessionRevision((v) => v + 1);
+		window.addEventListener("ysong:generated-session-staged", staged);
+		return () => window.removeEventListener("ysong:generated-session-staged", staged);
+	}, []);
+
 	// WebAudio context (lazy)
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const masterGainRef = useRef<GainNode | null>(null);
-	type TrackAudioBus = { gain: GainNode; analyser: AnalyserNode };
+	type TrackAudioBus = {
+		input: GainNode; trim: GainNode; hpf: BiquadFilterNode; lpf: BiquadFilterNode; low: BiquadFilterNode; lowMid: BiquadFilterNode; highMid: BiquadFilterNode; high: BiquadFilterNode; compressor: DynamicsCompressorNode;
+		gain: GainNode; widthInput: GainNode; splitter: ChannelSplitterNode; widthLL: GainNode; widthLR: GainNode; widthRL: GainNode; widthRR: GainNode; merger: ChannelMergerNode; panner: StereoPannerNode; analyser: AnalyserNode;
+		effectSignature: string; effectRuntimes: Map<string, WebAudioEffectRuntime>;
+	};
 	const trackAudioBusesRef = useRef<Map<string, TrackAudioBus>>(new Map());
 	const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
 	const stretchedBuffersRef = useRef<Map<string, { key: string; buffer: AudioBuffer }>>(new Map());
@@ -766,6 +832,7 @@ export default function DAW(_props: TabRendererProps) {
 	const loopSchedulerTimerRef = useRef<number | null>(null);
 	const loopScheduleNextCtxTimeRef = useRef(0);
 	const loopSchedulerBusyRef = useRef(false);
+	const transportPrimedRef = useRef(false);
 
 	const stopSourcesForClip = (clipId: string) => {
 		const sources = activeClipSourcesRef.current.get(clipId);
@@ -831,6 +898,9 @@ export default function DAW(_props: TabRendererProps) {
 
 	const rafRef = useRef<number | null>(null);
 	const playStartMsRef = useRef<number>(0);
+	const playStartCtxTimeRef = useRef<number>(0);
+	const transportBarSecRef = useRef<number>(2);
+	const transportClockUnixOffsetMsRef = useRef<number>(0);
 	const playStartPosRef = useRef<number>(1);
 	const lastUiUpdateMsRef = useRef<number>(0);
 
@@ -888,8 +958,12 @@ export default function DAW(_props: TabRendererProps) {
 		const clipOnTrack = clips.find((c) => c.id === selectedClipId);
 		if (clipOnTrack?.trackId === id) setSelectedClipId(null);
 
-		// clear selected track if it's this one
+		// clear selected track / effect UI if it belongs to this track
 		if (selectedTrackId === id) setSelectedTrackId(null);
+		if (fxChainTrackId === id) {
+			setFxChainTrackId(null);
+			setFxEditorEffectId(null);
+		}
 
 		// remove the track
 		setTracks((prev) => prev.filter((t) => t.id !== id));
@@ -901,8 +975,11 @@ export default function DAW(_props: TabRendererProps) {
 			delete next[id];
 			return next;
 		});
+		clearGmSoundFontTrackDestination(id);
 		const bus = trackAudioBusesRef.current.get(id);
 		if (bus) {
+			try { bus.input.disconnect(); } catch {}
+			for (const runtime of bus.effectRuntimes.values()) for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
 			try { bus.gain.disconnect(); } catch {}
 			try { bus.analyser.disconnect(); } catch {}
 			trackAudioBusesRef.current.delete(id);
@@ -920,6 +997,58 @@ export default function DAW(_props: TabRendererProps) {
 
 	const setTrackLevel = (id: string, level: number) => {
 		setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, level: clamp(Math.round(level), 0, 127) } : t)));
+	};
+
+	const setTrackMixer = (id: string, patch: Partial<DawMixerStripState>) => {
+		setTracks((prev) => prev.map((track) => track.id === id ? { ...track, mixer: patchMixerStrip(track.mixer, patch) } : track));
+	};
+
+	const setTrackSend = (id: string, index: number, update: { level?: number; pre?: boolean }) => {
+		setTracks((prev) => prev.map((track) => {
+			if (track.id !== id) return track;
+			const mixer = normalizeMixerStrip(track.mixer);
+			if (index < 0 || index >= mixer.sends.length) return track;
+			const sends = mixer.sends.map((send, i) => i === index ? { ...send, ...(update.level == null ? {} : { level: clamp(update.level, 0, 100) }), ...(update.pre == null ? {} : { pre: update.pre }) } : send);
+			return { ...track, mixer: { ...mixer, sends } };
+		}));
+	};
+
+	const toVstTrackEffects = (effects: DawTrackEffect[] = []): Vst3TrackEffect[] => effects.map((effect) => ({
+		id: effect.id, type: "compressor", enabled: effect.enabled, inputGainDb: effect.inputGainDb, thresholdDb: effect.thresholdDb,
+		ratio: effect.ratio, attackMs: effect.attackMs, releaseMs: effect.releaseMs, kneeDb: effect.kneeDb, outputGainDb: effect.outputGainDb,
+	}));
+
+	const addDynamicsC1 = (trackId: string) => {
+		const effect = createDynamicsC1Effect();
+		setTracks((prev) => prev.map((track) => track.id === trackId ? { ...track, effects: [...(track.effects ?? []), effect] } : track));
+		setFxEditorEffectId(effect.id);
+	};
+
+	const updateTrackEffect = (trackId: string, effectId: string, patch: Partial<DynamicsC1Effect>) => {
+		setTracks((prev) => prev.map((track) => track.id === trackId ? {
+			...track,
+			effects: (track.effects ?? []).map((effect) => effect.id === effectId ? { ...effect, ...patch, id: effect.id, type: "compressor", name: "YSong Dynamics C•1" } : effect),
+		} : track));
+	};
+
+	const toggleTrackEffect = (trackId: string, effectId: string) => {
+		setTracks((prev) => prev.map((track) => track.id === trackId ? { ...track, effects: (track.effects ?? []).map((effect) => effect.id === effectId ? { ...effect, enabled: !effect.enabled } : effect) } : track));
+	};
+
+	const removeTrackEffect = (trackId: string, effectId: string) => {
+		setTracks((prev) => prev.map((track) => track.id === trackId ? { ...track, effects: (track.effects ?? []).filter((effect) => effect.id !== effectId) } : track));
+		setFxEditorEffectId((current) => current === effectId ? null : current);
+	};
+
+	const reorderTrackEffect = (trackId: string, from: number, to: number) => {
+		setTracks((prev) => prev.map((track) => {
+			if (track.id !== trackId) return track;
+			const effects = [...(track.effects ?? [])];
+			if (from < 0 || from >= effects.length || to < 0 || to >= effects.length) return track;
+			const [moved] = effects.splice(from, 1);
+			effects.splice(to, 0, moved);
+			return { ...track, effects };
+		}));
 	};
 
 	const beginTrackRename = (track: Track) => {
@@ -942,6 +1071,8 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			const loaded = await bridgeApi.loadVst3Instrument(track.id, track.vst3PluginPath);
 			vstLoadedRef.current.set(track.id, track.vst3PluginPath);
+			await bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects));
+			await bridgeApi.setVst3Mixer(track.id, computedTrackGain(track) <= 0, clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track));
 
 			// Selection owns live hardware MIDI. On a cold YSong launch the selection
 			// effect can run before Bridge is ready and its one-shot /midi/route request
@@ -1011,7 +1142,7 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			await ensureVstLoaded(nextTrack);
 			const currentList = tracks.map((t) => t.id === track.id ? nextTrack : t);
-			await bridgeApi.setVst3Mixer(track.id, computedTrackGain(nextTrack, currentList) <= 0, nextTrack.level ?? 100);
+			await bridgeApi.setVst3Mixer(track.id, computedTrackGain(nextTrack, currentList) <= 0, nextTrack.level ?? 100, nativeMixerForTrack(nextTrack));
 			if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
 		} catch (error) {
 			// A failed native load must not leave the project claiming that the broken
@@ -1568,7 +1699,7 @@ export default function DAW(_props: TabRendererProps) {
 		audioCtxRef.current = new AudioContext();
 		try {
 			masterGainRef.current = audioCtxRef.current.createGain();
-			masterGainRef.current.gain.value = 1.0;
+			masterGainRef.current.gain.value = clamp(masterLevel / 100, 0, 1.27);
 			masterGainRef.current.connect(audioCtxRef.current.destination);
 		} catch {
 			masterGainRef.current = null;
@@ -1578,28 +1709,141 @@ export default function DAW(_props: TabRendererProps) {
 
 	const trackLevelToGain = (level?: number) => clamp((level ?? 100) / 100, 0, 1.27);
 
+	useEffect(() => {
+		const ctx = audioCtxRef.current;
+		const master = masterGainRef.current;
+		if (!ctx || !master) return;
+		master.gain.cancelScheduledValues(ctx.currentTime);
+		master.gain.setTargetAtTime(clamp(masterLevel / 100, 0, 1.27), ctx.currentTime, 0.008);
+	}, [masterLevel]);
+
+	useEffect(() => {
+		if (bridgeAvailable === false) return;
+		bridgeApi.setVst3Master(masterLevel).catch(() => {});
+	}, [masterLevel, bridgeAvailable]);
+
 	const computedTrackGain = (track: Track, trackList = tracks) => {
 		const anySolo = trackList.some((t) => t.solo);
 		const audible = !track.mute && (!anySolo || track.solo);
 		return audible ? trackLevelToGain(track.level) : 0;
 	};
 
+	const trackUsesNativeVst = (track: Track | null | undefined) => !!track?.vst3PluginPath && bridgeAvailable !== false;
+	const mixerForTrack = (track: Track) => normalizeMixerStrip(track.mixer);
+	const nativeMixerForTrack = (track: Track) => {
+		const mixer = mixerForTrack(track);
+		return {
+			inputGainDb: mixer.inputGainDb, phaseInvert: mixer.phaseInvert,
+			hpfEnabled: mixer.hpfEnabled, hpfHz: mixer.hpfHz, lpfEnabled: mixer.lpfEnabled, lpfHz: mixer.lpfHz,
+			eqEnabled: mixer.eqEnabled, lowGainDb: mixer.lowGainDb, lowFreqHz: mixer.lowFreqHz,
+			lowMidGainDb: mixer.lowMidGainDb, lowMidFreqHz: mixer.lowMidFreqHz, lowMidQ: mixer.lowMidQ,
+			highMidGainDb: mixer.highMidGainDb, highMidFreqHz: mixer.highMidFreqHz, highMidQ: mixer.highMidQ,
+			highGainDb: mixer.highGainDb, highFreqHz: mixer.highFreqHz,
+			compressorEnabled: mixer.compressorEnabled, compressorThresholdDb: mixer.compressorThresholdDb, compressorRatio: mixer.compressorRatio,
+			compressorAttackMs: mixer.compressorAttackMs, compressorReleaseMs: mixer.compressorReleaseMs,
+			pan: mixer.pan, width: mixer.width,
+		};
+	};
+
+	const effectSignatureForTrack = (track: Track) => JSON.stringify((track.effects ?? []).map((effect) => ({
+		id: effect.id, type: effect.type, enabled: effect.enabled, inputGainDb: effect.inputGainDb, thresholdDb: effect.thresholdDb,
+		ratio: effect.ratio, attackMs: effect.attackMs, releaseMs: effect.releaseMs, kneeDb: effect.kneeDb, outputGainDb: effect.outputGainDb,
+	})));
+
+	const configureTrackAudioBus = (track: Track, bus: TrackAudioBus) => {
+		const ctx = ensureAudioCtx();
+		const mixer = mixerForTrack(track);
+		const trimGain = dbToGain(mixer.inputGainDb) * (mixer.phaseInvert ? -1 : 1);
+		bus.trim.gain.setTargetAtTime(trimGain, ctx.currentTime, 0.008);
+		bus.hpf.type = "highpass";
+		bus.hpf.frequency.setTargetAtTime(mixer.hpfEnabled ? mixer.hpfHz : 10, ctx.currentTime, 0.008);
+		bus.hpf.Q.value = 0.707;
+		bus.lpf.type = "lowpass";
+		bus.lpf.frequency.setTargetAtTime(mixer.lpfEnabled ? mixer.lpfHz : Math.min(22000, ctx.sampleRate * 0.49), ctx.currentTime, 0.008);
+		bus.lpf.Q.value = 0.707;
+		bus.low.type = "lowshelf";
+		bus.low.frequency.setTargetAtTime(mixer.lowFreqHz, ctx.currentTime, 0.008);
+		bus.low.gain.setTargetAtTime(mixer.eqEnabled ? mixer.lowGainDb : 0, ctx.currentTime, 0.008);
+		bus.lowMid.type = "peaking";
+		bus.lowMid.frequency.setTargetAtTime(mixer.lowMidFreqHz, ctx.currentTime, 0.008);
+		bus.lowMid.Q.setTargetAtTime(mixer.lowMidQ, ctx.currentTime, 0.008);
+		bus.lowMid.gain.setTargetAtTime(mixer.eqEnabled ? mixer.lowMidGainDb : 0, ctx.currentTime, 0.008);
+		bus.highMid.type = "peaking";
+		bus.highMid.frequency.setTargetAtTime(mixer.highMidFreqHz, ctx.currentTime, 0.008);
+		bus.highMid.Q.setTargetAtTime(mixer.highMidQ, ctx.currentTime, 0.008);
+		bus.highMid.gain.setTargetAtTime(mixer.eqEnabled ? mixer.highMidGainDb : 0, ctx.currentTime, 0.008);
+		bus.high.type = "highshelf";
+		bus.high.frequency.setTargetAtTime(mixer.highFreqHz, ctx.currentTime, 0.008);
+		bus.high.gain.setTargetAtTime(mixer.eqEnabled ? mixer.highGainDb : 0, ctx.currentTime, 0.008);
+		bus.compressor.threshold.setTargetAtTime(mixer.compressorEnabled ? mixer.compressorThresholdDb : 0, ctx.currentTime, 0.008);
+		bus.compressor.ratio.setTargetAtTime(mixer.compressorEnabled ? mixer.compressorRatio : 1, ctx.currentTime, 0.008);
+		bus.compressor.attack.setTargetAtTime(mixer.compressorAttackMs / 1000, ctx.currentTime, 0.008);
+		bus.compressor.release.setTargetAtTime(mixer.compressorReleaseMs / 1000, ctx.currentTime, 0.008);
+		bus.compressor.knee.setTargetAtTime(mixer.compressorEnabled ? 12 : 0, ctx.currentTime, 0.008);
+		const w = clamp(mixer.width / 100, 0, 2);
+		const same = (1 + w) * 0.5;
+		const cross = (1 - w) * 0.5;
+		bus.widthLL.gain.setTargetAtTime(same, ctx.currentTime, 0.008);
+		bus.widthRR.gain.setTargetAtTime(same, ctx.currentTime, 0.008);
+		bus.widthLR.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
+		bus.widthRL.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
+		bus.panner.pan.setTargetAtTime(mixer.pan, ctx.currentTime, 0.008);
+	};
+
+	const rebuildTrackAudioEffects = (track: Track, bus: TrackAudioBus) => {
+		const signature = effectSignatureForTrack(track);
+		if (signature === bus.effectSignature) return;
+		try { bus.compressor.disconnect(); } catch {}
+		for (const runtime of bus.effectRuntimes.values()) {
+			for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
+		}
+		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, track.effects ?? [], bus.gain);
+		bus.effectSignature = signature;
+	};
+
 	const ensureTrackAudioBus = (trackId: string) => {
+		const track = tracks.find((t) => t.id === trackId);
 		const existing = trackAudioBusesRef.current.get(trackId);
-		if (existing) return existing;
+		if (existing) {
+			if (track) { configureTrackAudioBus(track, existing); rebuildTrackAudioEffects(track, existing); }
+			if (track?.type === "instrument" && !trackUsesNativeVst(track)) setGmSoundFontTrackDestination(ensureAudioCtx(), track.id, existing.input);
+			return existing;
+		}
 
 		const ctx = ensureAudioCtx();
+		const input = ctx.createGain();
+		const trim = ctx.createGain();
+		const hpf = ctx.createBiquadFilter();
+		const lpf = ctx.createBiquadFilter();
+		const low = ctx.createBiquadFilter();
+		const lowMid = ctx.createBiquadFilter();
+		const highMid = ctx.createBiquadFilter();
+		const high = ctx.createBiquadFilter();
+		const compressor = ctx.createDynamicsCompressor();
 		const gain = ctx.createGain();
+		const widthInput = ctx.createGain();
+		const splitter = ctx.createChannelSplitter(2);
+		const widthLL = ctx.createGain();
+		const widthLR = ctx.createGain();
+		const widthRL = ctx.createGain();
+		const widthRR = ctx.createGain();
+		const merger = ctx.createChannelMerger(2);
+		const panner = ctx.createStereoPanner();
 		const analyser = ctx.createAnalyser();
 		analyser.fftSize = 256;
 		analyser.smoothingTimeConstant = 0.65;
-		const track = tracks.find((t) => t.id === trackId);
+		input.connect(trim); trim.connect(hpf); hpf.connect(lpf); lpf.connect(low); low.connect(lowMid); lowMid.connect(highMid); highMid.connect(high); high.connect(compressor);
+		gain.connect(widthInput); widthInput.connect(splitter);
+		splitter.connect(widthLL, 0); splitter.connect(widthRL, 0); splitter.connect(widthLR, 1); splitter.connect(widthRR, 1);
+		widthLL.connect(merger, 0, 0); widthLR.connect(merger, 0, 0); widthRL.connect(merger, 0, 1); widthRR.connect(merger, 0, 1);
+		merger.connect(panner); panner.connect(analyser);
+		if (masterGainRef.current) analyser.connect(masterGainRef.current); else analyser.connect(ctx.destination);
+		const bus: TrackAudioBus = { input, trim, hpf, lpf, low, lowMid, highMid, high, compressor, gain, widthInput, splitter, widthLL, widthLR, widthRL, widthRR, merger, panner, analyser, effectSignature: "", effectRuntimes: new Map() };
+		if (track) { configureTrackAudioBus(track, bus); rebuildTrackAudioEffects(track, bus); }
+		else compressor.connect(gain);
 		gain.gain.value = track ? computedTrackGain(track) : 1;
-		gain.connect(analyser);
-		if (masterGainRef.current) analyser.connect(masterGainRef.current);
-		else analyser.connect(ctx.destination);
-		const bus = { gain, analyser };
 		trackAudioBusesRef.current.set(trackId, bus);
+		if (track?.type === "instrument" && !trackUsesNativeVst(track)) setGmSoundFontTrackDestination(ctx, track.id, input);
 		return bus;
 	};
 
@@ -1609,6 +1853,10 @@ export default function DAW(_props: TabRendererProps) {
 		for (const track of trackList) {
 			const bus = trackAudioBusesRef.current.get(track.id);
 			if (!bus) continue;
+			configureTrackAudioBus(track, bus);
+			rebuildTrackAudioEffects(track, bus);
+			if (track.type === "instrument" && !trackUsesNativeVst(track)) setGmSoundFontTrackDestination(ctx, track.id, bus.input);
+			else clearGmSoundFontTrackDestination(track.id);
 			const target = computedTrackGain(track, trackList);
 			bus.gain.gain.cancelScheduledValues(ctx.currentTime);
 			bus.gain.gain.setTargetAtTime(target, ctx.currentTime, 0.008);
@@ -1623,7 +1871,7 @@ export default function DAW(_props: TabRendererProps) {
 	// Persisted VST assignments are part of the DAW project. Once project state is
 	// hydrated, reconcile the native Bridge instances with those assignments.
 	useEffect(() => {
-		if (!dawHydrated) return;
+		if (!dawHydrated || bridgeAvailable === false) return;
 		const wanted = new Map(
 			tracks
 				.filter((track) => track.type === "instrument" && !!track.vst3PluginPath)
@@ -1645,25 +1893,34 @@ export default function DAW(_props: TabRendererProps) {
 		// Catalog refresh is included so a Bridge restart/re-scan naturally gives a
 		// persisted project another chance to restore its native instances.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, activeProjectId, tracks, vst3Plugins]);
+	}, [dawHydrated, activeProjectId, tracks, vst3Plugins, bridgeAvailable]);
 
 	// Mute / solo / level remain the source of truth in the DAW. Mirror them into
 	// native VST instances so Bridge audio follows the same mixer rules as WebAudio.
 	useEffect(() => {
 		const anySolo = tracks.some((track) => track.solo);
 		for (const track of tracks) {
-			if (track.type !== "instrument" || !track.vst3PluginPath) continue;
+			if (track.type !== "instrument" || !trackUsesNativeVst(track)) continue;
 			const muted = track.mute || (anySolo && !track.solo);
-			bridgeApi.setVst3Mixer(track.id, muted, clamp(track.level ?? 100, 0, 127)).catch(() => {});
+			bridgeApi.setVst3Mixer(track.id, muted, clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track)).catch(() => {});
 		}
-	}, [tracks]);
+	}, [tracks, bridgeAvailable]);
+
+	useEffect(() => {
+		if (!dawHydrated || bridgeAvailable === false) return;
+		for (const track of tracks) {
+			if (track.type !== "instrument" || !trackUsesNativeVst(track)) continue;
+			bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects)).catch(() => {});
+		}
+	}, [dawHydrated, tracks, bridgeAvailable]);
 
 	// Pull native meters/status from Bridge. If Bridge was restarted while YSong
 	// stayed open, a missing instance is automatically recreated from project state.
 	useEffect(() => {
-		const assigned = tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath);
+		const assigned = bridgeAvailable === false ? [] : tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath);
 		if (assigned.length === 0) {
 			vstMetersRef.current = {};
+			vstGainReductionRef.current = {};
 			return;
 		}
 		let cancelled = false;
@@ -1677,6 +1934,7 @@ export default function DAW(_props: TabRendererProps) {
 					const instance = instances.get(track.id);
 					if (instance) {
 						meters[track.id] = Math.max(0, instance.peak ?? 0);
+						vstGainReductionRef.current[track.id] = Math.max(0, instance.gainReductionDb ?? 0);
 						vstLoadedRef.current.set(track.id, track.vst3PluginPath!);
 						setVstTrackState((prev) => {
 							const nextStatus = instance.error ? { status: "error" as const, message: instance.error } : { status: "ready" as const };
@@ -1699,13 +1957,13 @@ export default function DAW(_props: TabRendererProps) {
 		const timer = window.setInterval(() => { void poll(); }, 140);
 		return () => { cancelled = true; window.clearInterval(timer); };
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tracks]);
+	}, [tracks, bridgeAvailable]);
 
 	useEffect(() => {
 		if (meterRafRef.current != null) cancelAnimationFrame(meterRafRef.current);
 		meterRafRef.current = null;
 
-		const hasNativeVst = tracks.some((track) => !!track.vst3PluginPath);
+		const hasNativeVst = tracks.some((track) => trackUsesNativeVst(track));
 		if (!isPlaying && !hasNativeVst) {
 			setTrackMeters((prev) => {
 				const next = { ...prev };
@@ -1722,7 +1980,7 @@ export default function DAW(_props: TabRendererProps) {
 				lastPaint = now;
 				const next: Record<string, number> = {};
 				for (const track of tracks) {
-					if (track.vst3PluginPath) {
+					if (trackUsesNativeVst(track)) {
 						const peak = Math.max(1e-6, vstMetersRef.current[track.id] ?? 0);
 						const db = 20 * Math.log10(peak);
 						next[track.id] = clamp((db + 60) / 60, 0, 1);
@@ -1803,10 +2061,11 @@ export default function DAW(_props: TabRendererProps) {
 	// from feeling like the first note was swallowed. AudioContext resume still occurs
 	// on the user's performance gesture.
 	useEffect(() => {
-		if (!selectedMidiTarget || selectedMidiTarget.vst3PluginPath) return;
+		if (!selectedMidiTarget || trackUsesNativeVst(selectedMidiTarget)) return;
 		const ctx = ensureAudioCtx();
+		ensureTrackAudioBus(selectedMidiTarget.id);
 		void prepareGmSoundFont(ctx).catch((error) => console.error("YSong General MIDI SoundFont preload failed", error));
-	}, [selectedMidiTarget?.id, selectedMidiTarget?.vst3PluginPath]);
+	}, [selectedMidiTarget?.id, selectedMidiTarget?.vst3PluginPath, bridgeAvailable]);
 
 	const liveNoteKey = (trackId: string, pitch: number) => `${trackId}:${pitch}`;
 
@@ -1818,7 +2077,7 @@ export default function DAW(_props: TabRendererProps) {
 		const key = liveNoteKey(target.id, normalizedPitch);
 		captureRecordedMidi("on", normalizedPitch, normalizedVelocity, target);
 
-		if (target.vst3PluginPath) {
+		if (trackUsesNativeVst(target)) {
 			const noteId = stablePositiveInt(`${target.id}:live:${normalizedPitch}:${Date.now()}:${Math.random()}`);
 			liveVstNoteIdsRef.current.set(key, noteId);
 			void ensureVstLoaded(target)
@@ -1830,13 +2089,14 @@ export default function DAW(_props: TabRendererProps) {
 		// v31: real General MIDI playback. One GeneralUser GS SoundFont engine is
 		// shared across melodic channels; the selected track owns this live note.
 		const ctx = ensureAudioCtx();
+		ensureTrackAudioBus(target.id);
 		void ctx.resume().catch(() => {});
 		liveGmNoteKeysRef.current.add(key);
 		const gmAudible = computedTrackGain(target) > 0;
 		void gmSoundFontNoteOn(
 			ctx,
 			target.id,
-			normalizeGmProgram(gmProgramOverrideRef.current.get(target.id) ?? target.gmProgram ?? 0),
+			normalizeGmProgram(target.vst3PluginPath && bridgeAvailable === false ? 0 : (gmProgramOverrideRef.current.get(target.id) ?? target.gmProgram ?? 0)),
 			normalizedPitch,
 			normalizedVelocity,
 			target.level ?? 100,
@@ -1851,7 +2111,7 @@ export default function DAW(_props: TabRendererProps) {
 		const key = liveNoteKey(target.id, normalizedPitch);
 		captureRecordedMidi("off", normalizedPitch, 1, target);
 
-		if (target.vst3PluginPath) {
+		if (trackUsesNativeVst(target)) {
 			const noteId = liveVstNoteIdsRef.current.get(key);
 			liveVstNoteIdsRef.current.delete(key);
 			if (noteId != null) void bridgeApi.scheduleVst3Midi(target.id, [{ kind: "off", note: normalizedPitch, velocity: 0, noteId, whenUnixMs: Date.now() + 2 }]).catch(() => {});
@@ -1921,7 +2181,7 @@ export default function DAW(_props: TabRendererProps) {
 			// instead of leaving hardware MIDI dead until the user clicks the track.
 			for (let attempt = 0; attempt < 20 && !cancelled; attempt += 1) {
 				const current = selectedMidiTargetRef.current;
-				const nativeTrackId = current?.vst3PluginPath ? current.id : null;
+				const nativeTrackId = trackUsesNativeVst(current) ? current!.id : null;
 				try {
 					await bridgeApi.setMidiRoute(nativeTrackId, current?.midiInputName ?? null);
 					return;
@@ -1932,7 +2192,7 @@ export default function DAW(_props: TabRendererProps) {
 		};
 		void syncRoute();
 		return () => { cancelled = true; };
-	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
+	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath, bridgeAvailable]);
 
 	// Own the native route for the lifetime of a mounted DAW. React StrictMode deliberately
 	// probes Effects with setup -> cleanup -> setup on the initial development mount. The old
@@ -1972,7 +2232,7 @@ export default function DAW(_props: TabRendererProps) {
 				return next;
 			});
 			if (!target) return;
-			if (target.vst3PluginPath) {
+			if (trackUsesNativeVst(target)) {
 				// Native Bridge already feeds VST3 directly; only mirror the performance
 				// into the recorder/UI here so we do not double-trigger the synth.
 				captureRecordedMidi(event.kind === "noteon" ? "on" : "off", note, event.velocity ?? 1, target);
@@ -1986,11 +2246,11 @@ export default function DAW(_props: TabRendererProps) {
 			// selection ref (not the render that created this EventSource) and reassert the
 			// route after cold startup or any later Bridge restart.
 			const current = selectedMidiTargetRef.current;
-			const nativeTrackId = current?.vst3PluginPath ? current.id : null;
+			const nativeTrackId = trackUsesNativeVst(current) ? current!.id : null;
 			void bridgeApi.setMidiRoute(nativeTrackId, current?.midiInputName ?? null).catch(() => {});
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath]);
+	}, [dawHydrated, selectedMidiTarget?.id, selectedMidiTarget?.midiInputName, selectedMidiTarget?.vst3PluginPath, bridgeAvailable]);
 
 	const finishMidiRecording = () => {
 		const session = recordingSessionRef.current;
@@ -2359,6 +2619,7 @@ export default function DAW(_props: TabRendererProps) {
 			setBpm(120);
 			setSigNum(4);
 			setSigDen(4);
+			setMasterLevel(100);
 			setDawHydrated(true);
 			return;
 		}
@@ -2368,7 +2629,7 @@ export default function DAW(_props: TabRendererProps) {
 		rafRef.current = null;
 		setIsPlaying(false);
 
-		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127) }));
+		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), mixer: normalizeMixerStrip(t.mixer) }));
 		setTracks(restoredTracks);
 		setClips(data.clips ?? []);
 		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
@@ -2397,9 +2658,174 @@ export default function DAW(_props: TabRendererProps) {
 		setBpm(clamp(data.bpm ?? 120, 20, 400));
 		setSigNum(data.sigNum ?? 4);
 		setSigDen(data.sigDen ?? 4);
+		setMasterLevel(clamp(data.masterLevel ?? 100, 0, 127));
 		setDawHydrated(true);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [DAW_STORAGE_KEY]);
+
+	const buildDawPersistPayload = (): DawPersistV1 => ({
+		v: 1,
+		tracks,
+		clips,
+		projectAssets: projectAssets.map(normalizeProjectAssetForPersist),
+		selectedTrackId,
+		selectedClipId,
+		snapEnabled,
+		gridValue,
+		gridMode,
+		zoomPct,
+		playheadPosBars,
+		loopL,
+		loopR,
+		endBar,
+		loopEnabled,
+		bpm,
+		sigNum,
+		sigDen,
+		trackHeights,
+		masterLevel,
+	});
+
+	type YSongProjectFileV1 = {
+		format: "YSong Project";
+		version: 1;
+		name: string;
+		savedAt: string;
+		state: DawPersistV1;
+	};
+
+	const projectFileText = () => JSON.stringify({
+		format: "YSong Project",
+		version: 1,
+		name: projectName.trim() || "Untitled Project",
+		savedAt: new Date().toISOString(),
+		state: buildDawPersistPayload(),
+	} satisfies YSongProjectFileV1, null, 2);
+
+	const writeProjectHandle = async (handle: any) => {
+		const writable = await handle.createWritable();
+		await writable.write(projectFileText());
+		await writable.close();
+	};
+
+	const saveProjectAsFile = async () => {
+		setFileMenuOpen(false);
+		try {
+			setIsSavingUi(true);
+			const picker = (window as any).showSaveFilePicker as undefined | ((options: any) => Promise<any>);
+			if (picker) {
+				const handle = await picker({
+					suggestedName: `${safeExportFileName(projectName)}.ysong`,
+					types: [{ description: "YSong Project", accept: { "application/json": [".ysong"] } }],
+				});
+				await writeProjectHandle(handle);
+				projectFileHandleRef.current = handle;
+			} else {
+				downloadBlob(new Blob([projectFileText()], { type: "application/json" }), `${safeExportFileName(projectName)}.ysong`);
+			}
+		} catch (error) {
+			if (!(error instanceof DOMException && error.name === "AbortError")) window.alert(error instanceof Error ? error.message : "Could not save the YSong project.");
+		} finally {
+			setIsSavingUi(false);
+		}
+	};
+
+	const saveProjectFile = async () => {
+		setFileMenuOpen(false);
+		const handle = projectFileHandleRef.current;
+		if (!handle) { await saveProjectAsFile(); return; }
+		try {
+			setIsSavingUi(true);
+			await writeProjectHandle(handle);
+		} catch (error) {
+			window.alert(error instanceof Error ? error.message : "Could not save the YSong project.");
+		} finally {
+			setIsSavingUi(false);
+		}
+	};
+
+	const importProjectFile = async (file: File, handle?: any) => {
+		const parsed = JSON.parse(await file.text()) as Partial<YSongProjectFileV1>;
+		if (parsed.format !== "YSong Project" || parsed.version !== 1 || !parsed.state || parsed.state.v !== 1) throw new Error("That file is not a supported YSong project.");
+		const id = crypto.randomUUID();
+		const name = String(parsed.name || file.name.replace(/\.ysong$/i, "") || "Untitled Project");
+		const state: DawPersistV1 = {
+			...parsed.state,
+			tracks: (parsed.state.tracks ?? []).map((track) => ({ ...track, level: clamp(track.level ?? 100, 0, 127), effects: normalizeTrackEffects(track.effects), mixer: normalizeMixerStrip(track.mixer) })),
+			projectAssets: (parsed.state.projectAssets ?? []).map(normalizeProjectAssetForPersist),
+		};
+		localStorage.setItem(`ysong:daw:${id}`, JSON.stringify(state));
+		localStorage.setItem(`ysong:projectName:${id}`, name);
+		upsertProjectMeta(id, name);
+		projectFileHandleRef.current = handle ?? null;
+		setFxChainTrackId(null);
+		setFxEditorEffectId(null);
+		setActiveProjectId(id);
+	};
+
+	const openProjectFile = async () => {
+		setFileMenuOpen(false);
+		try {
+			const picker = (window as any).showOpenFilePicker as undefined | ((options: any) => Promise<any[]>);
+			if (picker) {
+				const [handle] = await picker({ multiple: false, types: [{ description: "YSong Project", accept: { "application/json": [".ysong"] } }] });
+				if (!handle) return;
+				await importProjectFile(await handle.getFile(), handle);
+				return;
+			}
+
+			const input = document.createElement("input");
+			input.type = "file";
+			input.accept = ".ysong,application/json";
+			input.style.display = "none";
+			document.body.appendChild(input);
+			input.onchange = () => {
+				const file = input.files?.[0];
+				input.remove();
+				if (file) void importProjectFile(file).catch((error) => window.alert(error instanceof Error ? error.message : "Could not open the YSong project."));
+			};
+			input.click();
+		} catch (error) {
+			if (!(error instanceof DOMException && error.name === "AbortError")) window.alert(error instanceof Error ? error.message : "Could not open the YSong project.");
+		}
+	};
+
+	useEffect(() => {
+		if (!fileMenuOpen) return;
+		const onPointerDown = (event: PointerEvent) => {
+			const menu = fileMenuRef.current;
+			if (menu && event.target instanceof Node && !menu.contains(event.target)) setFileMenuOpen(false);
+		};
+		const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setFileMenuOpen(false); };
+		window.addEventListener("pointerdown", onPointerDown);
+		window.addEventListener("keydown", onEscape);
+		return () => {
+			window.removeEventListener("pointerdown", onPointerDown);
+			window.removeEventListener("keydown", onEscape);
+		};
+	}, [fileMenuOpen]);
+
+	useEffect(() => {
+		const onProjectShortcut = (event: KeyboardEvent) => {
+			if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+			const key = event.key.toLowerCase();
+			if (key === "s") {
+				event.preventDefault();
+				if (event.shiftKey) void saveProjectAsFile();
+				else void saveProjectFile();
+			} else if (key === "o") {
+				event.preventDefault();
+				void openProjectFile();
+			} else if (key === "n") {
+				event.preventDefault();
+				createNewProject();
+			}
+		};
+		window.addEventListener("keydown", onProjectShortcut);
+		return () => window.removeEventListener("keydown", onProjectShortcut);
+		// These are intentionally the same project-state inputs used by projectFileText().
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [projectName, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel]);
 
 	useEffect(() => {
 		// Never autosave the component's empty pre-hydration render. On cold start,
@@ -2408,30 +2834,7 @@ export default function DAW(_props: TabRendererProps) {
 		// transient defaults before React has committed the restored state.
 		if (!dawHydrated) return;
 
-		const payload: DawPersistV1 = {
-			v: 1,
-			tracks,
-			clips,
-			projectAssets: projectAssets.map(normalizeProjectAssetForPersist),
-			selectedTrackId,
-			selectedClipId,
-
-			snapEnabled,
-			gridValue,
-			gridMode,
-			zoomPct,
-
-			playheadPosBars,
-			loopL,
-			loopR,
-			endBar,
-			loopEnabled,
-
-			bpm,
-			sigNum,
-			sigDen,
-			trackHeights,
-		};
+		const payload = buildDawPersistPayload();
 
 		setIsSavingUi(true);
 		const t = window.setTimeout(() => {
@@ -2466,6 +2869,7 @@ export default function DAW(_props: TabRendererProps) {
 		bpm,
 		sigNum,
 		sigDen,
+		masterLevel,
 	]);
 
 
@@ -2489,6 +2893,7 @@ export default function DAW(_props: TabRendererProps) {
 		bpm: number;
 		sigNum: number;
 		sigDen: number;
+		masterLevel: number;
 	};
 	type DawHistoryEntry = { hash: string; state: DawHistorySnapshot };
 	const historyRef = useRef<DawHistoryEntry[]>([]);
@@ -2518,6 +2923,7 @@ export default function DAW(_props: TabRendererProps) {
 		bpm,
 		sigNum,
 		sigDen,
+		masterLevel,
 	});
 
 	const historyHash = (state: DawHistorySnapshot) => JSON.stringify(state);
@@ -2569,7 +2975,7 @@ export default function DAW(_props: TabRendererProps) {
 		// Selection, zoom, scrolling, snap/grid choice and playhead movement are view/
 		// workflow state, not destructive musical edits, so they are not history steps.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen]);
+	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel]);
 
 	const applyHistoryEntry = (entry: DawHistoryEntry) => {
 		stop();
@@ -2586,6 +2992,7 @@ export default function DAW(_props: TabRendererProps) {
 		setBpm(state.bpm);
 		setSigNum(state.sigNum);
 		setSigDen(state.sigDen);
+		setMasterLevel(state.masterLevel);
 		setSelectedTrackId((id) => id && state.tracks.some((t) => t.id === id) ? id : (state.tracks[0]?.id ?? null));
 		setSelectedClipId((id) => id && state.clips.some((c) => c.id === id) ? id : null);
 		setMidiEditorClipId((id) => id && state.clips.some((c) => c.id === id) ? id : null);
@@ -2706,6 +3113,89 @@ export default function DAW(_props: TabRendererProps) {
 		setSelectedClipId(id);
 		if (track?.type === "instrument") requestAnimationFrame(() => setMidiEditorClipId(id));
 	};
+
+	// Create Song stages a generated session outside the DAW. Import it into a NEW
+	// project so generation never destroys the user's current song. Audio tracks
+	// reference YSong's saved local objects; MIDI tracks remain real editable clips
+	// and carry the exact VST path selected from Bridge's installed catalog.
+	useEffect(() => {
+		if (!dawHydrated) return;
+		if (!generatedSessionPendingRef.current) {
+			const staged = consumeGeneratedSession();
+			if (!staged) return;
+			const nextProjectId = crypto.randomUUID();
+			generatedSessionPendingRef.current = staged;
+			generatedSessionTargetProjectRef.current = nextProjectId;
+			try { localStorage.setItem(`ysong:projectName:${nextProjectId}`, staged.projectName || "Generated Song"); } catch {}
+			setActiveProjectId(nextProjectId);
+			return;
+		}
+		if (activeProjectId !== generatedSessionTargetProjectRef.current) return;
+		const manifest = generatedSessionPendingRef.current;
+		if (!manifest) return;
+
+		stop();
+		bridgeApi.unloadAllVst3().catch(() => {});
+		vstLoadedRef.current.clear();
+		vstMetersRef.current = {};
+		setVstTrackState({});
+		const nextTracks: Track[] = [];
+		const nextClips: Clip[] = [];
+		const nextAssets: ProjectAsset[] = [];
+		const nextHeights: Record<string, number> = {};
+		const barSec = (60 / Math.max(1, manifest.bpm)) * (4 / Math.max(1, manifest.sigDen)) * Math.max(1, manifest.sigNum);
+		for (let index = 0; index < manifest.tracks.length; index++) {
+			const source = manifest.tracks[index];
+			const trackId = crypto.randomUUID();
+			const track = mkTrack(source.mode === "midi" ? "instrument" : "audio", index + 1, trackId);
+			track.name = source.name || `${source.mode === "midi" ? "Instrument" : "Audio"} ${index + 1}`;
+			if (source.mode === "midi" && source.vst?.path) {
+				track.vst3PluginPath = source.vst.path;
+				track.vst3PluginName = source.vst.name || "VST3";
+				track.vst3PluginVendor = source.vst.vendor;
+				track.vstPresetHint = source.vst.presetHint;
+			}
+			nextTracks.push(track);
+			nextHeights[trackId] = ROW_H;
+
+			if (source.mode === "audio" && source.objectKey) {
+				const assetId = source.objectKey;
+				nextAssets.push({ id: assetId, kind: "audio", name: `${source.name}.wav`, objectKey: source.objectKey, sourceObjectKey: source.objectKey, durationSec: source.durationSec });
+				const lengthBars = source.durationSec && source.durationSec > 0 ? Math.max(0.01, source.durationSec / Math.max(0.0001, barSec)) : Math.max(1, manifest.totalBars);
+				nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name: source.name, startBar: 1, lengthBars, sourceOffsetSec: 0, sourceDurationSec: source.durationSec, fadeInBars: 0, fadeOutBars: 0 });
+			}
+			if (source.mode === "midi") {
+				for (const region of source.midiRegions ?? []) {
+					const repeatCount = Math.max(1, Math.min(64, Math.round(region.repeatCount ?? 1)));
+					for (let repeat = 0; repeat < repeatCount; repeat++) {
+						const startBar = region.startBar + repeat * region.lengthBars;
+						if (startBar > manifest.totalBars) break;
+						nextClips.push({
+							id: crypto.randomUUID(), trackId, name: source.name, startBar,
+							lengthBars: Math.min(region.lengthBars, Math.max(0.01, manifest.totalBars - startBar + 1)),
+							midiNotes: (region.notes ?? []).map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
+							midiPitchBend: [], midiModulation: [], midiBendRange: 12,
+							midiScales: [{ id: crypto.randomUUID(), root: manifest.keyRoot, scaleId: manifest.scaleId }], midiScaleLock: "strict",
+						});
+					}
+				}
+			}
+		}
+
+		bpmRef.current = manifest.bpm; sigNumRef.current = manifest.sigNum; sigDenRef.current = manifest.sigDen;
+		setBpm(manifest.bpm); setSigNum(manifest.sigNum); setSigDen(manifest.sigDen);
+		setProjectName(manifest.projectName || "Generated Song");
+		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
+		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));
+		setEndBar(Math.min(MAX_BARS, Math.max(2, manifest.totalBars + 1)));
+		setLoopL(1); setLoopR(Math.min(5, Math.max(2, manifest.totalBars + 1))); setLoopEnabled(false);
+		setPlayheadPosBars(1); setSelectedTrackId(nextTracks[0]?.id ?? null); setSelectedClipId(null);
+		generatedSessionPendingRef.current = null;
+		generatedSessionTargetProjectRef.current = null;
+		transportPrimedRef.current = false;
+		window.dispatchEvent(new CustomEvent("ysong:generated-session-imported", { detail: { projectName: manifest.projectName, tracks: nextTracks.length } }));
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [dawHydrated, activeProjectId, generatedSessionRevision]);
 
 	const getBarSeconds = () => {
 		const beatSec = (60 / Math.max(1, bpmRef.current)) * (4 / Math.max(1, sigDenRef.current));
@@ -2854,7 +3344,7 @@ export default function DAW(_props: TabRendererProps) {
 	const scheduleAudioFromBars = async (
 		startBars: number,
 		stopBars: number,
-		options?: { startAtSec?: number; clearExisting?: boolean },
+		options?: { startAtSec?: number; startUnixMs?: number; clearExisting?: boolean },
 	) => {
 		// Schedule only the requested transport segment. Keeping the schedule
 		// bounded is important for true L-R looping: audio beyond R must never leak
@@ -2899,7 +3389,7 @@ export default function DAW(_props: TabRendererProps) {
 			const gain = ctx.createGain();
 			const trackBus = ensureTrackAudioBus(c.trackId);
 			srcNode.connect(gain);
-			gain.connect(trackBus.gain);
+			gain.connect(trackBus.input);
 
 			// Clip fades are already baked into this temporary per-clip playback buffer.
 			// The original asset is untouched, and seeking into a fade still lands on the
@@ -2918,10 +3408,13 @@ export default function DAW(_props: TabRendererProps) {
 		// Native VST3 instrument tracks are scheduled into YSong Bridge. The Bridge
 		// owns the actual plugin instance and renders it through ASIO/WASAPI; the MIDI
 		// clip remains the source of truth in this project.
-		const vstTracks = tracks.filter((t) => t.type === "instrument" && !!t.vst3PluginPath);
-		const segmentStartUnixMs = Date.now() + Math.max(0, (t0 - ctx.currentTime) * 1000);
-		for (const track of vstTracks) {
-			try { await ensureVstLoaded(track); } catch { continue; }
+		const vstTracks = tracks.filter((t) => t.type === "instrument" && trackUsesNativeVst(t));
+		const segmentStartUnixMs = options?.startUnixMs ?? Math.round(transportClockUnixOffsetMsRef.current + t0 * 1000);
+		// Schedule native instruments in parallel. With 20-30 VST tracks, serial HTTP
+		// calls can consume the entire lead-in and make later tracks arrive after the
+		// shared transport epoch. Every track receives timestamps from the same clock.
+		await Promise.allSettled(vstTracks.map(async (track) => {
+			try { await ensureVstLoaded(track); } catch { return; }
 			const events: Vst3MidiEvent[] = [];
 			const trackClips = clips.filter((c) => c.trackId === track.id && !c.assetId && (c.midiNotes?.length ?? 0) > 0);
 			for (const c of trackClips) {
@@ -2933,33 +3426,27 @@ export default function DAW(_props: TabRendererProps) {
 					const playToBar = Math.min(segmentEnd, noteEndBar);
 					if (playToBar - playFromBar <= 0.0001) return;
 					const noteId = stablePositiveInt(`${c.id}:${noteIndex}:${note.pitch}`);
-					events.push({
-						kind: "on", note: note.pitch, velocity: note.velocity, noteId,
-						whenUnixMs: Math.round(segmentStartUnixMs + Math.max(0, playFromBar - startBars) * barSec * 1000),
-					});
-					events.push({
-						kind: "off", note: note.pitch, velocity: 0, noteId,
-						whenUnixMs: Math.round(segmentStartUnixMs + Math.max(0, playToBar - startBars) * barSec * 1000),
-					});
+					events.push({ kind: "on", note: note.pitch, velocity: note.velocity, noteId, whenUnixMs: Math.round(segmentStartUnixMs + Math.max(0, playFromBar - startBars) * barSec * 1000) });
+					events.push({ kind: "off", note: note.pitch, velocity: 0, noteId, whenUnixMs: Math.round(segmentStartUnixMs + Math.max(0, playToBar - startBars) * barSec * 1000) });
 				});
 			}
-			if (events.length) {
-				events.sort((a, b) => a.whenUnixMs - b.whenUnixMs || (a.kind === "off" ? -1 : 1));
-				try { await bridgeApi.scheduleVst3Midi(track.id, events); } catch {}
-			}
-		}
+			if (!events.length) return;
+			events.sort((a, b) => a.whenUnixMs - b.whenUnixMs || (a.kind === "off" ? -1 : 1));
+			await bridgeApi.scheduleVst3Midi(track.id, events);
+		}));
 
 		// Tracks without a native VST3 assignment now use a real SoundFont-backed
 		// General MIDI renderer. Program numbers 0..127 map directly to GeneralUser GS.
 		const midiClips = clips.filter((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && tracks.some((t) => t.id === c.trackId && t.type === "instrument"));
-		const gmClips = midiClips.filter((c) => !tracks.find((t) => t.id === c.trackId)?.vst3PluginPath);
+		const gmClips = midiClips.filter((c) => !trackUsesNativeVst(tracks.find((t) => t.id === c.trackId)));
 		if (gmClips.length) {
 			try {
 				await prepareGmSoundFont(ctx);
 				for (const c of gmClips) {
 					const track = tracks.find((t) => t.id === c.trackId);
-					if (!track || track.vst3PluginPath) continue;
-					const gmProgram = normalizeGmProgram(gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0);
+					if (!track || trackUsesNativeVst(track)) continue;
+					ensureTrackAudioBus(track.id);
+					const gmProgram = normalizeGmProgram(track.vst3PluginPath && bridgeAvailable === false ? 0 : (gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0));
 					const clipEndBar = c.startBar + c.lengthBars;
 					for (const note of c.midiNotes ?? []) {
 						const noteStartBar = c.startBar + note.startBars;
@@ -2981,6 +3468,22 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	// --- Transport playback loop (audio + structured MIDI + visual) ---
+	const currentTransportPosition = () => {
+		if (!isPlaying) return playheadPosBars;
+		const ctx = audioCtxRef.current;
+		const elapsedSec = ctx
+			? Math.max(0, ctx.currentTime - playStartCtxTimeRef.current)
+			: Math.max(0, (performance.now() - playStartMsRef.current) / 1000);
+		let pos = playStartPosRef.current + elapsedSec / Math.max(0.0001, transportBarSecRef.current);
+		if (loopEnabled) {
+			const len = Math.max(0.0001, loopR - loopL);
+			if (pos < loopL) pos = loopL;
+			if (pos >= loopR) pos = loopL + ((pos - loopL) % len);
+			return clamp(pos, loopL, Math.max(loopL, loopR - 0.000001));
+		}
+		return clamp(pos, 1, endBar);
+	};
+
 	const stop = () => {
 		if (recordingSessionRef.current) finishMidiRecording();
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -2989,51 +3492,73 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 	};
 
-	const start = async (loopOverride?: boolean) => {
+	const start = async (loopOverride?: boolean, positionOverride?: number, leadOverride?: number) => {
+		window.dispatchEvent(new Event("ysong:daw-play-request"));
 		const loopOn = loopOverride ?? loopEnabled;
 		const activeLoopLen = Math.max(0.0001, loopR - loopL);
-		const startPos = loopOn ? clamp(playheadPosBars, loopL, loopR - 0.0001) : clamp(playheadPosBars, 1, endBar);
+		const rawStart = positionOverride ?? playheadPosBars;
+		// Play from E is a restart, not an almost-zero-length transport pass. Likewise,
+		// starting at R while looping begins cleanly at L. This prevents the old
+		// end-of-song -> immediate wrap race that could offset audio vs MIDI/VST tracks.
+		const startPos = loopOn
+			? (rawStart >= loopR - 0.0005 || rawStart < loopL ? loopL : clamp(rawStart, loopL, loopR - 0.0005))
+			: (rawStart >= endBar - 0.0005 ? 1 : clamp(rawStart, 1, endBar));
 		const ctx = ensureAudioCtx();
 		await ctx.resume().catch(() => {});
 		stopScheduledAudio();
 
-		// Cold-start preparation must finish BEFORE we establish the transport epoch.
-		// Previously t0/playStart were fixed first and then we awaited VST restoration,
-		// SoundFont worklet setup and first audio-buffer decode. On the first play after
-		// launch those waits could push MIDI scheduling past t0 while WebAudio had already
-		// started, producing the brief "MIDI is mistimed" startup glitch.
-		const vstTracksToWarm = tracks.filter((t) => t.type === "instrument" && !!t.vst3PluginPath);
-		for (const track of vstTracksToWarm) {
-			try { await ensureVstLoaded(track); } catch { /* failed VSTs are skipped by scheduler */ }
-		}
-		const hasGmMidi = clips.some((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && !!tracks.find((t) => t.id === c.trackId && t.type === "instrument" && !t.vst3PluginPath));
+		// Cold-start preparation must finish BEFORE establishing the shared epoch.
+		// Warm all native VSTs concurrently so large 20-30 track sessions don't make
+		// the last instrument wait behind every previous Bridge request.
+		const vstTracksToWarm = tracks.filter((t) => t.type === "instrument" && trackUsesNativeVst(t));
+		await Promise.allSettled(vstTracksToWarm.map((track) => ensureVstLoaded(track)));
+		const hasGmMidi = clips.some((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && !!tracks.find((t) => t.id === c.trackId && t.type === "instrument" && !trackUsesNativeVst(t)));
 		if (hasGmMidi) {
-			try { await prepareGmSoundFont(ctx); } catch { /* scheduler will report/skip below */ }
+			try { await prepareGmSoundFont(ctx); } catch { /* scheduler reports/skips below */ }
 		}
 		const audioClipsToWarm = clips.filter((c) => !!c.assetId && tracks.some((t) => t.id === c.trackId && t.type === "audio"));
 		await Promise.allSettled(audioClipsToWarm.map((clip) => ensurePlaybackBufferForClip(clip)));
 
-		// Give final scheduling a tiny runway only after every cold engine is ready.
-		// The visual transport uses this same epoch so line, audio, GM and VST MIDI align.
-		const leadSec = 0.12;
+		// The first ever play after cold project hydration can finish plugin/audio
+		// initialization on different device threads a few milliseconds apart. Give
+		// those engines one short settle window BEFORE defining the shared epoch.
+		// Subsequent rewind/play operations skip this delay.
+		if (!transportPrimedRef.current) {
+			await new Promise<void>((resolve) => window.setTimeout(resolve, 90));
+			transportPrimedRef.current = true;
+		}
+
+		const bpmNow = Math.max(1, bpmRef.current);
+		const denNow = Math.max(1, sigDenRef.current);
+		const numNow = Math.max(1, sigNumRef.current);
+		const beatSecNow = (60 / bpmNow) * (4 / denNow);
+		const barSecNow = beatSecNow * numNow;
+		transportBarSecRef.current = barSecNow;
+
+		// Bridge MIDI is timestamped in wall-clock milliseconds while browser audio uses
+		// AudioContext time. Establish a single conversion once and reuse it for every
+		// track and every loop pass so the two clocks cannot acquire per-pass drift.
+		const defaultLead = clamp(0.32 + vstTracksToWarm.length * 0.025, 0.36, 1.15);
+		const leadSec = leadOverride ?? defaultLead;
+		const firstBoundary = loopOn ? loopR : endBar;
+		const anchorCtxTime = ctx.currentTime;
+		const anchorUnixMs = Date.now();
+		const firstStartAt = anchorCtxTime + leadSec;
+		const firstStartUnixMs = anchorUnixMs + leadSec * 1000;
+		transportClockUnixOffsetMsRef.current = firstStartUnixMs - firstStartAt * 1000;
 		playStartMsRef.current = performance.now() + leadSec * 1000;
+		playStartCtxTimeRef.current = firstStartAt;
 		playStartPosRef.current = startPos;
 		lastUiUpdateMsRef.current = 0;
 		setPlayheadPosBars(startPos);
-		setIsPlaying(true);
 
-		const firstBoundary = loopOn ? loopR : endBar;
-		const firstStartAt = ctx.currentTime + leadSec;
-		void scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, clearExisting: false }).catch(() => {});
+		await scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, startUnixMs: firstStartUnixMs, clearExisting: false }).catch(() => {});
+		setIsPlaying(true);
 		lastPosRef.current = startPos;
 
-		const beatSecNow = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
-		const barSecNow = beatSecNow * Math.max(1, sigNum);
-
-		// Audio looping cannot depend on requestAnimationFrame: browsers throttle or
-		// pause visual frames when YSong is behind another tab. Pre-schedule a rolling
-		// WebAudio look-ahead instead. The audio clock keeps running in the background;
-		// rAF is now only responsible for painting the playhead.
+		// Keep only a modest look-ahead. The previous 90-second pre-schedule made live
+		// tempo changes expensive and left a huge amount of stale loop data to cancel.
+		// 18 seconds is still far beyond any normal Bridge/network scheduling jitter.
 		if (loopOn) {
 			const loopDurationSec = activeLoopLen * barSecNow;
 			loopScheduleNextCtxTimeRef.current = firstStartAt + Math.max(0, (firstBoundary - startPos) * barSecNow);
@@ -3041,26 +3566,25 @@ export default function DAW(_props: TabRendererProps) {
 				if (loopSchedulerBusyRef.current) return;
 				loopSchedulerBusyRef.current = true;
 				try {
-					const horizon = ctx.currentTime + 90;
+					const horizon = ctx.currentTime + 18;
 					let passes = 0;
-					while (loopScheduleNextCtxTimeRef.current < horizon && passes < 64) {
+					while (loopScheduleNextCtxTimeRef.current < horizon && passes < 32) {
 						const at = loopScheduleNextCtxTimeRef.current;
-						await scheduleAudioFromBars(loopL, loopR, { startAtSec: at, clearExisting: false });
+						const atUnix = Math.round(transportClockUnixOffsetMsRef.current + at * 1000);
+						await scheduleAudioFromBars(loopL, loopR, { startAtSec: at, startUnixMs: atUnix, clearExisting: false });
 						loopScheduleNextCtxTimeRef.current = at + loopDurationSec;
 						passes += 1;
 					}
-				} finally {
-					loopSchedulerBusyRef.current = false;
-				}
+				} finally { loopSchedulerBusyRef.current = false; }
 			};
 			scheduleAhead().catch(() => {});
-			loopSchedulerTimerRef.current = window.setInterval(() => { scheduleAhead().catch(() => {}); }, 4000);
+			loopSchedulerTimerRef.current = window.setInterval(() => { scheduleAhead().catch(() => {}); }, 1500);
 		}
 
 		const tick = () => {
 			const now = performance.now();
-			const elapsedSec = Math.max(0, (now - playStartMsRef.current) / 1000);
-			let pos = playStartPosRef.current + elapsedSec / Math.max(0.0001, barSecNow);
+			const elapsedSec = Math.max(0, ctx.currentTime - playStartCtxTimeRef.current);
+			let pos = playStartPosRef.current + elapsedSec / Math.max(0.0001, transportBarSecRef.current);
 
 			if (loopOn) {
 				const len = Math.max(0.0001, activeLoopLen);
@@ -3074,9 +3598,6 @@ export default function DAW(_props: TabRendererProps) {
 			}
 
 			pos = clamp(pos, 1, bars + 0.999);
-
-			// Audio looping is scheduled independently above. This comparison only
-			// records the UI wrap; it must never be responsible for keeping sound alive.
 			lastPosRef.current = pos;
 
 			const tl = timelineRef.current;
@@ -3097,8 +3618,40 @@ export default function DAW(_props: TabRendererProps) {
 			}
 			rafRef.current = requestAnimationFrame(tick);
 		};
-
 		rafRef.current = requestAnimationFrame(tick);
+	};
+
+	const changeBpm = (raw: number) => {
+		const next = clamp(Math.round(raw), 20, 400);
+		if (next === bpmRef.current) return;
+		if (!isPlaying) {
+			bpmRef.current = next;
+			setBpm(next);
+			return;
+		}
+		const pos = currentTransportPosition();
+		stop();
+		bpmRef.current = next;
+		setBpm(next);
+		setPlayheadPosBars(pos);
+		// Warm restart from the exact musical position. Audio, GM, native VSTs and
+		// the visual transport all adopt the new tempo together.
+		requestAnimationFrame(() => { void start(loopEnabled, pos, 0.16); });
+	};
+
+	const changeSignature = (n: number, d: number) => {
+		const nextN = Math.max(1, Math.round(n));
+		const nextD = Math.max(1, Math.round(d));
+		if (!isPlaying) {
+			sigNumRef.current = nextN; sigDenRef.current = nextD;
+			setSigNum(nextN); setSigDen(nextD);
+			return;
+		}
+		const pos = currentTransportPosition();
+		stop();
+		sigNumRef.current = nextN; sigDenRef.current = nextD;
+		setSigNum(nextN); setSigDen(nextD); setPlayheadPosBars(pos);
+		requestAnimationFrame(() => { void start(loopEnabled, pos, 0.16); });
 	};
 
 	const togglePlay = () => {
@@ -3119,6 +3672,90 @@ export default function DAW(_props: TabRendererProps) {
 		setLoopEnabled(next);
 		requestAnimationFrame(() => start(next));
 	};
+
+
+	useEffect(() => {
+		const openAgent = () => setDawAgentOpen(true);
+		window.addEventListener("ysong:daw-agent-open", openAgent);
+		return () => window.removeEventListener("ysong:daw-agent-open", openAgent);
+	}, []);
+
+	// YSong has one major playback owner at a time. A World song takes ownership
+	// from the project, while simply navigating between DAW/Mixer/Chat/etc. does not.
+	useEffect(() => {
+		const onWorldPlay = () => { if (isPlaying) stop(); };
+		window.addEventListener("ysong:world-play-request", onWorldPlay);
+		return () => window.removeEventListener("ysong:world-play-request", onWorldPlay);
+	}, [isPlaying]);
+
+	// The Mixer is a second control surface for this exact DAW state, not a duplicate
+	// mixer engine. Commands from YC-9000 modify the same track objects used here.
+	useEffect(() => subscribeDawSessionCommands((command) => {
+		if (command.type === "set-level") setTrackLevel(command.trackId, command.value);
+		else if (command.type === "set-mute") setTracks((prev) => prev.map((track) => track.id === command.trackId ? { ...track, mute: command.value } : track));
+		else if (command.type === "set-solo") setTracks((prev) => prev.map((track) => track.id === command.trackId ? { ...track, solo: command.value } : track));
+		else if (command.type === "set-mixer") setTrackMixer(command.trackId, command.patch);
+		else if (command.type === "set-send") setTrackSend(command.trackId, command.index, { level: command.level, pre: command.pre });
+		else if (command.type === "set-master-level") setMasterLevel(clamp(Math.round(command.value), 0, 127));
+		else if (command.type === "transport-toggle") togglePlay();
+		else if (command.type === "transport-stop") stop();
+		else if (command.type === "set-bpm") changeBpm(command.value);
+		else if (command.type === "select-track") { setSelectedTrackId(command.trackId); setSelectedClipId(null); }
+		else if (command.type === "rename-track") setTracks((prev) => prev.map((track) => track.id === command.trackId ? { ...track, name: command.name } : track));
+		else if (command.type === "create-track") {
+			const id = crypto.randomUUID();
+			setTracks((prev) => {
+				const nextIndex = prev.filter((track) => track.type === command.kind).length + 1;
+				const created = mkTrack(command.kind, nextIndex, id);
+				if (command.name?.trim()) created.name = command.name.trim();
+				return [...prev, created];
+			});
+			setTrackHeights((prev) => ({ ...prev, [id]: ROW_H }));
+			setSelectedTrackId(id); setSelectedClipId(null);
+		}
+		else if (command.type === "add-c1") addDynamicsC1(command.trackId);
+		else if (command.type === "open-track-fx") {
+			setSelectedTrackId(command.trackId);
+			setSelectedClipId(null);
+			setFxChainTrackId(command.trackId);
+			setFxEditorEffectId(null);
+		}
+	}), [isPlaying, loopEnabled, loopL, loopR, endBar, playheadPosBars, bpm, sigNum, sigDen, tracks]);
+
+	useEffect(() => {
+		if (!dawHydrated) return;
+		const maxMeter = tracks.reduce((peak, track) => Math.max(peak, trackMeters[track.id] ?? 0), 0);
+		publishDawSessionSnapshot({
+			projectName,
+			playing: isPlaying,
+			playheadBar: playheadPosBars,
+			bpm,
+			sigNum,
+			sigDen,
+			bridgeAvailable,
+			selectedTrackId,
+			masterLevel,
+			masterMeter: maxMeter * clamp(masterLevel / 100, 0, 1.27),
+			tracks: tracks.map((track) => {
+				const gm = GM_PROGRAMS.find((program) => program.program === normalizeGmProgram(track.gmProgram ?? 0));
+				return {
+					id: track.id,
+					type: track.type,
+					name: track.name,
+					mute: track.mute,
+					solo: track.solo,
+					arm: track.arm,
+					level: clamp(track.level ?? 100, 0, 127),
+					meter: trackMeters[track.id] ?? 0,
+					instrumentLabel: track.type === "instrument" ? (track.vst3PluginName ?? gm?.label ?? "Acoustic Grand Piano") : undefined,
+					presetHint: track.vstPresetHint,
+					desktopVstUnavailable: !!track.vst3PluginPath && bridgeAvailable === false,
+					effects: (track.effects ?? []).map((effect) => ({ id: effect.id, name: effect.name, enabled: effect.enabled })),
+					mixer: normalizeMixerStrip(track.mixer),
+				};
+			}),
+		});
+	}, [dawHydrated, projectName, isPlaying, playheadPosBars, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, trackMeters]);
 
 	// Spacebar toggles play/stop (unless you're typing)
 	useEffect(() => {
@@ -3147,7 +3784,10 @@ export default function DAW(_props: TabRendererProps) {
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 			if (meterRafRef.current != null) cancelAnimationFrame(meterRafRef.current);
 			if (loopSchedulerTimerRef.current != null) window.clearInterval(loopSchedulerTimerRef.current);
-			for (const bus of trackAudioBusesRef.current.values()) {
+			for (const [trackId, bus] of trackAudioBusesRef.current.entries()) {
+				clearGmSoundFontTrackDestination(trackId);
+				try { bus.input.disconnect(); } catch {}
+				for (const runtime of bus.effectRuntimes.values()) for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
 				try { bus.gain.disconnect(); } catch {}
 				try { bus.analyser.disconnect(); } catch {}
 			}
@@ -3221,7 +3861,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	const keyboardTarget = currentMidiTargetTrack();
 	const keyboardInstrumentName = keyboardTarget?.vst3PluginPath
-		? (keyboardTarget.vst3PluginName ?? "VST3")
+		? (bridgeAvailable === false ? `${keyboardTarget.vst3PluginName ?? "Desktop VST3"} · Acoustic Grand Piano preview` : (keyboardTarget.vst3PluginName ?? "VST3"))
 		: keyboardTarget ? `${String(normalizeGmProgram(keyboardTarget.gmProgram ?? 0) + 1).padStart(3, "0")} · ${GM_PROGRAMS[normalizeGmProgram(keyboardTarget.gmProgram ?? 0)]?.label ?? "General MIDI"}` : undefined;
 
 	const applyZoomPct = (nextRaw: number) => {
@@ -3240,11 +3880,335 @@ export default function DAW(_props: TabRendererProps) {
 		});
 	};
 
+
+	const collectMidiExportTracks = (onlyGm = false): DawExportMidiTrack[] => {
+		return tracks
+			.filter((track) => track.type === "instrument" && (!onlyGm || !trackUsesNativeVst(track)))
+			.map((track) => {
+				const notes: DawExportMidiTrack["notes"] = [];
+				const pitchBend: NonNullable<DawExportMidiTrack["pitchBend"]> = [];
+				const modulation: NonNullable<DawExportMidiTrack["modulation"]> = [];
+				for (const clip of clips.filter((c) => c.trackId === track.id && !c.assetId)) {
+					const clipStart = Math.max(0, clip.startBar - 1);
+					const clipLength = Math.max(0, Math.min(clip.lengthBars, endBar - clip.startBar));
+					if (clipLength <= 0) continue;
+					for (const note of clip.midiNotes ?? []) {
+						const start = clipStart + Math.max(0, note.startBars);
+						const clipEnd = clipStart + clipLength;
+						if (start >= clipEnd || start >= endBar - 1) continue;
+						notes.push({
+							pitch: note.pitch,
+							startBars: start,
+							lengthBars: Math.max(1 / 128, Math.min(note.lengthBars, clipEnd - start, (endBar - 1) - start)),
+							velocity: note.velocity,
+						});
+					}
+					for (const point of clip.midiPitchBend ?? []) {
+						const at = clipStart + Math.max(0, point.atBars);
+						if (at <= clipStart + clipLength && at <= endBar - 1) pitchBend.push({ atBars: at, value: point.value });
+					}
+					for (const point of clip.midiModulation ?? []) {
+						const at = clipStart + Math.max(0, point.atBars);
+						if (at <= clipStart + clipLength && at <= endBar - 1) modulation.push({ atBars: at, value: point.value });
+					}
+				}
+				return {
+					name: track.name,
+					program: trackUsesNativeVst(track) ? undefined : normalizeGmProgram(track.vst3PluginPath ? 0 : (gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0)),
+					notes,
+					pitchBend,
+					modulation,
+				};
+			});
+	};
+
+	const buildOfflineVstTracks = (barSec: number): Vst3OfflineRenderTrack[] => {
+		return tracks
+			.filter((track) => track.type === "instrument" && trackUsesNativeVst(track))
+			.map((track) => {
+				const events: Vst3OfflineRenderTrack["events"] = [];
+				for (const clip of clips.filter((c) => c.trackId === track.id && !c.assetId)) {
+					const clipStartBar = Math.max(1, clip.startBar);
+					const clipEndBar = Math.min(endBar, clip.startBar + clip.lengthBars);
+					for (let noteIndex = 0; noteIndex < (clip.midiNotes ?? []).length; noteIndex++) {
+						const note = (clip.midiNotes ?? [])[noteIndex];
+						const noteStartBar = clip.startBar + note.startBars;
+						const noteEndBar = Math.min(clipEndBar, noteStartBar + Math.max(1 / 128, note.lengthBars));
+						const from = Math.max(clipStartBar, noteStartBar);
+						const to = Math.min(endBar, noteEndBar);
+						if (to <= from) continue;
+						const noteId = stablePositiveInt(`export:${clip.id}:${noteIndex}:${note.pitch}`);
+						events.push({ kind: "on", note: note.pitch, velocity: note.velocity, noteId, channel: 0, atSeconds: Math.max(0, (from - 1) * barSec) });
+						events.push({ kind: "off", note: note.pitch, velocity: 0, noteId, channel: 0, atSeconds: Math.max(0, (to - 1) * barSec) });
+					}
+				}
+				events.sort((a, b) => a.atSeconds - b.atSeconds || (a.kind === "off" ? -1 : 1));
+				return { trackId: track.id, events };
+			});
+	};
+
+	const buildOfflineTrackInput = (context: BaseAudioContext, track: Track, destination: AudioNode) => {
+		const mixer = mixerForTrack(track);
+		const input = context.createGain();
+		const trim = context.createGain();
+		trim.gain.value = dbToGain(mixer.inputGainDb) * (mixer.phaseInvert ? -1 : 1);
+
+		const hpf = context.createBiquadFilter();
+		hpf.type = "highpass"; hpf.frequency.value = mixer.hpfEnabled ? mixer.hpfHz : 10; hpf.Q.value = 0.707;
+		const lpf = context.createBiquadFilter();
+		lpf.type = "lowpass"; lpf.frequency.value = mixer.lpfEnabled ? mixer.lpfHz : Math.min(22000, context.sampleRate * 0.49); lpf.Q.value = 0.707;
+		const low = context.createBiquadFilter();
+		low.type = "lowshelf"; low.frequency.value = mixer.lowFreqHz; low.gain.value = mixer.eqEnabled ? mixer.lowGainDb : 0;
+		const lowMid = context.createBiquadFilter();
+		lowMid.type = "peaking"; lowMid.frequency.value = mixer.lowMidFreqHz; lowMid.Q.value = mixer.lowMidQ; lowMid.gain.value = mixer.eqEnabled ? mixer.lowMidGainDb : 0;
+		const highMid = context.createBiquadFilter();
+		highMid.type = "peaking"; highMid.frequency.value = mixer.highMidFreqHz; highMid.Q.value = mixer.highMidQ; highMid.gain.value = mixer.eqEnabled ? mixer.highMidGainDb : 0;
+		const high = context.createBiquadFilter();
+		high.type = "highshelf"; high.frequency.value = mixer.highFreqHz; high.gain.value = mixer.eqEnabled ? mixer.highGainDb : 0;
+		const compressor = context.createDynamicsCompressor();
+		compressor.threshold.value = mixer.compressorEnabled ? mixer.compressorThresholdDb : 0;
+		compressor.ratio.value = mixer.compressorEnabled ? mixer.compressorRatio : 1;
+		compressor.attack.value = mixer.compressorAttackMs / 1000;
+		compressor.release.value = mixer.compressorReleaseMs / 1000;
+		compressor.knee.value = mixer.compressorEnabled ? 12 : 0;
+
+		input.connect(trim); trim.connect(hpf); hpf.connect(lpf); lpf.connect(low); low.connect(lowMid); lowMid.connect(highMid); highMid.connect(high); high.connect(compressor);
+		const fader = context.createGain();
+		fader.gain.value = computedTrackGain(track);
+		connectWebAudioEffects(context, compressor, track.effects ?? [], fader);
+
+		const widthInput = context.createGain();
+		const splitter = context.createChannelSplitter(2);
+		const widthLL = context.createGain(); const widthLR = context.createGain(); const widthRL = context.createGain(); const widthRR = context.createGain();
+		const width = clamp(mixer.width / 100, 0, 2);
+		const same = (1 + width) * 0.5; const cross = (1 - width) * 0.5;
+		widthLL.gain.value = same; widthRR.gain.value = same; widthLR.gain.value = cross; widthRL.gain.value = cross;
+		const merger = context.createChannelMerger(2);
+		const panner = context.createStereoPanner(); panner.pan.value = mixer.pan;
+		fader.connect(widthInput); widthInput.connect(splitter);
+		splitter.connect(widthLL, 0); splitter.connect(widthRL, 0); splitter.connect(widthLR, 1); splitter.connect(widthRR, 1);
+		widthLL.connect(merger, 0, 0); widthLR.connect(merger, 0, 0); widthRL.connect(merger, 0, 1); widthRR.connect(merger, 0, 1);
+		merger.connect(panner); panner.connect(destination);
+		return input;
+	};
+
+	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number) => {
+		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
+		const offline = new OfflineAudioContext(2, frames, sampleRate);
+		const trackInputs = new Map<string, AudioNode>();
+		let scheduled = 0;
+		for (const clip of clips.filter((c) => !!c.assetId)) {
+			const track = tracks.find((t) => t.id === clip.trackId && t.type === "audio");
+			if (!track || computedTrackGain(track) <= 0) continue;
+			const startSeconds = Math.max(0, (clip.startBar - 1) * getBarSeconds());
+			if (startSeconds >= durationSeconds) continue;
+			const buffer = await ensurePlaybackBufferForClip(clip);
+			const playSeconds = Math.min(buffer.duration, durationSeconds - startSeconds);
+			if (playSeconds <= 0) continue;
+			const source = offline.createBufferSource();
+			source.buffer = buffer;
+			let input = trackInputs.get(track.id);
+			if (!input) {
+				input = buildOfflineTrackInput(offline, track, offline.destination);
+				trackInputs.set(track.id, input);
+			}
+			source.connect(input);
+			source.start(startSeconds, 0, playSeconds);
+			scheduled += 1;
+		}
+		if (!scheduled) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
+		const rendered = await offline.startRendering();
+		return {
+			left: new Float32Array(rendered.getChannelData(0)),
+			right: new Float32Array(rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : rendered.getChannelData(0)),
+			sampleRate: rendered.sampleRate,
+		};
+	};
+
+	const renderGmForExport = async (durationSeconds: number, sampleRate: number) => {
+		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
+		const anySolo = tracks.some((track) => track.solo);
+		const gmTracks = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track) && !track.mute && (!anySolo || track.solo));
+		if (!gmTracks.length) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
+
+		const gmExportTracks = collectMidiExportTracks(true);
+		const gmTrackIndex = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track));
+		const midiTracks: DawExportMidiTrack[] = gmTracks.map((track) => {
+			const sourceIndex = gmTrackIndex.findIndex((candidate) => candidate.id === track.id);
+			const source = gmExportTracks[sourceIndex] ?? { name: track.name, notes: [] };
+			return {
+				...source,
+				program: normalizeGmProgram(track.vst3PluginPath ? 0 : (gmProgramOverrideRef.current.get(track.id) ?? track.gmProgram ?? 0)),
+			};
+		});
+		if (!midiTracks.some((track) => track.notes.length > 0)) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
+
+		const midiBytes = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar, tracks: midiTracks });
+		const [{ WorkletSynthesizer }, { BasicMIDI }] = await Promise.all([
+			import("spessasynth_lib"),
+			import("spessasynth_core"),
+		]);
+		const sfResponse = await fetch("/soundfonts/GeneralUser-GS.sf2");
+		if (!sfResponse.ok) throw new Error(`YSong General MIDI SoundFont is missing (HTTP ${sfResponse.status}).`);
+		const soundBankBuffer = await sfResponse.arrayBuffer();
+		const offline = new OfflineAudioContext(2, frames, sampleRate);
+		await offline.audioWorklet.addModule("/spessasynth_processor.min.js");
+		const synth = new WorkletSynthesizer(offline);
+		gmTracks.forEach((track, index) => {
+			const input = buildOfflineTrackInput(offline, track, offline.destination);
+			synth.connectChannel(input, GM_EXPORT_CHANNELS[index % GM_EXPORT_CHANNELS.length]);
+		});
+		const midiSequence = BasicMIDI.fromArrayBuffer(midiBytes.buffer.slice(midiBytes.byteOffset, midiBytes.byteOffset + midiBytes.byteLength));
+		await synth.startOfflineRender({
+			midiSequence,
+			loopCount: 0,
+			soundBankList: [{ bankOffset: 0, soundBankBuffer }],
+			sequencerOptions: { skipToFirstNoteOn: false },
+		});
+		try {
+			const rendered = await offline.startRendering();
+			return {
+				left: new Float32Array(rendered.getChannelData(0)),
+				right: new Float32Array(rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : rendered.getChannelData(0)),
+				sampleRate: rendered.sampleRate,
+			};
+		} finally {
+			try { synth.destroy(); } catch {}
+		}
+	};
+
+	const runMasterExport = async () => {
+		if (exporting) return;
+		const unavailableDesktopVsts = tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track));
+		if (exportFormat !== "midi" && unavailableDesktopVsts.length > 0) {
+			const names = unavailableDesktopVsts.slice(0, 4).map((track) => track.vst3PluginName ?? track.name);
+			const more = unavailableDesktopVsts.length > names.length ? `\n…and ${unavailableDesktopVsts.length - names.length} more.` : "";
+			const okay = window.confirm(`Some desktop VST instruments are unavailable on this device.\n\nYSong is previewing these tracks with Acoustic Grand Piano:\n• ${names.join("\n• ")}${more}\n\nIf you export here, the exported audio will use the preview sound and will not match the intended desktop VST sound.\n\nExport anyway?`);
+			if (!okay) return;
+		}
+		setExporting(true);
+		setExportStatus("");
+		try {
+			if (isPlaying) stop();
+			const baseName = safeExportFileName(projectName);
+			if (exportFormat === "midi") {
+				setExportStatus("Writing MIDI…");
+				const midi = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar, tracks: collectMidiExportTracks(false) });
+				downloadBlob(new Blob([midi], { type: "audio/midi" }), `${baseName}.mid`);
+				setExportStatus("MIDI exported.");
+				return;
+			}
+
+			const sampleRate = exportSampleRate;
+			const barSec = getBarSeconds();
+			const durationSeconds = Math.max(0.001, (endBar - 1) * barSec);
+			const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
+			const masterL = new Float32Array(frames);
+			const masterR = new Float32Array(frames);
+			const addToMaster = (left: Float32Array, right: Float32Array) => {
+				const count = Math.min(frames, left.length, right.length);
+				for (let i = 0; i < count; i++) { masterL[i] += left[i]; masterR[i] += right[i]; }
+			};
+
+			setExportStatus(`Rendering audio 001 → ${Math.max(1, Math.ceil(endBar - 1))}…`);
+			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate);
+			addToMaster(audioMix.left, audioMix.right);
+
+			setExportStatus("Rendering General MIDI…");
+			const gmMix = await renderGmForExport(durationSeconds, sampleRate);
+			addToMaster(gmMix.left, gmMix.right);
+
+			const vstTracks = tracks.filter((track) => track.type === "instrument" && trackUsesNativeVst(track));
+			if (vstTracks.length) {
+				setExportStatus("Preparing exact VST3 instrument states…");
+				for (const track of vstTracks) await ensureVstLoaded(track);
+				const anySolo = tracks.some((track) => track.solo);
+				await Promise.all(vstTracks.map(async (track) => {
+					await bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects));
+					await bridgeApi.setVst3Mixer(track.id, track.mute || (anySolo && !track.solo), clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track));
+				}));
+				setExportStatus(`Rendering VST3 master 001 → ${Math.max(1, Math.ceil(endBar - 1))}…`);
+				await bridgeApi.setVst3Master(100);
+				let vstWav: ArrayBuffer;
+				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(barSec)); }
+				finally { bridgeApi.setVst3Master(masterLevel).catch(() => {}); }
+				const vstMix = decodeStereoFloatWav(vstWav);
+				if (vstMix.sampleRate !== sampleRate) throw new Error(`Bridge rendered VST3 audio at ${vstMix.sampleRate} Hz; YSong export is ${sampleRate} Hz. Match the Bridge sample rate before exporting.`);
+				addToMaster(vstMix.left, vstMix.right);
+			}
+
+			const exportMasterGain = clamp(masterLevel / 100, 0, 1.27);
+			if (exportMasterGain !== 1) {
+				for (let i = 0; i < frames; i++) { masterL[i] *= exportMasterGain; masterR[i] *= exportMasterGain; }
+			}
+
+			setExportStatus("Writing master file…");
+			const floatWav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, 32)], { type: "audio/wav" });
+			if (exportFormat === "wav16" || exportFormat === "wav24") {
+				const bits = exportFormat === "wav16" ? 16 : 24;
+				const wav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, bits)], { type: "audio/wav" });
+				downloadBlob(wav, `${baseName}.wav`);
+			} else if (exportFormat === "flac") {
+				setExportStatus("Encoding lossless FLAC…");
+				const encoded = await bridgeApi.encodeAudio(floatWav, "flac");
+				downloadBlob(encoded, `${baseName}.flac`);
+			} else {
+				setExportStatus(`Encoding MP3 ${exportMp3Bitrate} kbps…`);
+				const encoded = await bridgeApi.encodeAudio(floatWav, "mp3", exportMp3Bitrate);
+				downloadBlob(encoded, `${baseName}.mp3`);
+			}
+			setExportStatus("Export complete.");
+		} catch (error) {
+			console.error("YSong export failed", error);
+			setExportStatus(error instanceof Error ? error.message : "Export failed.");
+		} finally {
+			setExporting(false);
+		}
+	};
+
+	const fxChainTrack = fxChainTrackId ? tracks.find((track) => track.id === fxChainTrackId) ?? null : null;
+	const fxEditorEffect = fxChainTrack && fxEditorEffectId
+		? (fxChainTrack.effects ?? []).find((effect) => effect.id === fxEditorEffectId) ?? null
+		: null;
+	const fxEditorGainReductionDb = (() => {
+		if (!fxChainTrack || !fxEditorEffect) return 0;
+		if (fxChainTrack.type === "instrument" && trackUsesNativeVst(fxChainTrack)) return Math.max(0, vstGainReductionRef.current[fxChainTrack.id] ?? 0);
+		const compressor = trackAudioBusesRef.current.get(fxChainTrack.id)?.effectRuntimes.get(fxEditorEffect.id)?.compressor;
+		return compressor ? Math.max(0, -compressor.reduction) : 0;
+	})();
+
 	return (
-		<div className="h-full min-h-0 flex flex-col">
+		<div className="h-full min-h-0 flex flex-col relative">
+			{/* App-style menu bar. Project file commands live here instead of consuming transport space. */}
+			<div className="relative z-50 h-8 shrink-0 px-1 flex items-center gap-1 border-t border-b border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/65 select-none">
+				<div className="relative h-full flex items-center" ref={fileMenuRef}>
+					<button
+						type="button"
+						className={`h-7 px-3 rounded-md text-[12px] ${fileMenuOpen ? "bg-white/10" : "hover:bg-white/[0.07]"}`}
+						onClick={() => setFileMenuOpen((open) => !open)}
+						aria-haspopup="menu"
+						aria-expanded={fileMenuOpen}
+					>
+						File
+					</button>
+					{fileMenuOpen && (
+						<div className="absolute left-0 top-[30px] z-[500] w-[250px] overflow-hidden rounded-xl border border-white/15 bg-neutral-950/98 shadow-2xl backdrop-blur-xl py-1" role="menu">
+							<button type="button" role="menuitem" className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 flex items-center justify-between gap-3" onClick={createNewProject}><span>New Project</span><span className="text-[10px] opacity-40">Ctrl+N</span></button>
+							<button type="button" role="menuitem" className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 flex items-center justify-between gap-3" onClick={() => void openProjectFile()}><span>Open Project…</span><span className="text-[10px] opacity-40">Ctrl+O</span></button>
+							<div className="my-1 h-px bg-white/10" />
+							<button type="button" role="menuitem" disabled={isSavingUi} className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 disabled:opacity-35 flex items-center justify-between gap-3" onClick={() => void saveProjectFile()}><span>Save Project</span><span className="text-[10px] opacity-40">Ctrl+S</span></button>
+							<button type="button" role="menuitem" disabled={isSavingUi} className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 disabled:opacity-35 flex items-center justify-between gap-3" onClick={() => void saveProjectAsFile()}><span>Save Project As…</span><span className="text-[10px] opacity-40">Ctrl+Shift+S</span></button>
+							<div className="my-1 h-px bg-white/10" />
+							<button type="button" role="menuitem" className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10" onClick={() => { setFileMenuOpen(false); setExportStatus(""); setExportOpen(true); }}>Export…</button>
+						</div>
+					)}
+				</div>
+				<div className="min-w-0 text-[10px] opacity-35 truncate px-1" title={projectName}>{projectName}</div>
+				<button type="button" onClick={() => setDawAgentOpen((open) => !open)} className={`ml-auto h-7 px-3 rounded-md text-[11px] border ${dawAgentOpen ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open YSong AI inside the DAW">YSong AI</button>
+			</div>
 			{/* Main split */}
 			<div className="flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
-				{/* Left: independently collapsible DAW track panel. On phones this defaults
+				{/* Left: independently collapsible DAW track panel. On smaller/mobile displays this defaults
 				    to a narrow rail so the timeline keeps the majority of the screen. */}
 				<div
 					className={`${trackPanelOpen ? "w-[min(300px,72vw)] md:w-[300px]" : "w-10"} shrink-0 border-r border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/30 flex flex-col min-h-0 transition-[width] duration-200`}
@@ -3350,6 +4314,11 @@ export default function DAW(_props: TabRendererProps) {
 											<YSButton className="w-6 h-6 p-0 rounded-md justify-center text-[10px] opacity-55 hover:opacity-100" onClick={(e) => { e.stopPropagation(); beginTrackRename(t); }} title="Rename track">✎</YSButton>
 										</div>
 										<div className="flex items-center gap-1 shrink-0">
+										<YSButton
+											className={`text-[10px] px-1.5 py-1 rounded-md transition ${(t.effects?.length ?? 0) > 0 ? "!border-amber-200/25 !text-amber-100" : "opacity-65 hover:opacity-100"}`}
+											onClick={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); setFxChainTrackId(t.id); setFxEditorEffectId(null); }}
+											title={`Effects chain${(t.effects?.length ?? 0) ? ` (${t.effects!.length})` : ""}`}
+										>FX{(t.effects?.length ?? 0) > 0 ? ` ${t.effects!.length}` : ""}</YSButton>
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.mute ? "!bg-amber-300 !text-black !border-amber-100 shadow-[0_0_10px_rgba(252,211,77,0.55)] opacity-100" : ""}`} onClick={() => toggle(t.id, "mute")} aria-pressed={t.mute} title={t.mute ? "Muted — click to unmute" : "Mute"}>M</YSButton>
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.solo ? "!bg-cyan-300 !text-black !border-cyan-100 shadow-[0_0_10px_rgba(103,232,249,0.55)] opacity-100" : ""}`} onClick={() => toggle(t.id, "solo")} aria-pressed={t.solo} title={t.solo ? "Solo active — click to clear" : "Solo"}>S</YSButton>
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.arm ? "!bg-rose-400 !text-black !border-rose-200 shadow-[0_0_10px_rgba(251,113,133,0.5)] opacity-100" : ""}`} onClick={() => toggle(t.id, "arm")} aria-pressed={t.arm} title={t.arm ? "Record armed — click to disarm" : "Arm"}>●</YSButton>
@@ -3372,20 +4341,23 @@ export default function DAW(_props: TabRendererProps) {
 													<optgroup label="YSong / General MIDI">
 														{GM_PROGRAMS.map((inst) => <option key={`gm:${inst.program}`} value={`gm:${inst.program}`}>{String(inst.number).padStart(3, "0")} · {inst.label}</option>)}
 													</optgroup>
+													{t.vst3PluginPath && !vst3Plugins.some((plugin) => plugin.path === t.vst3PluginPath) && (
+														<option value={`vst3:${t.vst3PluginPath}`}>{t.vst3PluginVendor ? `${t.vst3PluginVendor} · ` : ""}{t.vst3PluginName ?? "Desktop VST3"}{bridgeAvailable === false ? " · Mobile preview: Acoustic Grand Piano" : " · unavailable"}</option>
+													)}
 													<optgroup label="VST3 Instruments">
 														{vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).length === 0 ? (
-															<option disabled value="">Scan VST3 in Settings first</option>
+															<option disabled value="">{bridgeAvailable === false ? "Desktop VST3 unavailable on this device" : "Scan VST3 in Settings first"}</option>
 														) : vst3Plugins.filter((plugin) => plugin.kind === "instrument" && plugin.loadable !== false).map((plugin) => <option key={plugin.path} value={`vst3:${plugin.path}`}>{plugin.vendor ? `${plugin.vendor} · ` : ""}{plugin.name}</option>)}
 													</optgroup>
 												</select>
 												{t.vst3PluginPath && (
 													<>
-														<span className={`w-5 h-5 flex items-center justify-center text-[8px] font-semibold shrink-0 ${vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={vstTrackState[t.id]?.status === "loading" ? `Loading ${t.vst3PluginName ?? "VST3"}…` : vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>
+														<span className={`w-7 h-5 flex items-center justify-center text-[8px] font-semibold shrink-0 ${bridgeAvailable === false ? "text-amber-200" : vstTrackState[t.id]?.status === "error" ? "text-rose-300" : vstTrackState[t.id]?.status === "loading" ? "text-amber-200" : "text-emerald-300"}`} title={bridgeAvailable === false ? `${t.vst3PluginName ?? "Desktop VST3"} is preserved but unavailable on this mobile device. YSong is previewing the MIDI with Acoustic Grand Piano.` : vstTrackState[t.id]?.status === "loading" ? `Loading ${t.vst3PluginName ?? "VST3"}…` : vstTrackState[t.id]?.message ?? "Bridge-hosted VST3"}>
 															{vstTrackState[t.id]?.status === "loading" ? (
 																<span className="inline-block h-3 w-3 rounded-full border border-amber-200/40 border-t-amber-200 animate-spin" aria-label={`Loading ${t.vst3PluginName ?? "VST3"}`} />
-															) : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}
+															) : bridgeAvailable === false ? "PREV" : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}
 														</span>
-														<YSButton className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={`Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
+														<YSButton disabled={bridgeAvailable === false} className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0 disabled:opacity-35" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={bridgeAvailable === false ? "Desktop VST3 editors are unavailable on this mobile device" : `Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
 													</>
 												)}
 											</>
@@ -4017,6 +4989,8 @@ export default function DAW(_props: TabRendererProps) {
 				</div>
 			</div>
 
+			<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
+
 			{/* Shared transport console. The MIDI editor reuses this exact component. */}
 			<div
 				className="shrink-0 border-t border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/60 backdrop-blur px-2 pt-2 flex justify-center"
@@ -4038,8 +5012,8 @@ export default function DAW(_props: TabRendererProps) {
 					keyboardOpen={onScreenKeyboardOpen}
 					onToggleLoop={toggleLoopPlayback}
 					onJumpEnd={() => setPlayheadPosBars(endBar)}
-					onBpmChange={setBpm}
-					onSignatureChange={(n, d) => { setSigNum(n); setSigDen(d); }}
+					onBpmChange={changeBpm}
+					onSignatureChange={changeSignature}
 				/>
 			</div>
 
@@ -4168,11 +5142,123 @@ export default function DAW(_props: TabRendererProps) {
 					onTogglePlay={togglePlay}
 					onToggleLoop={toggleLoopPlayback}
 					onJumpEnd={() => setPlayheadPosBars(endBar)}
-					onBpmChange={setBpm}
-					onSignatureChange={(n, d) => { setSigNum(n); setSigDen(d); }}
+					onBpmChange={changeBpm}
+					onSignatureChange={changeSignature}
 					onClose={() => setMidiEditorClipId(null)}
 				/>
 			)}
+
+
+			{fxChainTrack && createPortal(
+				<FxChainPanel
+					trackName={fxChainTrack.name}
+					effects={fxChainTrack.effects ?? []}
+					onAddCompressor={() => addDynamicsC1(fxChainTrack.id)}
+					onToggle={(effectId) => toggleTrackEffect(fxChainTrack.id, effectId)}
+					onRemove={(effectId) => removeTrackEffect(fxChainTrack.id, effectId)}
+					onOpen={(effectId) => setFxEditorEffectId(effectId)}
+					onReorder={(from, to) => reorderTrackEffect(fxChainTrack.id, from, to)}
+					onClose={() => { setFxChainTrackId(null); setFxEditorEffectId(null); }}
+				/>,
+				document.body,
+			)}
+
+			{fxChainTrack && fxEditorEffect && createPortal(
+				<DynamicsC1Editor
+					effect={fxEditorEffect}
+					signal={trackMeters[fxChainTrack.id] ?? 0}
+					gainReductionDb={fxEditorGainReductionDb}
+					onChange={(patch) => updateTrackEffect(fxChainTrack.id, fxEditorEffect.id, patch)}
+					onClose={() => setFxEditorEffectId(null)}
+				/>,
+				document.body,
+			)}
+
+			{exportOpen &&
+				createPortal(
+					<div
+						className="fixed inset-0 z-[220] flex items-end sm:items-center justify-center"
+						role="dialog"
+						aria-modal="true"
+						onMouseDown={(e) => { if (!exporting && e.target === e.currentTarget) setExportOpen(false); }}
+					>
+						<div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+						<div className="relative w-full sm:w-[520px] max-w-[95vw] bg-neutral-950/95 border border-neutral-200/15 dark:border-neutral-800 rounded-2xl shadow-2xl p-4 sm:p-5">
+							<div className="flex items-center justify-between gap-3">
+								<div>
+									<div className="text-sm font-semibold tracking-wide">Export Song</div>
+									<div className="text-[11px] opacity-55 mt-0.5">Full composition • measure 001 → E</div>
+								</div>
+								<YSButton disabled={exporting} className="px-2 py-1 rounded-md disabled:opacity-40" onClick={() => setExportOpen(false)}>Close</YSButton>
+							</div>
+
+							<div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+								<label className="text-[11px] uppercase tracking-wide opacity-70">
+									Format
+									<select
+										value={exportFormat}
+										disabled={exporting}
+										onChange={(e) => { setExportFormat(e.target.value as ExportFormat); setExportStatus(""); }}
+										className="mt-1 w-full h-9 bg-neutral-950/70 border border-white/15 rounded-lg px-2 text-sm normal-case tracking-normal"
+									>
+										<option value="wav16">WAV • 16-bit PCM</option>
+										<option value="wav24">WAV • 24-bit PCM</option>
+										<option value="flac">FLAC • Lossless</option>
+										<option value="mp3">MP3</option>
+										<option value="midi">MIDI (.mid)</option>
+									</select>
+								</label>
+
+								{exportFormat === "mp3" ? (
+									<label className="text-[11px] uppercase tracking-wide opacity-70">
+										Bitrate
+										<select
+											value={exportMp3Bitrate}
+											disabled={exporting}
+											onChange={(e) => setExportMp3Bitrate(Number(e.target.value))}
+											className="mt-1 w-full h-9 bg-neutral-950/70 border border-white/15 rounded-lg px-2 text-sm normal-case tracking-normal"
+										>
+											{[64, 96, 128, 160, 192, 256, 320].map((rate) => <option key={rate} value={rate}>{rate} kbps</option>)}
+										</select>
+									</label>
+								) : exportFormat !== "midi" ? (
+									<div className="text-[11px] uppercase tracking-wide opacity-70">
+										Sample Rate
+										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">48 kHz</div>
+									</div>
+								) : (
+									<div className="text-[11px] uppercase tracking-wide opacity-70">
+										Contents
+										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">MIDI tracks only</div>
+									</div>
+								)}
+							</div>
+
+							<div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-[12px] leading-relaxed opacity-75">
+								{exportFormat === "midi"
+									? "Exports notes, velocity, tempo, time signature, modulation and pitch bend. Audio clips and VST audio are skipped."
+									: "YSong renders the complete timeline from 001 to E: audio clips, General MIDI, active VST3 instruments, and each track’s ordered effects chain mixed into one master."}
+							</div>
+
+							{exportStatus && (
+								<div className={`mt-3 rounded-lg border px-3 py-2 text-[12px] ${/failed|error|missing|cannot|could not/i.test(exportStatus) ? "border-rose-400/30 bg-rose-400/10 text-rose-100" : "border-cyan-300/20 bg-cyan-300/5"}`}>
+									<div className="flex items-center gap-2">
+										{exporting && <span className="inline-block h-3.5 w-3.5 rounded-full border border-cyan-200/30 border-t-cyan-200 animate-spin shrink-0" />}
+										<span>{exportStatus}</span>
+									</div>
+								</div>
+							)}
+
+							<div className="mt-5 flex items-center justify-end gap-2">
+								<YSButton disabled={exporting} className="px-3 py-2 rounded-xl disabled:opacity-40" onClick={() => setExportOpen(false)}>Cancel</YSButton>
+								<YSButton disabled={exporting} className="px-4 py-2 rounded-xl font-semibold disabled:opacity-50" onClick={() => void runMasterExport()}>
+									{exporting ? "Rendering…" : "Export"}
+								</YSButton>
+							</div>
+						</div>
+					</div>,
+					document.body,
+				)}
 
 			{projectSheetOpen &&
 				createPortal(

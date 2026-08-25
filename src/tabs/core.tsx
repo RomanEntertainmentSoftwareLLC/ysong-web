@@ -14,7 +14,7 @@ import { YSButton } from "../components/YSButton";
 
 /* -------------------------------- Types --------------------------------- */
 
-export type TabType = "chat" | "settings" | "daw" | "mixer" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
+export type TabType = "chat" | "settings" | "daw" | "mixer" | "createSong" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
 
 export type TabRecord = {
 	id: string;
@@ -347,15 +347,24 @@ export function TabBar() {
 
 export function TabContentHost({ registry, extraProps }: { registry: Registry; extraProps?: Record<string, any> }) {
 	const { tabs, activeId } = useTabManager();
-	const tab = tabs.find((t) => t.id === activeId) ?? null;
-	if (!tab) return null;
+	const activeTab = tabs.find((t) => t.id === activeId) ?? null;
+	if (!activeTab) return null;
 
-	const C = registry[tab.type];
-	const props = { tab, ...(extraProps ?? {}) };
+	// The DAW is a persistent studio session, not a disposable page. Once opened it
+	// stays mounted while the user visits Mixer, Chat, Settings, etc., so playback,
+	// VST instances and WebAudio graphs do not restart simply because the view changed.
+	const keptAlive = tabs.filter((tab) => tab.type === "daw");
+	const activeIsKeptAlive = activeTab.type === "daw";
+	const Active = registry[activeTab.type];
 
 	return (
-		<div className="flex-1 min-h-0">
-			<C {...props} />
+		<div className="flex-1 min-h-0 relative">
+			{keptAlive.map((tab) => {
+				const C = registry[tab.type];
+				const visible = tab.id === activeId;
+				return <div key={tab.id} className={`absolute inset-0 min-h-0 ${visible ? "block" : "hidden"}`}><C tab={tab} {...(extraProps ?? {})} /></div>;
+			})}
+			{!activeIsKeptAlive && <div className="absolute inset-0 min-h-0"><Active tab={activeTab} {...(extraProps ?? {})} /></div>}
 		</div>
 	);
 }

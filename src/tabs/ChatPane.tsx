@@ -5,6 +5,7 @@ import { fetchChatMessages, appendMessage } from "../lib/chatApi";
 import { YSButton } from "../components/YSButton";
 import { FilePill } from "../components/FilePill";
 import { audioController, type AudioAsset, type AudioTargetRef } from "../components/AudioController";
+import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
 
 const env = (import.meta as any).env || {};
 
@@ -2029,6 +2030,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					messages: [
+						{ role: "system", content: YSONG_SYSTEM_PROMPT },
 						{ role: "system", content: audioToolMsg },
 						...(alreadyHandledMsg ? [{ role: "system", content: alreadyHandledMsg }] : []),
 						...baseMsgs,
