@@ -15,6 +15,7 @@ import {
 type BandDraft = Omit<BandProfile, "createdAt" | "updatedAt">;
 const blank = (): BandDraft => ({
   id: crypto.randomUUID(),
+  type: "band",
   name: "",
   genre: "",
   bio: "",
@@ -46,6 +47,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     if (!found) return;
     setBand({
       id: found.id,
+      type: found.type === "solo" ? "solo" : "band",
       name: found.name,
       genre: found.genre,
       bio: found.bio,
@@ -55,6 +57,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
       accent: found.accent,
       image: found.image ?? null,
       imageName: found.imageName ?? "",
+      avatarObjectKey: found.avatarObjectKey ?? "",
     });
     setActiveBandId(found.id);
     setSaved(true);
@@ -94,7 +97,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     };
   }, []);
 
-  useEffect(() => { setSaved(false); }, [band.name, band.genre, band.bio, band.members, band.symbol, band.primary, band.accent, band.image, band.imageName]);
+  useEffect(() => { setSaved(false); }, [band.type, band.name, band.genre, band.bio, band.members, band.symbol, band.primary, band.accent, band.image, band.imageName]);
 
   useEffect(() => {
     if (!band.image) { setPreviewUrl(""); return; }
@@ -110,7 +113,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     setError("");
     if (!file) return;
     if (!file.type.startsWith("image/")) { setError("That file is not an image."); return; }
-    patch({ image: file, imageName: file.name });
+    patch({ image: file, imageName: file.name, avatarObjectKey: "" });
   };
 
   const save = async () => {
@@ -132,9 +135,14 @@ export default function BandCreationPane(_props: TabRendererProps) {
   const remove = async () => {
     if (!bands.some((b) => b.id === band.id)) { makeNew(); return; }
     if (!window.confirm(`Delete “${band.name || "Untitled Band"}” from your YSong Band Library?`)) return;
-    await deleteBandProfile(band.id);
-    makeNew();
-    await refreshBands();
+    setBusy(true); setError("");
+    try {
+      await deleteBandProfile(band.id);
+      makeNew();
+      await refreshBands();
+    } catch (e: any) {
+      setError(e?.message === "artist_has_releases" ? "This artist already has YSong World releases and cannot be deleted. Keep the artist identity so those releases remain linked." : (e?.message || "Could not delete this artist."));
+    } finally { setBusy(false); }
   };
 
   const duplicate = async () => {
@@ -155,12 +163,13 @@ export default function BandCreationPane(_props: TabRendererProps) {
     <div className="max-w-[1420px] mx-auto p-5 lg:p-8 grid xl:grid-cols-[minmax(0,1fr)_390px] gap-6">
       <section className="space-y-4 min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><div className="text-xs uppercase tracking-[.22em] text-fuchsia-300">Identity workshop</div><h1 className="text-3xl font-semibold mt-1">Band Creation</h1><p className="text-sm text-neutral-400 mt-2">Build real reusable artist identities. Saved bands live in <b>My Library → Bands</b>.</p></div>
-          <button type="button" onClick={makeNew} className="rounded-xl px-3 py-2 border border-white/10 hover:bg-white/5">+ New Band</button>
+          <div><div className="text-xs uppercase tracking-[.22em] text-fuchsia-300">Identity workshop</div><h1 className="text-3xl font-semibold mt-1">Band Creation</h1><p className="text-sm text-neutral-400 mt-2">Build real reusable artist identities. Saved identities are synced to your account and reused by Create Song and YSong World publishing.</p></div>
+          <button type="button" onClick={makeNew} className="rounded-xl px-3 py-2 border border-white/10 hover:bg-white/5">+ New Artist / Band</button>
         </div>
 
         <div className="grid lg:grid-cols-[minmax(0,1fr)_260px] gap-5">
           <div className="space-y-4 min-w-0">
+            <Field label="Identity type"><select className="input" value={band.type || "band"} onChange={(e) => patch({ type: e.target.value as "solo" | "band" })}><option value="band">Band</option><option value="solo">Solo artist</option></select></Field>
             <Field label="Band / artist name"><input className="input" value={band.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Band name" /></Field>
             <Field label="Sound / genre"><input className="input" value={band.genre} onChange={(e) => patch({ genre: e.target.value })} placeholder="Dark synthpop, orchestral metal, house…" /></Field>
             <Field label="Band image / logo / symbol">
@@ -181,7 +190,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
             <Field label="Logo / symbol direction"><textarea className="input min-h-[100px]" value={band.symbol} onChange={(e) => patch({ symbol: e.target.value })} placeholder="Describe the mark, icon, crest, symbol, typography…" /></Field>
             <div className="flex gap-4"><Field label="Primary"><input type="color" value={band.primary} onChange={(e) => patch({ primary: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field><Field label="Accent"><input type="color" value={band.accent} onChange={(e) => patch({ accent: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field></div>
             {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div>}
-            <div className="flex flex-wrap gap-2"><button onClick={() => void save()} disabled={busy} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-40">{busy ? "Saving…" : saved ? "Saved to My Library" : "Save Band"}</button><button onClick={openArtwork} className="rounded-xl px-4 py-2 border border-white/10">Open in Artwork Studio</button><button onClick={() => void duplicate()} disabled={!bands.some((b) => b.id === band.id)} className="rounded-xl px-3 py-2 border border-white/10 disabled:opacity-30">Duplicate</button><button onClick={() => void remove()} className="rounded-xl px-3 py-2 border border-red-400/20 text-red-300">Delete</button></div>
+            <div className="flex flex-wrap gap-2"><button onClick={() => void save()} disabled={busy} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-40">{busy ? "Saving…" : saved ? "Saved to My Library" : band.type === "solo" ? "Save Artist" : "Save Band"}</button><button onClick={openArtwork} className="rounded-xl px-4 py-2 border border-white/10">Open in Artwork Studio</button><button onClick={() => void duplicate()} disabled={!bands.some((b) => b.id === band.id)} className="rounded-xl px-3 py-2 border border-white/10 disabled:opacity-30">Duplicate</button><button onClick={() => void remove()} className="rounded-xl px-3 py-2 border border-red-400/20 text-red-300">Delete</button></div>
           </div>
 
           <aside className="rounded-2xl border border-white/10 bg-white/[.025] p-3 self-start">

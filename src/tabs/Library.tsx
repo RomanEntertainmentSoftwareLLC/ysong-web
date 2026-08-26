@@ -5,6 +5,8 @@ import {
   createWorldPlaylist,
   deleteWorldPlaylist,
   fetchWorldLibrary,
+  toggleWorldArtistFollow,
+  removeWorldTrack,
   worldArtworkUrl,
   type WorldLibrary,
   type WorldPlaylist,
@@ -66,6 +68,14 @@ export default function LibraryPane() {
     catch (e: any) { setError(e?.message || "Could not create playlist"); }
   };
   const removePlaylist = async (playlist: WorldPlaylist) => { if (!window.confirm(`Delete playlist “${playlist.title}”?`)) return; await deleteWorldPlaylist(playlist.id); await loadWorld(); };
+  const unfollowArtist = async (ownerUserId: string, artistName: string) => {
+    const result = await toggleWorldArtistFollow(ownerUserId, artistName);
+    if (!result.followed) await loadWorld();
+  };
+  const removeUpload = async (track: WorldLibrary["uploads"][number]) => {
+    if (!window.confirm(`Remove “${track.title}” from YSong World?\n\nThe World listing and its social/analytics records are removed. Your artist identity is kept.`)) return;
+    await removeWorldTrack(track.id); await loadWorld();
+  };
 
   const counts = useMemo(() => ({
     songs: data.tracks.length,
@@ -88,9 +98,9 @@ export default function LibraryPane() {
       {section === "bands" ? <BandsSection bands={bands} onOpen={openBand} onNew={newBand} /> : loading ? <div className="text-neutral-400">Loading your library…</div> : <>
         {section === "songs" && <TrackListEmptyAware tracks={data.tracks} empty="Songs you save in YSong World will appear here." onOpen={(id) => openWorld("track", id)} />}
         {section === "albums" && (data.releases.length ? <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{data.releases.map((r) => <button key={r.id} onClick={() => openWorld("release", r.id)} className="text-left min-w-0"><Cover trackId={r.coverTrackId} /><div className="font-medium text-sm mt-2 truncate">{r.title}</div><div className="text-xs text-neutral-400 truncate">{r.artistName}</div></button>)}</div> : <Empty text="Albums and releases you save will appear here." />)}
-        {section === "artists" && (data.artists.length ? <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{data.artists.map((a) => <div key={`${a.ownerUserId}:${a.artistName}`} className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 flex items-center gap-3"><div className="h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500/40 to-fuchsia-500/20 grid place-items-center text-xl font-bold">{a.artistName.slice(0,1).toUpperCase()}</div><div className="min-w-0"><div className="font-semibold truncate">{a.artistName}</div><div className="text-xs text-neutral-500">Favorite artist</div></div></div>)}</div> : <Empty text="Artists you favorite will appear here." />)}
+        {section === "artists" && (data.artists.length ? <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{data.artists.map((a) => <div key={`${a.ownerUserId}:${a.artistName}`} className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 flex items-center gap-3"><div className="h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500/40 to-fuchsia-500/20 grid place-items-center text-xl font-bold">{a.artistName.slice(0,1).toUpperCase()}</div><div className="min-w-0 flex-1"><div className="font-semibold truncate">{a.artistName}</div><div className="text-xs text-neutral-500">Following</div></div><button onClick={() => void unfollowArtist(a.ownerUserId, a.artistName)} className="rounded-lg border border-neutral-700 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-red-400/40 hover:text-red-300">Unfollow</button></div>)}</div> : <Empty text="Artists you follow will appear here." />)}
         {section === "playlists" && <PlaylistSection own={data.playlists} saved={data.savedPlaylists} onOpen={(id) => openWorld("playlist", id)} onDelete={removePlaylist} />}
-        {section === "uploads" && <TrackListEmptyAware tracks={data.uploads} empty="Your YSong World uploads will appear here." onOpen={(id) => openWorld("track", id)} />}
+        {section === "uploads" && <TrackListEmptyAware tracks={data.uploads} empty="Your YSong World uploads will appear here." onOpen={(id) => openWorld("track", id)} onRemove={removeUpload} />}
       </>}
     </div>
   </div>;
@@ -110,6 +120,6 @@ function BandCard({ band, onOpen }: { band: BandProfile; onOpen: (id: string) =>
   return <button onClick={() => onOpen(band.id)} className="text-left min-w-0 group"><div className="aspect-square rounded-2xl overflow-hidden border border-white/10 grid place-items-center" style={{ background: `radial-gradient(circle at 35% 30%, ${band.accent}55, transparent 34%), ${band.primary}` }}>{url ? <img src={url} alt="" className="h-full w-full object-cover" /> : <div className="h-28 w-28 rounded-full border-8 grid place-items-center text-3xl font-black" style={{ borderColor: band.accent, color: band.accent }}>{band.name.split(/\s+/).slice(0,2).map((v) => v[0]).join("").toUpperCase() || "YS"}</div>}</div><div className="font-medium text-sm mt-2 truncate group-hover:text-fuchsia-200">{band.name || "Untitled Band"}</div><div className="text-xs text-neutral-500 truncate">{band.genre || "Band identity"}</div></button>;
 }
 
-function TrackListEmptyAware({ tracks, empty, onOpen }: { tracks: WorldLibrary["tracks"]; empty: string; onOpen: (id: string) => void }) { if (!tracks.length) return <Empty text={empty} />; return <div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.map((t) => <button key={t.id} onClick={() => onOpen(t.id)} className="w-full grid grid-cols-[48px_minmax(0,1fr)_auto] items-center gap-3 p-2.5 border-b last:border-0 border-neutral-800 hover:bg-neutral-900 text-left"><Cover trackId={t.hasArtwork ? t.id : null} /><div className="min-w-0"><div className="font-medium truncate">{t.title}</div><div className="text-xs text-neutral-500 truncate">{t.artistName} • {t.albumName}</div></div><div className="text-xs text-neutral-500">▶ {t.playCount.toLocaleString()}</div></button>)}</div>; }
+function TrackListEmptyAware({ tracks, empty, onOpen, onRemove }: { tracks: WorldLibrary["tracks"]; empty: string; onOpen: (id: string) => void; onRemove?: (track: WorldLibrary["tracks"][number]) => void }) { if (!tracks.length) return <Empty text={empty} />; return <div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.map((t) => <div key={t.id} className="grid grid-cols-[48px_minmax(0,1fr)_auto] items-center gap-3 p-2.5 border-b last:border-0 border-neutral-800 hover:bg-neutral-900"><button onClick={() => onOpen(t.id)} className="contents text-left"><Cover trackId={t.hasArtwork ? t.id : null} /><div className="min-w-0 text-left"><div className="font-medium truncate">{t.title}</div><div className="text-xs text-neutral-500 truncate">{t.artistName} • {t.albumName}</div></div></button><div className="flex items-center gap-3"><span className="text-xs text-neutral-500">▶ {t.playCount.toLocaleString()}</span>{onRemove && <button onClick={() => onRemove(t)} className="text-xs text-red-300 hover:text-red-200">Remove</button>}</div></div>)}</div>; }
 function PlaylistSection({ own, saved, onOpen, onDelete }: { own: WorldPlaylist[]; saved: WorldPlaylist[]; onOpen: (id:string)=>void; onDelete:(p:WorldPlaylist)=>void }) { if (!own.length && !saved.length) return <Empty text="Create a playlist or save somebody else's playlist and it will live here." />; return <div className="space-y-7">{own.length > 0 && <div><h2 className="font-semibold mb-3">Your Playlists</h2><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{own.map((p) => <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onDelete={onDelete} />)}</div></div>}{saved.length > 0 && <div><h2 className="font-semibold mb-3">Saved Playlists</h2><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{saved.map((p) => <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} />)}</div></div>}</div>; }
 function PlaylistCard({ playlist, onOpen, onDelete }: { playlist: WorldPlaylist; onOpen:(id:string)=>void; onDelete?:(p:WorldPlaylist)=>void }) { return <div className="min-w-0"><button onClick={() => onOpen(playlist.id)} className="w-full text-left"><Cover trackId={playlist.coverTrackId} /><div className="font-medium text-sm mt-2 truncate">{playlist.title}</div><div className="text-xs text-neutral-500 truncate">{playlist.ownerName} • {playlist.trackCount} songs</div></button>{onDelete && <button onClick={() => onDelete(playlist)} className="text-[11px] text-neutral-500 hover:text-red-300 mt-1">Delete</button>}</div>; }

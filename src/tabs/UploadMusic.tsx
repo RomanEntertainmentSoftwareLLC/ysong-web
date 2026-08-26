@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTabManager } from "./core";
 import { YSButton } from "../components/YSButton";
 import { publishWorldTrack, uploadWorldAsset } from "../lib/worldApi";
+import { fetchAccountArtists, type AccountArtist } from "../lib/artistApi";
 
 export default function UploadMusicPane() {
 	const { tabs, openTab, activateTab } = useTabManager();
@@ -9,7 +10,8 @@ export default function UploadMusicPane() {
 	const [art, setArt] = useState<File | null>(null);
 	const [artPreview, setArtPreview] = useState("");
 	const [title, setTitle] = useState("");
-	const [artistName, setArtistName] = useState("");
+	const [artists, setArtists] = useState<AccountArtist[]>([]);
+	const [artistId, setArtistId] = useState("");
 	const [releaseType, setReleaseType] = useState<"single" | "album">("single");
 	const [albumTitle, setAlbumTitle] = useState("");
 	const [genre, setGenre] = useState("");
@@ -24,6 +26,10 @@ export default function UploadMusicPane() {
 	const [busy, setBusy] = useState(false);
 	const [status, setStatus] = useState("");
 	const [error, setError] = useState("");
+
+	useEffect(() => {
+		fetchAccountArtists().then((r) => { const list = r.artists || []; setArtists(list); setArtistId((id) => id || list[0]?.id || ""); }).catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		if (!art) { setArtPreview(""); return; }
@@ -53,7 +59,7 @@ export default function UploadMusicPane() {
 		setError("");
 		if (!audio) return setError("Choose an audio file first.");
 		if (!title.trim()) return setError("Song title is required.");
-		if (!artistName.trim()) return setError("Artist name is required.");
+		if (!artistId) return setError("Choose one of your YSong artist identities first.");
 		if (releaseType === "album" && !albumTitle.trim()) return setError("Album title is required for an album track.");
 		if (previouslyReleased && !isrc.trim()) return setError("An ISRC is required for a previously released recording.");
 		if (!rightsConfirmed) return setError("Confirm that you own or control the rights needed to publish this recording.");
@@ -69,7 +75,7 @@ export default function UploadMusicPane() {
 			setStatus("Publishing to YSong World…");
 			await publishWorldTrack({
 				title: title.trim(),
-				artistName: artistName.trim(),
+				artistId,
 				releaseType,
 				albumTitle: releaseType === "album" ? albumTitle.trim() : title.trim(),
 				genre: genre.trim() || "Other",
@@ -122,7 +128,7 @@ export default function UploadMusicPane() {
 
 					<div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 md:p-5 space-y-4">
 						<Field label="Song Title"><input value={title} onChange={(e) => setTitle(e.target.value)} className="input" placeholder="Song title" /></Field>
-						<Field label="Artist Name"><input value={artistName} onChange={(e) => setArtistName(e.target.value)} className="input" placeholder="Artist name" /></Field>
+						<Field label="Publish As"><select value={artistId} onChange={(e) => setArtistId(e.target.value)} className="input"><option value="">Select your artist / band</option>{artists.map((a) => <option key={a.id} value={a.id}>{a.name}{a.type === "band" ? " · Band" : " · Solo"}</option>)}</select>{!artists.length && <div className="mt-2 text-xs text-amber-300">Create and save an artist/band in Band Creation first. YSong World no longer accepts an unowned free-text artist name.</div>}</Field>
 						<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 							<Field label="Release Type"><select value={releaseType} onChange={(e) => setReleaseType(e.target.value as any)} className="input"><option value="single">Single</option><option value="album">Album track</option></select></Field>
 							{releaseType === "album" ? <Field label="Album Name"><input value={albumTitle} onChange={(e) => setAlbumTitle(e.target.value)} className="input" placeholder="Album title" /></Field> : <Field label="Release"><div className="input text-neutral-500">Single release</div></Field>}

@@ -130,7 +130,7 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
   const explicitKeyLabel = draft.key.trim();
   const scaleLabel = SCALE_DEFINITIONS.find((s) => s.id === scaleId)?.label ?? scaleId;
   const keyLabel = explicitKeyLabel || `${NOTE_NAMES[root]} ${scaleLabel}`;
-  const hardConstraints = Array.isArray(raw?.hardConstraints) ? raw.hardConstraints.map(String).filter(Boolean).slice(0, 40) : [];
+  const hardConstraints: string[] = Array.isArray(raw?.hardConstraints) ? raw.hardConstraints.map(String).filter(Boolean).slice(0, 40) : [];
   if (Number.isFinite(explicitBpm) && explicitBpm >= 20 && !hardConstraints.some((x) => /bpm/i.test(x))) hardConstraints.unshift(`Tempo must remain exactly ${bpm} BPM.`);
   if (explicitKeyLabel && !hardConstraints.some((x) => /key|scale|mode|phrygian|dorian|lydian|locrian|minor|major/i.test(x))) hardConstraints.unshift(`Tonal center / mode must remain exactly ${explicitKeyLabel}.`);
 
@@ -237,7 +237,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
       if (audioTracks.length) {
         const status = await getMusicEngineStatus();
         setEngine(status);
-        if (!status.reachable) throw new Error(status.message || `MiniMax Music 3 is not reachable at ${status.baseUrl || "the configured local endpoint"}. Start the local model server first.`);
+        if (!status.reachable) throw new Error(status.message || `MiniMax Music 3 is not reachable through ${status.provider === "audio_cpp" ? "the local audio.cpp runtime" : (status.baseUrl || "the configured endpoint")}.`);
       }
 
       const completed: GeneratedSessionTrack[] = [];
@@ -250,11 +250,14 @@ export default function CreateSongPane(_props: TabRendererProps) {
           continue;
         }
         setProgress(`Generating isolated audio track ${i + 1}/${activePlan.tracks.length}: ${track.name}`);
+        const durationSeconds = Math.max(2, Math.min(600, activePlan.totalBars * activePlan.sigNum * (4 / activePlan.sigDen) * (60 / activePlan.bpm)));
         const blob = await generateMiniMaxTrack({
           lyrics: track.useLyrics && !draft.instrumental ? (draft.lyrics || "[Instrumental]") : "[Instrumental]",
           instructions: buildMiniMaxTrackInstructions(activePlan, track),
           seed: sharedSeed,
           maxNewTokens: 9000,
+          durationSeconds,
+          quality: "standard",
         });
         const durationSec = await decodeAudioDuration(blob).catch(() => undefined);
         setProgress(`Saving ${track.name} into YSong…`);
@@ -290,8 +293,8 @@ export default function CreateSongPane(_props: TabRendererProps) {
       <section className="space-y-4">
         <div><div className="text-xs uppercase tracking-[0.22em] text-indigo-300">YSong Studio</div><h1 className="text-3xl font-semibold mt-1">Create Song</h1><p className="text-sm text-neutral-400 mt-2">YSong AI produces the strict session plan; MiniMax Music 3 performs the audio-only parts. Synth parts become MIDI + your installed VSTs whenever YSong can do that cleanly.</p></div>
         <div className={`rounded-xl border px-3 py-2 text-xs ${engine?.reachable ? "border-emerald-400/20 bg-emerald-400/[.06] text-emerald-200" : "border-amber-400/20 bg-amber-400/[.06] text-amber-100"}`}>
-          <div className="flex items-center justify-between gap-3"><span><b>MiniMax Music 3:</b> {engine?.reachable ? `ready · ${engine.model}` : "local server offline"}</span><button type="button" onClick={() => void refreshEngine()} className="rounded-lg border border-white/10 px-2 py-1">Check</button></div>
-          {!engine?.reachable && <div className="mt-1 opacity-70">YSong can still plan the editable session. Audio generation starts once the local/open-weights server is running.</div>}
+          <div className="flex items-center justify-between gap-3"><span><b>MiniMax Music 3:</b> {engine?.reachable ? `ready · ${engine.provider === "audio_cpp" ? `audio.cpp ${engine.backend || "local"}` : engine.model}${engine.busy ? " · busy" : ""}` : "local engine offline"}</span><button type="button" onClick={() => void refreshEngine()} className="rounded-lg border border-white/10 px-2 py-1">Check</button></div>
+          {!engine?.reachable && <div className="mt-1 opacity-70">YSong can still plan the editable session. Audio generation starts once the local/open-weights engine is ready.</div>}
         </div>
         <Field label="Song title"><input value={draft.title} onChange={(e) => patch({ title: e.target.value })} placeholder="Untitled song" className="input" /></Field>
         <Field label="Band / artist"><select className="input" value={draft.bandId} onChange={(e) => { patch({ bandId: e.target.value }); if (e.target.value) setActiveBandId(e.target.value); }}><option value="">No saved band selected</option>{bands.map((b) => <option key={b.id} value={b.id}>{b.name || "Untitled Band"}</option>)}</select></Field>

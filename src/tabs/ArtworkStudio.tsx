@@ -285,6 +285,7 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [rightTab, setRightTab] = useState<"layers" | "properties" | "ai">("layers");
+  const [canvasDragActive, setCanvasDragActive] = useState(false);
   const [exportType, setExportType] = useState<"png" | "jpeg" | "webp">("png");
   const [canvasSizeDraft, setCanvasSizeDraft] = useState({ width: 1000, height: 1000 });
   const historyRef = useRef<ArtworkProject[]>([]);
@@ -491,6 +492,13 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
     if (target === index) return;
     const layers = [...project.layers]; const [item] = layers.splice(index, 1); layers.splice(target, 0, item); commit({ ...project, layers });
   };
+  const reorderLayers = (displayOrderIds: string[]) => {
+    if (displayOrderIds.length !== project.layers.length) return;
+    const byId = new Map(project.layers.map((layer) => [layer.id, layer] as const));
+    const displayLayers = displayOrderIds.map((id) => byId.get(id)).filter((layer): layer is ArtLayer => Boolean(layer));
+    if (displayLayers.length !== project.layers.length) return;
+    commit({ ...project, layers: [...displayLayers].reverse() });
+  };
 
   const undo = () => {
     if (!canUndo) return;
@@ -576,20 +584,28 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
       <div className="ml-auto flex items-center gap-2"><select value={exportType} onChange={(e) => setExportType(e.target.value as any)} className="topselect"><option value="png">PNG</option><option value="jpeg">JPG</option><option value="webp">WEBP</option></select><button className="rounded-lg px-3 py-1.5 text-xs bg-cyan-500/20 border border-cyan-400/30" onClick={() => void exportArtwork()}>Export</button></div>
     </div>
 
-    <div className="flex-1 min-h-0 grid grid-cols-[70px_minmax(0,1fr)_330px]">
-      <aside className="border-r border-white/10 bg-black/20 p-2 overflow-y-auto">
+    <div className="flex-1 min-h-0 grid grid-cols-[58px_minmax(0,1fr)_330px]">
+      <aside className="border-r border-white/10 bg-black/20 px-2 py-2 overflow-y-auto">
         <div className="space-y-1">{([
-          ["select","Move"],["brush","Brush"],["pencil","Pencil"],["eraser","Eraser"],["text","Text"],["rect","Rect"],["ellipse","Ellipse"],["line","Line"],["crop","Crop"],["eyedropper","Pick"],
-        ] as [Tool,string][]).map(([id,label]) => <button key={id} title={label} className={`w-full h-11 rounded-lg text-[10px] border ${tool === id ? "bg-cyan-400/15 border-cyan-300/50 text-cyan-100" : "border-white/5 hover:bg-white/5 text-neutral-400"}`} onClick={() => { setTool(id); if (id !== "crop") setCropRect(null); }}>{label}</button>)}</div>
-        <div className="border-t border-white/10 mt-3 pt-3 space-y-2"><input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="w-full h-9 bg-transparent" title="Foreground color" /><input type="color" value={secondaryColor} onChange={(e) => setSecondaryColor(e.target.value)} className="w-full h-9 bg-transparent" title="Fill/background color" /><label className="block text-[9px] text-neutral-500">Size<input type="range" min="1" max="120" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full" /></label><label className="block text-[9px] text-neutral-500">Opacity<input type="range" min="5" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} className="w-full" /></label></div>
+          ["select","Move"],["brush","Brush"],["pencil","Pencil"],["eraser","Eraser"],["text","Text"],["rect","Rectangle"],["ellipse","Ellipse"],["line","Line"],["crop","Crop"],["eyedropper","Eyedropper"],
+        ] as [Tool,string][]).map(([id,label]) => <button key={id} aria-label={label} title={label} className={`w-10 h-10 mx-auto rounded-lg grid place-items-center border transition ${tool === id ? "bg-cyan-400/15 border-cyan-300/50 text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,.08)]" : "border-transparent hover:bg-white/6 text-neutral-400 hover:text-neutral-100"}`} onClick={() => { setTool(id); if (id !== "crop") setCropRect(null); }}><ToolGlyph tool={id} /></button>)}</div>
+        <div className="border-t border-white/10 mt-3 pt-3 space-y-2">
+          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="block w-10 h-8 mx-auto bg-transparent" title="Foreground color" />
+          <input type="color" value={secondaryColor} onChange={(e) => setSecondaryColor(e.target.value)} className="block w-10 h-8 mx-auto bg-transparent" title="Fill/background color" />
+          <label className="block text-[8px] text-center text-neutral-500" title="Brush size">Size<input type="range" min="1" max="120" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-10" /></label>
+          <label className="block text-[8px] text-center text-neutral-500" title="Brush opacity">Opacity<input type="range" min="5" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} className="w-10" /></label>
+        </div>
       </aside>
 
       <main ref={viewportRef} className="min-w-0 min-h-0 overflow-auto bg-[#171a1d] relative" style={{ backgroundImage: "linear-gradient(45deg,#202428 25%,transparent 25%),linear-gradient(-45deg,#202428 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#202428 75%),linear-gradient(-45deg,transparent 75%,#202428 75%)", backgroundSize: "24px 24px", backgroundPosition: "0 0,0 12px,12px -12px,-12px 0" }}>
         <div className="min-w-max min-h-full p-12 grid place-items-center">
           <div className="relative shadow-2xl" style={{ width: project.width * zoom / 100, height: project.height * zoom / 100 }}
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
-            onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) void addImage(f, f.name); }}>
+            onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes("Files")) setCanvasDragActive(true); }}
+            onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes("Files")) { e.dataTransfer.dropEffect = "copy"; setCanvasDragActive(true); } }}
+            onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCanvasDragActive(false); }}
+            onDrop={(e) => { e.preventDefault(); setCanvasDragActive(false); const f = e.dataTransfer.files?.[0]; if (f) void addImage(f, f.name); }}>
             <canvas ref={canvasRef} className={`block w-full h-full ${tool === "select" ? "cursor-default" : tool === "eyedropper" ? "cursor-crosshair" : "cursor-crosshair"}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishGesture} onPointerCancel={finishGesture} />
+            {canvasDragActive && <div className="pointer-events-none absolute inset-2 z-30 rounded-xl border-2 border-dashed border-cyan-300/80 bg-cyan-300/10 grid place-items-center shadow-[inset_0_0_40px_rgba(34,211,238,.08)]"><div className="rounded-xl border border-cyan-200/20 bg-black/75 px-4 py-3 text-center"><div className="text-sm font-semibold text-cyan-100">Drop image</div><div className="text-[10px] text-cyan-100/60 mt-1">Add as a new artwork layer</div></div></div>}
             {selectedStyle && tool === "select" && <div className="pointer-events-none absolute border border-cyan-300/80 shadow-[0_0_0_1px_rgba(0,0,0,.6)]" style={selectedStyle as React.CSSProperties}><span className="absolute -top-5 left-0 rounded bg-black/75 px-1.5 py-0.5 text-[9px] text-cyan-200 whitespace-nowrap">{selected?.name}</span></div>}
             {overlayRect && <div className={`pointer-events-none absolute border ${gesture?.kind === "crop" || cropRect ? "border-amber-300 bg-amber-300/5" : "border-cyan-300 bg-cyan-300/5"}`} style={{ left: `${overlayRect.x / project.width * 100}%`, top: `${overlayRect.y / project.height * 100}%`, width: `${overlayRect.width / project.width * 100}%`, height: `${overlayRect.height / project.height * 100}%` }} />}
           </div>
@@ -600,7 +616,7 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
       <aside className="border-l border-white/10 bg-[#101214] min-h-0 flex flex-col">
         <div className="h-10 shrink-0 grid grid-cols-3 border-b border-white/10">{(["layers","properties","ai"] as const).map((tab) => <button key={tab} onClick={() => setRightTab(tab)} className={`text-[11px] uppercase tracking-wider ${rightTab === tab ? "bg-white/7 text-white" : "text-neutral-500"}`}>{tab}</button>)}</div>
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
-          {rightTab === "layers" && <LayersPanel project={project} selectedLayerId={selectedLayerId} setSelectedLayerId={setSelectedLayerId} patchLayer={patchLayer} moveLayer={moveLayer} duplicateSelected={duplicateSelected} removeSelected={removeSelected} />}
+          {rightTab === "layers" && <LayersPanel project={project} selectedLayerId={selectedLayerId} setSelectedLayerId={setSelectedLayerId} patchLayer={patchLayer} moveLayer={moveLayer} reorderLayers={reorderLayers} duplicateSelected={duplicateSelected} removeSelected={removeSelected} />}
           {rightTab === "properties" && <PropertiesPanel project={project} selected={selected} patchProject={patchProject} patchLayer={patchLayer} format={project.format} setFormat={setFormat} canvasSizeDraft={canvasSizeDraft} setCanvasSizeDraft={setCanvasSizeDraft} resizeCanvas={resizeCanvas} />}
           {rightTab === "ai" && <AiPanel project={project} patchProject={patchProject} busy={busy} refine={refine} />}
         </div>
@@ -611,9 +627,89 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
   </div>;
 }
 
-function LayersPanel({ project, selectedLayerId, setSelectedLayerId, patchLayer, moveLayer, duplicateSelected, removeSelected }: { project: ArtworkProject; selectedLayerId: string | null; setSelectedLayerId: (id: string | null) => void; patchLayer: (id: string, patch: Partial<ArtLayer>, history?: boolean) => void; moveLayer: (d: number) => void; duplicateSelected: () => void; removeSelected: () => void }) {
-  return <div><div className="flex items-center justify-between gap-2 mb-3"><div className="text-xs font-semibold">Layers</div><div className="flex gap-1"><button className="topbtn" onClick={() => moveLayer(1)}>↑</button><button className="topbtn" onClick={() => moveLayer(-1)}>↓</button></div></div>
-    <div className="space-y-1.5">{[...project.layers].reverse().map((layer) => <div key={layer.id} onClick={() => setSelectedLayerId(layer.id)} className={`rounded-lg border p-2 flex items-center gap-2 cursor-pointer ${selectedLayerId === layer.id ? "border-cyan-300/45 bg-cyan-300/8" : "border-white/8 hover:bg-white/4"}`}><button type="button" title="Visibility" onClick={(e) => { e.stopPropagation(); patchLayer(layer.id, { visible: !layer.visible } as Partial<ArtLayer>); }} className="w-6 text-xs">{layer.visible ? "◉" : "○"}</button><div className="min-w-0 flex-1"><div className="text-xs truncate">{layer.name}</div><div className="text-[9px] text-neutral-500 uppercase">{layer.kind}</div></div><button type="button" title="Lock" onClick={(e) => { e.stopPropagation(); patchLayer(layer.id, { locked: !layer.locked } as Partial<ArtLayer>); }} className="w-6 text-xs">{layer.locked ? "🔒" : "·"}</button></div>)}</div>
+function ToolGlyph({ tool }: { tool: Tool }) {
+  const common = { width: 19, height: 19, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (tool === "select") return <svg {...common}><path d="M5 3l13 8-6 2-3 6z" /></svg>;
+  if (tool === "brush") return <svg {...common}><path d="M14 5l5-2 2 2-2 5-9 9c-2 2-5 2-7 2 0-2 0-5 2-7z" /><path d="M13 6l5 5" /></svg>;
+  if (tool === "pencil") return <svg {...common}><path d="M4 20l4-1 11-11-3-3L5 16z" /><path d="M14 6l3 3" /></svg>;
+  if (tool === "eraser") return <svg {...common}><path d="M4 15l8-10 7 6-7 9H8z" /><path d="M10 20h10" /></svg>;
+  if (tool === "text") return <svg {...common}><path d="M5 5h14M12 5v14M8 19h8" /></svg>;
+  if (tool === "rect") return <svg {...common}><rect x="4" y="5" width="16" height="14" rx="1" /></svg>;
+  if (tool === "ellipse") return <svg {...common}><ellipse cx="12" cy="12" rx="8" ry="6" /></svg>;
+  if (tool === "line") return <svg {...common}><path d="M5 19L19 5" /></svg>;
+  if (tool === "crop") return <svg {...common}><path d="M7 3v14a2 2 0 0 0 2 2h12M3 7h14a2 2 0 0 1 2 2v12" /></svg>;
+  return <svg {...common}><path d="M5 19l9-9 4 4-9 9H5z" /><path d="M13 11l-2-2 5-5 4 4-5 5" /></svg>;
+}
+
+function LayerKindGlyph({ kind }: { kind: ArtLayer["kind"] }) {
+  const common = { width: 18, height: 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  if (kind === "image") return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M4 16l5-5 4 4 2-2 5 5" /><circle cx="16.5" cy="8.5" r="1.5" /></svg>;
+  if (kind === "text") return <svg {...common}><path d="M5 5h14M12 5v14M8 19h8" /></svg>;
+  if (kind === "shape") return <svg {...common}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>;
+  return <svg {...common}><path d="M4 17c3-1 4-5 7-7s5 1 4 3-4 2-4 5c0 2 3 2 6 0" /></svg>;
+}
+
+function LayersPanel({ project, selectedLayerId, setSelectedLayerId, patchLayer, moveLayer, reorderLayers, duplicateSelected, removeSelected }: { project: ArtworkProject; selectedLayerId: string | null; setSelectedLayerId: (id: string | null) => void; patchLayer: (id: string, patch: Partial<ArtLayer>, history?: boolean) => void; moveLayer: (d: number) => void; reorderLayers: (displayOrderIds: string[]) => void; duplicateSelected: () => void; removeSelected: () => void }) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; side: "before" | "after" } | null>(null);
+  const displayLayers = [...project.layers].reverse();
+
+  const beginDrag = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    setDraggingId(id);
+    setSelectedLayerId(id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+    const ghost = document.createElement("canvas");
+    ghost.width = 1; ghost.height = 1;
+    ghost.style.position = "fixed"; ghost.style.left = "-10px"; ghost.style.top = "-10px";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    window.setTimeout(() => ghost.remove(), 0);
+  };
+
+  const finishDrop = (targetId: string, side: "before" | "after") => {
+    if (!draggingId || draggingId === targetId) { setDropTarget(null); return; }
+    const ids = displayLayers.map((layer) => layer.id);
+    const from = ids.indexOf(draggingId);
+    if (from < 0) { setDropTarget(null); return; }
+    ids.splice(from, 1);
+    const target = ids.indexOf(targetId);
+    if (target < 0) { setDropTarget(null); return; }
+    ids.splice(target + (side === "after" ? 1 : 0), 0, draggingId);
+    reorderLayers(ids);
+    setDropTarget(null);
+  };
+
+  const placeholder = <div className="h-11 rounded-lg border border-cyan-300/55 bg-cyan-300/8 shadow-[inset_0_0_18px_rgba(34,211,238,.06)]" aria-hidden="true" />;
+
+  return <div>
+    <div className="flex items-center justify-between gap-2 mb-3"><div><div className="text-xs font-semibold">Layers</div><div className="text-[9px] text-neutral-500 mt-0.5">Drag layers to reorder</div></div><div className="flex gap-1"><button className="topbtn" title="Move selected layer up" onClick={() => moveLayer(1)}>↑</button><button className="topbtn" title="Move selected layer down" onClick={() => moveLayer(-1)}>↓</button></div></div>
+    <div className="space-y-1.5">
+      {displayLayers.map((layer) => <div key={layer.id}>
+        {dropTarget?.id === layer.id && dropTarget.side === "before" && placeholder}
+        <div
+          draggable
+          onDragStart={(e) => beginDrag(e, layer.id)}
+          onDragEnd={() => { setDraggingId(null); setDropTarget(null); }}
+          onDragOver={(e) => {
+            if (!draggingId || draggingId === layer.id) return;
+            e.preventDefault(); e.dataTransfer.dropEffect = "move";
+            const rect = e.currentTarget.getBoundingClientRect();
+            setDropTarget({ id: layer.id, side: e.clientY < rect.top + rect.height / 2 ? "before" : "after" });
+          }}
+          onDrop={(e) => { e.preventDefault(); if (dropTarget?.id === layer.id) finishDrop(layer.id, dropTarget.side); }}
+          onClick={() => setSelectedLayerId(layer.id)}
+          className={`rounded-lg border p-2 flex items-center gap-2 cursor-grab active:cursor-grabbing transition ${draggingId === layer.id ? "opacity-30 border-cyan-300/20" : selectedLayerId === layer.id ? "border-cyan-300/45 bg-cyan-300/8" : "border-white/8 hover:bg-white/4"}`}
+        >
+          <span className="w-3 text-neutral-600 text-[10px]" aria-hidden="true">⋮⋮</span>
+          <button type="button" title="Toggle visibility" onClick={(e) => { e.stopPropagation(); patchLayer(layer.id, { visible: !layer.visible } as Partial<ArtLayer>); }} className="w-6 text-xs">{layer.visible ? "◉" : "○"}</button>
+          <div className="h-9 w-11 shrink-0 rounded-md border border-white/10 bg-white/5 grid place-items-center overflow-hidden"><LayerKindGlyph kind={layer.kind} /></div>
+          <div className="min-w-0 flex-1"><div className="text-xs truncate">{layer.name}</div><div className="text-[9px] text-neutral-500 uppercase">{layer.kind}</div></div>
+          <button type="button" title={layer.locked ? "Unlock layer" : "Lock layer"} onClick={(e) => { e.stopPropagation(); patchLayer(layer.id, { locked: !layer.locked } as Partial<ArtLayer>); }} className="w-6 text-xs">{layer.locked ? "🔒" : "·"}</button>
+        </div>
+        {dropTarget?.id === layer.id && dropTarget.side === "after" && placeholder}
+      </div>)}
+    </div>
     {!project.layers.length && <div className="rounded-xl border border-dashed border-white/10 p-5 text-center text-xs text-neutral-500">No layers yet. Import or drag an image, add text, draw, or create a shape.</div>}
     <div className="mt-3 flex gap-2"><button className="topbtn" onClick={duplicateSelected} disabled={!selectedLayerId}>Duplicate</button><button className="topbtn text-red-300" onClick={removeSelected} disabled={!selectedLayerId}>Delete</button></div>
   </div>;

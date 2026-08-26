@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Avatar from "../components/Avatar";
 import type { TabRecord } from "./core";
 import type { Chat } from "../components/UISidebar";
 import { fetchChatMessages, appendMessage } from "../lib/chatApi";
@@ -60,6 +61,8 @@ type Props = {
 	tab: TabRecord; // expects payload.chatId
 	chats: Chat[];
 	setChats: React.Dispatch<React.SetStateAction<Chat[]>>;
+	meAvatarUrl?: string;
+	meDisplayName?: string;
 };
 
 type Attachment = {
@@ -1222,7 +1225,7 @@ function isoCountryToFlagEmoji(code: string) {
 	return String.fromCodePoint(base + c0, base + c1);
 }
 
-export default function ChatPane({ tab, chats, setChats }: Props) {
+export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayName }: Props) {
 	const showTimestamps = useShowTimestamps();
 	const chatId = tab.payload?.chatId as string;
 	const chat = chats.find((c) => c.id === chatId);
@@ -2185,11 +2188,10 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 					<div className="flex flex-col gap-4">
 						{(Array.isArray(chat.messages) ? (chat.messages as unknown as ChatMessage[]) : []).map(
 							(m, i) => (
-								<div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+								<div key={i} className={`flex items-end gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+									{m.role === "assistant" && <Avatar src="/ai-personas/surfer-dude.png" name="Surfer Dude" size={34} />}
 									<div
-										className={`flex flex-col w-full ${
-											m.role === "user" ? "items-end" : "items-start"
-										}`}
+										className={`flex-1 flex flex-col min-w-0 max-w-[calc(100%_-_42px)] ${m.role === "user" ? "items-end" : "items-start"}`}
 									>
 										<div
 											className={`rounded-2xl px-4 py-3 leading-relaxed shadow-sm whitespace-pre-wrap
@@ -2198,7 +2200,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 								? "bg-neutral-700 text-white dark:bg-neutral-800"
 								: "bg-neutral-100 dark:bg-neutral-900"
 						}
-                      max-w-[85%] sm:max-w-[70%]`}
+                      w-fit max-w-[85%] sm:max-w-[70%]`}
 										>
 											{renderTwemojiFlags(
 												m.role === "assistant" ? stripYsToolTags(m.text) : m.text
@@ -2254,6 +2256,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 											</div>
 										)}
 									</div>
+									{m.role === "user" && <Avatar src={meAvatarUrl} name={meDisplayName || "You"} size={34} />}
 								</div>
 							)
 						)}

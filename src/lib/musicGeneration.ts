@@ -4,6 +4,9 @@ export type MusicEngineStatus = {
   baseUrl: string;
   model: string;
   message?: string;
+  provider?: "audio_cpp" | "http" | string;
+  backend?: string;
+  busy?: boolean;
 };
 
 export type GenerateTrackRequest = {
@@ -11,6 +14,8 @@ export type GenerateTrackRequest = {
   instructions: string;
   seed?: number;
   maxNewTokens?: number;
+  durationSeconds?: number;
+  quality?: "draft" | "standard" | "final";
 };
 
 const env = (import.meta as any).env || {};

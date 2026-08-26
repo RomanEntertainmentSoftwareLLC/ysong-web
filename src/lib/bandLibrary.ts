@@ -1,5 +1,8 @@
+import { deleteAccountArtist, fetchAccountArtists, saveAccountArtist } from "./artistApi";
+import { uploadProfileAsset } from "./profileApi";
 export type BandProfile = {
   id: string;
+  type?: "solo" | "band";
   name: string;
   genre: string;
   bio: string;
@@ -9,6 +12,7 @@ export type BandProfile = {
   accent: string;
   image?: Blob | null;
   imageName?: string;
+  avatarObjectKey?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -51,7 +55,14 @@ export async function listBandProfiles(): Promise<BandProfile[]> {
       req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result as BandProfile[] : []);
       req.onerror = () => reject(req.error);
     });
-    return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    // One-time/account migration: existing IndexedDB identities become real account-owned artist entities.
+    await Promise.all(items.map((b) => saveAccountArtist({ id:b.id, type:b.type === "solo" ? "solo" : "band", name:b.name || "Untitled Band", genre:b.genre || "", bio:b.bio || "", members:b.members || "", symbol:b.symbol || "", primary:b.primary || "#171717", accent:b.accent || "#a78bfa", avatarObjectKey:b.avatarObjectKey || "" }).catch(() => null)));
+    const remote = await fetchAccountArtists().catch(() => ({ artists: [] }));
+    const byId = new Map(items.map((x) => [x.id, x]));
+    for (const a of remote.artists || []) {
+      if (!byId.has(a.id)) byId.set(a.id, { id:a.id, type:a.type, name:a.name, genre:a.genre, bio:a.bio, members:a.members, symbol:a.symbol, primary:a.primary, accent:a.accent, image:null, imageName:"", avatarObjectKey:a.avatarObjectKey || "", createdAt:0, updatedAt:0 });
+    }
+    return [...byId.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   } finally { db.close(); }
 }
 
@@ -87,6 +98,11 @@ export async function saveBandProfile(profile: Omit<BandProfile, "createdAt" | "
     createdAt: existing?.createdAt ?? profile.createdAt ?? now,
     updatedAt: now,
   } as BandProfile;
+  if (next.image && !next.avatarObjectKey) {
+    const avatarFile = next.image instanceof File ? next.image : new File([next.image], next.imageName || `${next.name || "artist"}-avatar.png`, { type: next.image.type || "image/png" });
+    const uploaded = await uploadProfileAsset(avatarFile);
+    next.avatarObjectKey = uploaded.objectKey;
+  }
   const db = await openDb();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -96,12 +112,15 @@ export async function saveBandProfile(profile: Omit<BandProfile, "createdAt" | "
       tx.onerror = () => reject(tx.error);
     });
   } finally { db.close(); }
+  const savedArtist = await saveAccountArtist({ id: next.id, type: next.type === "solo" ? "solo" : "band", name: next.name, genre: next.genre, bio: next.bio, members: next.members, symbol: next.symbol, primary: next.primary, accent: next.accent, avatarObjectKey: next.avatarObjectKey || "" });
+  if (savedArtist.avatarObjectKey && savedArtist.avatarObjectKey !== next.avatarObjectKey) next.avatarObjectKey = savedArtist.avatarObjectKey;
   setActiveBandId(next.id);
   window.dispatchEvent(new CustomEvent("ysong:bands-changed", { detail: { id: next.id } }));
   return next;
 }
 
 export async function deleteBandProfile(id: string): Promise<void> {
+  await deleteAccountArtist(id);
   if (!("indexedDB" in window)) return;
   const db = await openDb();
   try {

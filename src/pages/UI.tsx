@@ -12,6 +12,7 @@ import {
 } from "../tabs/core";
 import ChatPane, { YSONG_WELCOME } from "../tabs/ChatPane";
 import SettingsPane from "../tabs/SettingsPane";
+import ProfilePane from "../tabs/Profile";
 import BottomDrawers from "../components/BottomDrawers";
 import { WorldPlayerDock, WorldPlayerProvider, useWorldPlayer } from "../components/WorldPlayer";
 import type { ProjectAsset } from "../components/ProjectAssetDrawer";
@@ -27,6 +28,9 @@ import WorldPane from "../tabs/World";
 import UploadMusicPane from "../tabs/UploadMusic";
 import LibraryPane from "../tabs/Library";
 import AchievementsPane from "../tabs/Achievements";
+import SingerStudioPane from "../tabs/SingerStudio";
+import AnalyticsPane from "../tabs/Analytics";
+import { signedProfileAssetUrl } from "../lib/profileApi";
 import NotificationBell from "../components/NotificationBell";
 import { fetchChatMessages } from "../lib/chatApi";
 
@@ -117,11 +121,14 @@ function BootTabs({
 					});
 
 					const MODULE_TITLES: Record<string, string> = {
+						profile: "Profile",
 						settings: "Settings",
 						daw: "DAW",
 						mixer: "Mixer",
 						createSong: "Create Song",
 						band: "Band Creation",
+						singers: "Singer Studio",
+						analytics: "Analytics",
 						artwork: "Artwork Studio",
 						library: "My Library",
 						achievements: "Achievements",
@@ -291,7 +298,7 @@ function PrefetchChatMessagesFromTabs({
 }
 
 export default function UI() {
-	const [me, setMe] = useState<{ email: string; displayName: string } | null>(null);
+	const [me, setMe] = useState<{ id: string; email: string; displayName: string; avatarObjectKey?: string; avatarUrl?: string } | null>(null);
 
 	const [chats, setChats] = useState<Chat[]>([]);
 	const [chatsHydrated, setChatsHydrated] = useState(false);
@@ -308,11 +315,16 @@ export default function UI() {
 	});
 	const ensureWelcomeChat = useEnsureWelcomeChat(setChats);
 
-	// Fetch minimal profile (email)
+	// Fetch public profile identity used by the sidebar and chat avatars.
 	useEffect(() => {
-		apiGet<{ ok: boolean; user: { id: string; email: string; displayName: string } }>("/auth/me")
-			.then((u) => setMe({ email: u.user.email, displayName: u.user.displayName }))
-			.catch(() => {});
+		let alive = true;
+		const load = () => apiGet<{ ok: boolean; user: { id: string; email: string; displayName: string; avatarObjectKey?: string } }>("/auth/me").then(async (u) => {
+			const avatarUrl = u.user.avatarObjectKey ? await signedProfileAssetUrl(u.user.avatarObjectKey).catch(() => "") : "";
+			if (alive) setMe({ id:u.user.id, email:u.user.email, displayName:u.user.displayName, avatarObjectKey:u.user.avatarObjectKey, avatarUrl });
+		}).catch(() => {});
+		void load();
+		window.addEventListener("ysong:profile-changed", load);
+		return () => { alive = false; window.removeEventListener("ysong:profile-changed", load); };
 	}, []);
 
 	// Hydrate chats when "Save to cloud" is ON (Neon-backed via /api/settings)
@@ -441,6 +453,7 @@ export default function UI() {
 	const registry = {
 		// IMPORTANT: use the actual components here so their identity is stable.
 		chat: ChatPane,
+		profile: ProfilePane,
 		settings: SettingsPane,
 		daw: DAWPane,
 
@@ -448,6 +461,8 @@ export default function UI() {
 		mixer: MixerPane,
 		createSong: CreateSongPane,
 		band: BandCreationPane,
+		singers: SingerStudioPane,
+		analytics: AnalyticsPane,
 		artwork: ArtworkStudioPane,
 		library: LibraryPane,
 		achievements: AchievementsPane,
@@ -459,6 +474,7 @@ export default function UI() {
 	/* Bridge so UISidebar buttons open/activate tabs */
 	function SidebarWithTabsBridge(p: {
 		meDisplayName?: string | null;
+		meAvatarUrl?: string | null;
 		chats: Chat[];
 		activeId: string;
 		setActiveId: (id: string) => void;
@@ -514,11 +530,14 @@ export default function UI() {
 			}
 
 			const titles = {
+				profile: "Profile",
 				settings: "Settings",
 				daw: "DAW",
 				mixer: "Mixer",
 				createSong: "Create Song",
 				band: "Band Creation",
+				singers: "Singer Studio",
+				analytics: "Analytics",
 				artwork: "Artwork Studio",
 				library: "My Library",
 				achievements: "Achievements",
@@ -570,6 +589,7 @@ export default function UI() {
 				setActiveId={p.setActiveId}
 				newChat={() => onOpenModule("chat")}
 				meDisplayName={p.meDisplayName}
+				meAvatarUrl={p.meAvatarUrl}
 				onLogout={p.onLogout}
 				onOpenChatTab={onOpenChatTab}
 				onOpenModule={onOpenModule as any}
@@ -630,6 +650,7 @@ export default function UI() {
 							<div className="absolute inset-x-0 top-11 bottom-0 min-h-0 overflow-hidden">
 								<SidebarWithTabsBridge
 									meDisplayName={me?.displayName}
+									meAvatarUrl={me?.avatarUrl}
 									chats={chats}
 									activeId={activeId}
 									setActiveId={setActiveId}
@@ -665,6 +686,7 @@ export default function UI() {
 							</div>
 							<SidebarWithTabsBridge
 								meDisplayName={me?.displayName}
+								meAvatarUrl={me?.avatarUrl}
 								chats={chats}
 								activeId={activeId}
 								setActiveId={setActiveId}
@@ -678,7 +700,7 @@ export default function UI() {
 
 				<PlayerAwareMain
 					registry={registry}
-					extraProps={{ chats, setChats, projectAssets, setProjectAssets }}
+					extraProps={{ chats, setChats, projectAssets, setProjectAssets, meAvatarUrl: me?.avatarUrl || "", meDisplayName: me?.displayName || "" }}
 				/>
 			</div>
 

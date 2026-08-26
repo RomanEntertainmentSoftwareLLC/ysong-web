@@ -14,7 +14,7 @@ import { YSButton } from "../components/YSButton";
 
 /* -------------------------------- Types --------------------------------- */
 
-export type TabType = "chat" | "settings" | "daw" | "mixer" | "createSong" | "band" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
+export type TabType = "chat" | "profile" | "settings" | "daw" | "mixer" | "createSong" | "band" | "singers" | "analytics" | "artwork" | "library" | "achievements" | "market" | "world" | "upload";
 
 export type TabRecord = {
 	id: string;

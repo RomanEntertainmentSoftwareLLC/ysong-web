@@ -5,6 +5,7 @@ export type WorldTrack = {
 	releaseId: string;
 	ownerUserId: string;
 	title: string;
+	artistId: string;
 	artistName: string;
 	albumName: string;
 	releaseType: "single" | "album";
@@ -32,6 +33,7 @@ export type WorldTrack = {
 export type WorldRelease = {
 	id: string;
 	ownerUserId: string;
+	artistId?: string;
 	artistName: string;
 	title: string;
 	releaseType: "single" | "album";
@@ -156,7 +158,7 @@ export async function uploadWorldAsset(file: File) {
 
 export async function publishWorldTrack(payload: {
 	title: string;
-	artistName: string;
+	artistId: string;
 	releaseType: "single" | "album";
 	albumTitle?: string;
 	genre: string;
@@ -237,6 +239,14 @@ export function updateWorldTrack(trackId: string, patch: {
 
 export function updateWorldRelease(releaseId: string, patch: { artistName?: string; title?: string; genre?: string }) {
 	return request<{ ok: true; release: WorldRelease }>(`/api/world/releases/${encodeURIComponent(releaseId)}`, "PATCH", patch);
+}
+
+export function removeWorldTrack(trackId: string) {
+	return request<{ ok: true; releaseDeleted: boolean; releaseId: string }>(`/api/world/tracks/${encodeURIComponent(trackId)}`, "DELETE");
+}
+
+export function removeWorldRelease(releaseId: string) {
+	return request<{ ok: true; deleted: boolean }>(`/api/world/releases/${encodeURIComponent(releaseId)}`, "DELETE");
 }
 
 export function fetchPublicPlaylists() {

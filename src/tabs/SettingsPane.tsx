@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../ThemeContext";
 import { loadUserSettings, saveUserSettings, type UserSettingsResponse } from "../lib/userPrefsApi";
 import { YSButton } from "../components/YSButton";
-import { apiGet, apiPost } from "../lib/authApi";
 import BridgeSettings from "../components/BridgeSettings";
 import MidiSettings from "../components/MidiSettings";
 
@@ -150,43 +149,6 @@ function SmallSwitch({
 	);
 }
 
-
-function PublicIdentitySection() {
-	const [displayName, setDisplayName] = useState("");
-	const [savedName, setSavedName] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [message, setMessage] = useState("");
-
-	useEffect(() => {
-		apiGet<{ ok: boolean; user: { displayName?: string } }>("/auth/me")
-			.then((data) => { const name = String(data.user?.displayName || ""); setDisplayName(name); setSavedName(name); })
-			.catch(() => {});
-	}, []);
-
-	const save = async () => {
-		const clean = displayName.trim().replace(/\s+/g, " ");
-		if (!clean) { setMessage("Choose a username / display name first."); return; }
-		setBusy(true); setMessage("");
-		try {
-			const result = await apiPost<{ ok: true; displayName: string }>("/api/profile", { displayName: clean });
-			setDisplayName(result.displayName); setSavedName(result.displayName); setMessage("Saved.");
-		} catch (e: any) {
-			setMessage(e?.message === "username_taken" ? "That name is already in use." : "Could not save your public name.");
-		} finally { setBusy(false); }
-	};
-
-	return <Section title="Public identity" subtitle="Control the name other people see around YSong World.">
-		<div className="space-y-2">
-			<label htmlFor="settings-display-name" className="block text-sm font-medium">Username / display name</label>
-			<div className="flex flex-col sm:flex-row gap-2">
-				<input id="settings-display-name" value={displayName} maxLength={80} onChange={(e) => { setDisplayName(e.target.value); setMessage(""); }} className="min-w-0 flex-1 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500" />
-				<YSButton disabled={busy || displayName.trim() === savedName.trim()} onClick={save} className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-4 py-2 disabled:opacity-40">{busy ? "Saving…" : "Save"}</YSButton>
-			</div>
-			<p className="text-xs text-neutral-500">This public name is used for comments, playlists, likes and other social activity. Your email address stays private.</p>
-			{message && <div className="text-xs text-indigo-300">{message}</div>}
-		</div>
-	</Section>;
-}
 
 /* ---------------- Main ---------------- */
 
@@ -338,7 +300,6 @@ function SettingsCore() {
 						</div>
 					</header>
 
-					<PublicIdentitySection />
 
 					<Section title="Appearance" subtitle="Choose how YSong looks on your device.">
 						<DarkModeRow
