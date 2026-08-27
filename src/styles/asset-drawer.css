@@ -146,3 +146,42 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 }
+
+/* AI persona catalog: five compact cast cards per row on desktop. */
+.persona-drawer-grid {
+	@apply grid gap-2;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.persona-drawer-tile {
+	@apply min-w-0 rounded-xl border border-neutral-200 dark:border-neutral-800 p-2
+		flex flex-col items-center text-center bg-white/50 dark:bg-black/15
+		hover:bg-neutral-100 dark:hover:bg-white/[.06] transition;
+}
+.persona-drawer-tile-selected {
+	@apply border-violet-500 ring-1 ring-violet-500/50 bg-violet-500/10;
+}
+.persona-drawer-tile-in-room {
+	@apply border-emerald-500/70 bg-emerald-500/10;
+}
+.persona-drawer-name {
+	@apply mt-1.5 text-[11px] font-semibold truncate w-full;
+}
+.persona-drawer-sub {
+	@apply mt-0.5 text-[9px] opacity-55 leading-tight min-h-[22px] w-full overflow-hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+}
+.persona-drawer-custom {
+	@apply border-dashed;
+}
+.persona-drawer-plus {
+	@apply h-[58px] w-[58px] rounded-full border border-dashed border-neutral-400/70
+		grid place-items-center text-3xl font-light opacity-70;
+}
+@media (max-width: 760px) {
+	.persona-drawer-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 440px) {
+	.persona-drawer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

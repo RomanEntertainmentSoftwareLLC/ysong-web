@@ -25,6 +25,7 @@ type Props = {
 	// The drawer dock follows the actual workspace instead of assuming the old
 	// permanently-open 280px sidebar.
 	workspaceLeftPx?: number;
+	activeContext?: "chat" | "room" | "daw" | null;
 };
 
 function getActiveProjectId() {
@@ -53,9 +54,19 @@ export default function BottomDrawers({
 	projectAssets,
 	setProjectAssets,
 	workspaceLeftPx = 0,
+	activeContext = null,
 }: Props) {
 	const [openDrawer, setOpenDrawer] = useState<DrawerId>(null);
 	const [drawerDragTarget, setDrawerDragTarget] = useState<"assets" | "project" | null>(null);
+
+	useEffect(() => {
+		const onOpenDrawer = (event: Event) => {
+			const id = (event as CustomEvent)?.detail?.id as Exclude<DrawerId, null> | undefined;
+			if (id === "personas" || id === "assets" || id === "project") setOpenDrawer(id);
+		};
+		window.addEventListener("ysong:open-drawer", onOpenDrawer as EventListener);
+		return () => window.removeEventListener("ysong:open-drawer", onOpenDrawer as EventListener);
+	}, []);
 
 	const projectId = useMemo(() => getActiveProjectId(), []);
 
@@ -214,6 +225,8 @@ export default function BottomDrawers({
 						hideHandle
 						open={openDrawer === "personas"}
 						onOpenChange={(v) => setOpenDrawer(v ? "personas" : null)}
+						activeContext={activeContext}
+						activeChatId={activeChatId}
 					/>
 
 					<AssetDrawer

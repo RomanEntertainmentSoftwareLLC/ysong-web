@@ -30,6 +30,7 @@ import LibraryPane from "../tabs/Library";
 import AchievementsPane from "../tabs/Achievements";
 import SingerStudioPane from "../tabs/SingerStudio";
 import AnalyticsPane from "../tabs/Analytics";
+import RoomsPane from "../tabs/Rooms";
 import { signedProfileAssetUrl } from "../lib/profileApi";
 import NotificationBell from "../components/NotificationBell";
 import { fetchChatMessages } from "../lib/chatApi";
@@ -132,6 +133,7 @@ function BootTabs({
 						artwork: "Artwork Studio",
 						library: "My Library",
 						achievements: "Achievements",
+						rooms: "Rooms",
 						market: "Marketplace",
 						world: "YSong World",
 						upload: "Upload Music",
@@ -280,6 +282,7 @@ function PrefetchChatMessagesFromTabs({
 									text,
 									ts: m?.createdAt ? new Date(m.createdAt).getTime() : Date.now(),
 									attachments: atts,
+									personaId: m?.personaId || null,
 								};
 							});
 
@@ -466,6 +469,7 @@ export default function UI() {
 		artwork: ArtworkStudioPane,
 		library: LibraryPane,
 		achievements: AchievementsPane,
+		rooms: RoomsPane,
 		market: MarketplacePane,
 		world: WorldPane,
 		upload: UploadMusicPane,
@@ -541,6 +545,7 @@ export default function UI() {
 				artwork: "Artwork Studio",
 				library: "My Library",
 				achievements: "Achievements",
+				rooms: "Rooms",
 				market: "Marketplace",
 				world: "YSong World",
 				upload: "Upload Music",
@@ -700,7 +705,7 @@ export default function UI() {
 
 				<PlayerAwareMain
 					registry={registry}
-					extraProps={{ chats, setChats, projectAssets, setProjectAssets, meAvatarUrl: me?.avatarUrl || "", meDisplayName: me?.displayName || "" }}
+					extraProps={{ chats, setChats, projectAssets, setProjectAssets, meAvatarUrl: me?.avatarUrl || "", meDisplayName: me?.displayName || "", meUserId: me?.id || "" }}
 				/>
 			</div>
 
@@ -762,11 +767,13 @@ function WorkspaceBottomChrome({
 	const { playing } = useWorldPlayer();
 	const activeType = tabs.find((t) => t.id === activeId)?.type;
 	const inDaw = activeType === "daw";
+	const drawerContext = activeType === "chat" ? "chat" : activeType === "rooms" ? "room" : activeType === "daw" ? "daw" : null;
+	const showDrawers = !!drawerContext;
 
 
 	return (
 		<>
-			{inDaw && (
+			{showDrawers && (
 				<BottomDrawers
 					chats={chats}
 					setChats={setChats}
@@ -776,6 +783,7 @@ function WorkspaceBottomChrome({
 					projectAssets={projectAssets}
 					setProjectAssets={setProjectAssets}
 					workspaceLeftPx={workspaceLeftPx}
+					activeContext={drawerContext}
 				/>
 			)}
 			<WorldPlayerDock hidden={inDaw && !playing} workspaceLeftPx={workspaceLeftPx} />

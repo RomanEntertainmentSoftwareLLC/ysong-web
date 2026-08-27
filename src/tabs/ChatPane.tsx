@@ -6,7 +6,8 @@ import { fetchChatMessages, appendMessage } from "../lib/chatApi";
 import { YSButton } from "../components/YSButton";
 import { FilePill } from "../components/FilePill";
 import { audioController, type AudioAsset, type AudioTargetRef } from "../components/AudioController";
-import { YSONG_SYSTEM_PROMPT } from "../lib/ysongPersona";
+import { apiPost } from "../lib/authApi";
+import { DEFAULT_PERSONA_ID, getChatPersona, listPersonas, personaImage, type Persona } from "../lib/personaApi";
 
 const env = (import.meta as any).env || {};
 
@@ -79,6 +80,7 @@ type ChatMessage = {
 	text: string;
 	attachments?: Attachment[];
 	token?: string;
+	personaId?: string | null;
 	ts?: number; // timestamp (ms)
 };
 
@@ -1232,6 +1234,10 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 	const messageCount = chat?.messages?.length ?? 0;
 
 	const [input, setInput] = useState("");
+	const [personaCatalog, setPersonaCatalog] = useState<Persona[]>([]);
+	const [activePersonaId, setActivePersonaId] = useState<string>(() => {
+		try { return localStorage.getItem(`ysong:chatPersona:${chatId}`) || (chat as any)?.personaId || DEFAULT_PERSONA_ID; } catch { return (chat as any)?.personaId || DEFAULT_PERSONA_ID; }
+	});
 
 	// Emoji picker (desktop-only). Mobile already has OS emoji.
 	const [emojiOpen, setEmojiOpen] = useState(false);
@@ -1259,6 +1265,30 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 	const bottomRef = useRef<HTMLDivElement | null>(null);
 
 	const fetchedChatIdsRef = useRef<Set<string>>(new Set());
+
+	useEffect(() => {
+		let alive = true;
+		const fallback = (() => { try { return localStorage.getItem(`ysong:chatPersona:${chatId}`) || (chat as any)?.personaId || DEFAULT_PERSONA_ID; } catch { return (chat as any)?.personaId || DEFAULT_PERSONA_ID; } })();
+		setActivePersonaId(fallback);
+		void listPersonas().then((items) => { if (alive) setPersonaCatalog(items); }).catch(() => {});
+		void getChatPersona(chatId).then((result) => {
+			if (!alive) return;
+			setActivePersonaId(result.personaId || DEFAULT_PERSONA_ID);
+			try { localStorage.setItem(`ysong:chatPersona:${chatId}`, result.personaId || DEFAULT_PERSONA_ID); } catch {}
+		}).catch(() => {});
+		const onPersonaSelected = (event: Event) => {
+			const detail = (event as CustomEvent)?.detail;
+			if (detail?.chatId !== chatId || !detail?.persona?.id) return;
+			setActivePersonaId(detail.persona.id);
+			setPersonaCatalog((prev) => prev.some((p) => p.id === detail.persona.id) ? prev : [...prev, detail.persona]);
+		};
+		window.addEventListener("ysong:persona-selected", onPersonaSelected as EventListener);
+		return () => { alive = false; window.removeEventListener("ysong:persona-selected", onPersonaSelected as EventListener); };
+	}, [chatId]);
+
+	const personaById = new Map(personaCatalog.map((p) => [p.id, p]));
+	const activePersona = personaById.get(activePersonaId) || personaCatalog.find((p) => p.id === DEFAULT_PERSONA_ID) || null;
+	const openPersonaDrawer = () => window.dispatchEvent(new CustomEvent("ysong:open-drawer", { detail: { id: "personas" } }));
 
 	// Keep AudioController's registry in sync with the Asset Drawer / uploaded audio.
 	// Also pre-warm signed "play" URLs in the background so prompt-play works without autoplay blocks.
@@ -1456,26 +1486,17 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 					})
 					.join("\n");
 
-				const res = await fetch(API ? `${API}/chat` : "/chat", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						messages: [
-							{
-								role: "system",
-								content:
-									"You name chat conversations. Given a short transcript, respond with a very short title (3 to 6 words). No quotes, no emojis, no trailing period.",
-							},
-							{
-								role: "user",
-								content: "Write a concise title for this chat:\n\n" + snippet,
-							},
-						],
-					}),
+				const data = await apiPost<{ reply?: string }>("/chat", {
+					personaId: activePersonaId,
+					messages: [
+						{
+							role: "system",
+							content:
+								"You name chat conversations. Given a short transcript, respond with a very short title (3 to 6 words). No quotes, no emojis, no trailing period.",
+						},
+						{ role: "user", content: "Write a concise title for this chat:\n\n" + snippet },
+					],
 				});
-
-				if (!res.ok) throw new Error(`HTTP ${res.status}`);
-				const data = await res.json();
 				let title = (data?.reply ?? "").trim();
 
 				title = title.replace(/^["']|["']$/g, "");
@@ -1917,6 +1938,7 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 											{
 												role: "assistant",
 												text: "…",
+												personaId: activePersonaId,
 												token: typingToken,
 												ts: Date.now(),
 											} as ChatMessage,
@@ -1934,6 +1956,7 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 				role: "user",
 				content: hasText ? text : ZWSP,
 				attachments,
+				personaId: activePersonaId,
 			});
 
 			setChats((prev) =>
@@ -1970,6 +1993,7 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 				await appendMessage(chatId, {
 					role: "assistant",
 					content: localVisible,
+					personaId: activePersonaId,
 				});
 			} catch (e) {
 				console.error("Failed to save local assistant reply to Neon", e);
@@ -1985,6 +2009,7 @@ export default function ChatPane({ tab, chats, setChats, meAvatarUrl, meDisplayN
 									{
 										role: "assistant",
 										text: localVisible,
+										personaId: activePersonaId,
 										ts: Date.now(),
 									} as ChatMessage,
 								],
@@ -2028,22 +2053,15 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 - Stay in your current in-chat persona/voice (do not become robotic). Vary phrasing for play/pause/stop/seek acknowledgements.`
 				: "";
 
-			const res = await fetch(API ? `${API}/chat` : "/chat", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					messages: [
-						{ role: "system", content: YSONG_SYSTEM_PROMPT },
-						{ role: "system", content: audioToolMsg },
-						...(alreadyHandledMsg ? [{ role: "system", content: alreadyHandledMsg }] : []),
-						...baseMsgs,
-						{ role: "user", content: text },
-					],
-				}),
+			const data = await apiPost<{ reply?: string }>("/chat", {
+				personaId: activePersonaId,
+				messages: [
+					{ role: "system", content: audioToolMsg },
+					...(alreadyHandledMsg ? [{ role: "system", content: alreadyHandledMsg }] : []),
+					...baseMsgs,
+					{ role: "user", content: text },
+				],
 			});
-
-			if (!res.ok) throw new Error(`ai_failed_${res.status}`);
-			const data = await res.json();
 
 			const rawReply = redactAssetSecrets(data?.reply ?? "…");
 
@@ -2096,6 +2114,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 				await appendMessage(chatId, {
 					role: "assistant",
 					content: reply,
+					personaId: activePersonaId,
 				});
 			} catch (e) {
 				console.error("Failed to save assistant message to Neon", e);
@@ -2111,6 +2130,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 										? {
 												role: "assistant",
 												text: reply,
+												personaId: activePersonaId,
 												ts: Date.now(),
 										  }
 										: m
@@ -2178,6 +2198,13 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 
 	return (
 		<div className="h-full flex flex-col">
+			<div className="shrink-0 h-11 px-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-white/35 dark:bg-neutral-950/20">
+				<button type="button" onClick={openPersonaDrawer} className="flex items-center gap-2 min-w-0 rounded-lg px-2 py-1 hover:bg-black/5 dark:hover:bg-white/5" title="Change AI persona">
+					<Avatar src={personaImage(activePersona)} name={activePersona?.name || "Surfer Dude"} size={28} />
+					<div className="min-w-0 text-left"><div className="text-[9px] uppercase tracking-[.12em] opacity-45">AI Persona</div><div className="text-xs font-semibold truncate">{activePersona?.name || "Surfer Dude"}</div></div>
+				</button>
+				<button type="button" onClick={openPersonaDrawer} className="rounded-lg border px-2.5 py-1 text-[11px] opacity-70 hover:opacity-100">Switch</button>
+			</div>
 			{/* messages */}
 			<div
 				ref={scrollerRef}
@@ -2189,7 +2216,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 						{(Array.isArray(chat.messages) ? (chat.messages as unknown as ChatMessage[]) : []).map(
 							(m, i) => (
 								<div key={i} className={`flex items-end gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-									{m.role === "assistant" && <Avatar src="/ai-personas/surfer-dude.png" name="Surfer Dude" size={34} />}
+									{m.role === "assistant" && (() => { const p = personaById.get(m.personaId || DEFAULT_PERSONA_ID) || personaById.get(DEFAULT_PERSONA_ID) || activePersona; return <Avatar src={personaImage(p)} name={p?.name || "Surfer Dude"} size={34} />; })()}
 									<div
 										className={`flex-1 flex flex-col min-w-0 max-w-[calc(100%_-_42px)] ${m.role === "user" ? "items-end" : "items-start"}`}
 									>
@@ -2405,7 +2432,7 @@ ${summarizeLocalAudioActions(preExecutedAudioActions, audioAssets)}
 										send();
 									}
 								}}
-								placeholder={`Message ${import.meta.env.VITE_APP_NAME}…`}
+								placeholder={`Message ${activePersona?.name || import.meta.env.VITE_APP_NAME}…`}
 								style={{
 									fontFamily:
 										'"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif',

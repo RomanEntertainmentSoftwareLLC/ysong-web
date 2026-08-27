@@ -1,21 +1,12 @@
+import { apiPost } from "./authApi";
+import { DEFAULT_PERSONA_ID } from "./personaApi";
+
 export type LocalAiMessage = { role: "system" | "user" | "assistant"; content: string };
 
-const env = (import.meta as any).env || {};
-
-// Local studio AI intentionally follows the same backend route as the working
-// YSong chat surface. Do NOT use VITE_API_URL here: that value can point at the
-// old cloud API while the desktop Auth API + Vite proxy live on this machine.
-const RAW_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
-export const LOCAL_AI_BASE = String(RAW_BASE || "").replace(/\/+$/, "");
-
-export async function localAiChat(messages: LocalAiMessage[]): Promise<string> {
-  const endpoint = LOCAL_AI_BASE ? `${LOCAL_AI_BASE}/chat` : "/chat";
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
+// Studio AI uses the same authenticated backend persona/rules pipeline as main chat.
+// Universal + Surfer Dude are resolved from Neon on the server. Callers only add
+// their task-specific developer/system instructions here.
+export async function localAiChat(messages: LocalAiMessage[], personaId = DEFAULT_PERSONA_ID): Promise<string> {
+  const data = await apiPost<{ reply?: string }>("/chat", { personaId, messages });
   return String(data?.reply || "");
 }
