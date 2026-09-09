@@ -9,7 +9,7 @@ export type Chat = {
   messages?: { role: "user" | "assistant"; text: string; ts?: number; attachments?: any; personaId?: string | null }[];
 };
 
-type ModuleType = "profile" | "settings" | "daw" | "mixer" | "createSong" | "band" | "singers" | "analytics" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "upload";
+type ModuleType = "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "upload";
 
 type Props = {
   chats: Chat[];
@@ -33,6 +33,7 @@ const navItems: { label: string; type: ModuleType; icon: string }[] = [
   { label: "Rooms", type: "rooms", icon: "rooms" },
   { label: "DAW", type: "daw", icon: "wave" },
   { label: "Mixer", type: "mixer", icon: "sliders" },
+  { label: "Visuals", type: "visuals", icon: "visuals" },
   { label: "Create Song", type: "createSong", icon: "spark" },
   { label: "Band Creation", type: "band", icon: "users" },
   { label: "Singer Studio", type: "singers", icon: "mic" },
@@ -50,6 +51,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const paths: Record<string, React.ReactNode> = {
     wave: <><path d="M3 12h2l2-6 3 12 3-9 2 6 2-3h4"/></>,
     sliders: <><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></>,
+    visuals: <><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/><path d="m7 12 2-2 2 3 2-5 2 4 2-2"/></>,
     spark: <><path d="m12 3 1.4 4.2L18 9l-4.6 1.8L12 15l-1.4-4.2L6 9l4.6-1.8L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></>,
     users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5 5"/></>,
     mic: <><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></>,

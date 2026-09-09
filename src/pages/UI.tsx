@@ -20,6 +20,7 @@ import { YSButton } from "../components/YSButton";
 import type { DrawerAsset } from "../components/AssetDrawer";
 import DAWPane from "../tabs/DAW";
 import MixerPane from "../tabs/Mixer";
+import VisualsPane from "../tabs/Visuals";
 import MarketplacePane from "../tabs/Marketplace";
 import CreateSongPane from "../tabs/CreateSong";
 import BandCreationPane from "../tabs/BandCreation";
@@ -57,34 +58,15 @@ function useMediaQuery(query: string) {
 	return matches;
 }
 
-/* Make sure we have at least one chat; return its id. */
-function useEnsureWelcomeChat(setChats: Dispatch<SetStateAction<Chat[]>>) {
-	return () => {
-		const id = crypto.randomUUID();
-		setChats((current) => {
-			if (current.length > 0) return current;
-			const seed: Chat = {
-				id,
-				title: "",
-				messages: [{ role: "assistant", text: YSONG_WELCOME, ts: Date.now() }],
-			};
-			return [seed].concat(current);
-		});
-		return id;
-	};
-}
-
-/* Opens a chat tab on first load if none are open */
+/* Restores saved tabs; otherwise leaves the Home surface visible. */
 function BootTabs({
 	me,
 	chats,
-	ensureChat,
 	chatsHydrated,
 	onLayoutHydrated,
 }: {
 	me: { email: string; displayName: string } | null;
 	chats: Chat[];
-	ensureChat: () => string;
 	chatsHydrated: boolean;
 	onLayoutHydrated: () => void;
 }) {
@@ -126,6 +108,7 @@ function BootTabs({
 						settings: "Settings",
 						daw: "DAW",
 						mixer: "Mixer",
+						visuals: "Visuals",
 						createSong: "Create Song",
 						band: "Band Creation",
 						singers: "Singer Studio",
@@ -168,19 +151,14 @@ function BootTabs({
 			}
 
 			if (!restored) {
-				// fall back to a welcome chat
-				const firstChatId = chats[0]?.id;
-				const chatId = firstChatId ?? ensureChat();
-				openTab({
-					type: "chat",
-					title: "New Chat",
-					payload: { chatId },
-				});
+				// Leave the tab strip empty on a fresh account or a deliberately cleared
+				// workspace. PlayerAwareMain renders the YSong Home surface instead of
+				// dropping the user into a blank canvas or manufacturing a chat.
 			}
 
 			onLayoutHydrated();
 		})();
-	}, [chatsHydrated, me, tabs.length, chats, ensureChat, openTab, activateTab, onLayoutHydrated]);
+	}, [chatsHydrated, me, tabs.length, chats, openTab, activateTab, onLayoutHydrated]);
 
 	return null;
 }
@@ -300,8 +278,29 @@ function PrefetchChatMessagesFromTabs({
 	return null;
 }
 
-export default function UI() {
-	const [me, setMe] = useState<{ id: string; email: string; displayName: string; avatarObjectKey?: string; avatarUrl?: string } | null>(null);
+type ShellUserIdentity = {
+	id: string;
+	email: string;
+	displayName: string;
+	avatarObjectKey?: string;
+	avatarUrl?: string;
+};
+
+type UIShellUser = {
+	id: string;
+	email: string;
+	displayName?: string;
+	avatarObjectKey?: string;
+};
+
+export default function UI({ currentUser = null }: { currentUser?: UIShellUser | null }) {
+	const [me, setMe] = useState<ShellUserIdentity | null>(() => currentUser?.id ? {
+		id: currentUser.id,
+		email: currentUser.email,
+		displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "User",
+		avatarObjectKey: currentUser.avatarObjectKey || "",
+		avatarUrl: "",
+	} : null);
 
 	const [chats, setChats] = useState<Chat[]>([]);
 	const [chatsHydrated, setChatsHydrated] = useState(false);
@@ -316,18 +315,82 @@ export default function UI() {
 	const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(() => {
 		try { return sessionStorage.getItem("ysong:sidebar:desktopOpen") === "1"; } catch { return false; }
 	});
-	const ensureWelcomeChat = useEnsureWelcomeChat(setChats);
 
-	// Fetch public profile identity used by the sidebar and chat avatars.
+	// The app shell already validates /auth/me before rendering the workspace. Use
+	// that confirmed identity immediately, then refresh it here for profile/avatar
+	// changes. A transient second request must never strand the sidebar at "...".
+	useEffect(() => {
+		if (!currentUser?.id) return;
+		let alive = true;
+		const base: ShellUserIdentity = {
+			id: currentUser.id,
+			email: currentUser.email,
+			displayName: currentUser.displayName || currentUser.email?.split("@")[0] || "User",
+			avatarObjectKey: currentUser.avatarObjectKey || "",
+			avatarUrl: "",
+		};
+
+		setMe((prev) => ({ ...base, avatarUrl: prev?.id === base.id ? prev.avatarUrl || "" : "" }));
+		if (base.avatarObjectKey) {
+			void signedProfileAssetUrl(base.avatarObjectKey).then((avatarUrl) => {
+				if (alive) setMe((prev) => prev?.id === base.id ? { ...prev, ...base, avatarUrl } : { ...base, avatarUrl });
+			}).catch(() => {});
+		}
+		return () => { alive = false; };
+	}, [currentUser?.id, currentUser?.email, currentUser?.displayName, currentUser?.avatarObjectKey]);
+
 	useEffect(() => {
 		let alive = true;
-		const load = () => apiGet<{ ok: boolean; user: { id: string; email: string; displayName: string; avatarObjectKey?: string } }>("/auth/me").then(async (u) => {
-			const avatarUrl = u.user.avatarObjectKey ? await signedProfileAssetUrl(u.user.avatarObjectKey).catch(() => "") : "";
-			if (alive) setMe({ id:u.user.id, email:u.user.email, displayName:u.user.displayName, avatarObjectKey:u.user.avatarObjectKey, avatarUrl });
-		}).catch(() => {});
+		let retryTimer: number | null = null;
+		let retryMs = 750;
+
+		const load = async () => {
+			try {
+				const u = await apiGet<{ ok: boolean; user: { id: string; email: string; displayName: string; avatarObjectKey?: string } }>("/auth/me");
+				if (!alive || !u?.user?.id) return;
+				const base: ShellUserIdentity = {
+					id: u.user.id,
+					email: u.user.email,
+					displayName: u.user.displayName || u.user.email?.split("@")[0] || "User",
+					avatarObjectKey: u.user.avatarObjectKey || "",
+					avatarUrl: "",
+				};
+
+				// Commit the name immediately. Avatar URL signing is allowed to fail
+				// independently without erasing an otherwise valid identity.
+				setMe((prev) => ({ ...base, avatarUrl: prev?.id === base.id && prev.avatarObjectKey === base.avatarObjectKey ? prev.avatarUrl || "" : "" }));
+				if (base.avatarObjectKey) {
+					const avatarUrl = await signedProfileAssetUrl(base.avatarObjectKey).catch(() => "");
+					if (alive && avatarUrl) setMe((prev) => prev?.id === base.id ? { ...prev, avatarUrl } : { ...base, avatarUrl });
+				}
+				retryMs = 750;
+			} catch {
+				// RequireAuth already owns invalid-session redirects. Here we only
+				// recover from a transient local API/profile fetch failure.
+				if (!alive) return;
+				retryTimer = window.setTimeout(() => void load(), retryMs);
+				retryMs = Math.min(retryMs * 2, 8000);
+			}
+		};
+
+		const refresh = () => {
+			if (retryTimer != null) { window.clearTimeout(retryTimer); retryTimer = null; }
+			retryMs = 750;
+			void load();
+		};
+		const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+
 		void load();
-		window.addEventListener("ysong:profile-changed", load);
-		return () => { alive = false; window.removeEventListener("ysong:profile-changed", load); };
+		window.addEventListener("ysong:profile-changed", refresh);
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", onVisible);
+		return () => {
+			alive = false;
+			if (retryTimer != null) window.clearTimeout(retryTimer);
+			window.removeEventListener("ysong:profile-changed", refresh);
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", onVisible);
+		};
 	}, []);
 
 	// Hydrate chats when "Save to cloud" is ON (Neon-backed via /api/settings)
@@ -462,6 +525,7 @@ export default function UI() {
 
 		// These are lightweight stubs; leaving them as trivial components is fine.
 		mixer: MixerPane,
+		visuals: VisualsPane,
 		createSong: CreateSongPane,
 		band: BandCreationPane,
 		singers: SingerStudioPane,
@@ -538,6 +602,7 @@ export default function UI() {
 				settings: "Settings",
 				daw: "DAW",
 				mixer: "Mixer",
+				visuals: "Visuals",
 				createSong: "Create Song",
 				band: "Band Creation",
 				singers: "Singer Studio",
@@ -723,7 +788,6 @@ export default function UI() {
 			<BootTabs
 				me={me}
 				chats={chats}
-				ensureChat={ensureWelcomeChat}
 				chatsHydrated={chatsHydrated}
 				onLayoutHydrated={() => setLayoutHydrated(true)}
 			/>
@@ -735,18 +799,64 @@ export default function UI() {
 }
 
 
+
+function EmptyWorkspaceHome({ extraProps }: { extraProps: Record<string, any> }) {
+	const { openTab } = useTabManager();
+	const crew = [
+		{ name: "Surfer Dude", avatar: "/ai-personas/surfer-dude.png" },
+		{ name: "Goth Girl", avatar: "/ai-personas/goth-girl.png" },
+		{ name: "Pop Princess", avatar: "/ai-personas/pop-princess.png" },
+	];
+
+	const startChat = () => {
+		const id = crypto.randomUUID();
+		const newChat: Chat = { id, title: "", messages: [{ role: "assistant", text: YSONG_WELCOME }] as any[] };
+		const setChats = extraProps.setChats as Dispatch<SetStateAction<Chat[]>> | undefined;
+		setChats?.((current) => [newChat, ...current]);
+		openTab({ type: "chat", title: "New Chat", payload: { chatId: id } });
+	};
+
+	const openModule = (type: Exclude<TabType, "chat">, title: string) => openTab({ type, title, pinned: true });
+
+	return (
+		<div className="flex-1 min-h-0 overflow-y-auto bg-gradient-to-b from-neutral-950/[.02] to-transparent dark:from-white/[.015]">
+			<div className="mx-auto max-w-5xl px-6 py-12 md:py-16">
+				<div className="max-w-2xl">
+					<div className="text-[11px] uppercase tracking-[.24em] text-violet-500 mb-3">YSong</div>
+					<h1 className="text-3xl md:text-4xl font-semibold tracking-tight">Welcome to your music workspace.</h1>
+					<p className="mt-3 text-sm md:text-base opacity-60">Create music, collaborate in Rooms, chat with AI personas, or explore what other artists are making.</p>
+				</div>
+
+				<div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-8">
+					<button onClick={startChat} className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/50 p-4 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition"><div className="text-sm font-semibold">Start a chat</div><div className="text-xs opacity-50 mt-1">Talk with a YSong AI persona.</div></button>
+					<button onClick={()=>openModule("createSong","Create Song")} className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/50 p-4 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition"><div className="text-sm font-semibold">Create a song</div><div className="text-xs opacity-50 mt-1">Start from an idea and build a session.</div></button>
+					<button onClick={()=>openModule("daw","DAW")} className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/50 p-4 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition"><div className="text-sm font-semibold">New project</div><div className="text-xs opacity-50 mt-1">Open the DAW and start from scratch.</div></button>
+					<button onClick={()=>openModule("rooms","Rooms")} className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-950/50 p-4 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition"><div className="text-sm font-semibold">Open Rooms</div><div className="text-xs opacity-50 mt-1">Chat with humans and multiple AI personas.</div></button>
+				</div>
+
+				<div className="mt-10 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/45 dark:bg-neutral-950/35 p-5">
+					<div className="flex items-center justify-between gap-4"><div><div className="text-sm font-semibold">Meet your AI crew</div><div className="text-xs opacity-50 mt-1">Start with the built-in personas, then create your own.</div></div><button onClick={()=>openModule("rooms","Rooms")} className="text-xs text-violet-500 hover:text-violet-400">Create a room</button></div>
+					<div className="flex flex-wrap gap-3 mt-4">{crew.map((p)=><div key={p.name} className="flex items-center gap-2 rounded-xl border border-neutral-200 dark:border-neutral-800 px-3 py-2"><img src={p.avatar} alt="" className="h-9 w-9 rounded-full object-cover"/><span className="text-xs font-medium">{p.name}</span><span className="text-[9px] uppercase tracking-wide opacity-40">AI</span></div>)}</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 function PlayerAwareMain({ registry, extraProps }: { registry: any; extraProps: Record<string, any> }) {
 	const { current, playing } = useWorldPlayer();
 	const { tabs, activeId } = useTabManager();
 	const activeType = tabs.find((t) => t.id === activeId)?.type;
 	const playerVisible = !!current && (activeType !== "daw" || playing);
 
+	const hasActiveTab = !!activeId && tabs.some((t) => t.id === activeId);
+
 	return (
 		<main
 			className={`flex-1 min-w-0 h-full min-h-0 flex flex-col transition-[padding-bottom] duration-150 ${playerVisible ? "pb-[124px] md:pb-[78px]" : "pb-0"}`}
 		>
 			<TabBar />
-			<TabContentHost registry={registry} extraProps={extraProps} />
+			{hasActiveTab ? <TabContentHost registry={registry} extraProps={extraProps} /> : <EmptyWorkspaceHome extraProps={extraProps} />}
 		</main>
 	);
 }

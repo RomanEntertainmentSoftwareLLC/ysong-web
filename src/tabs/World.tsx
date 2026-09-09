@@ -5,6 +5,8 @@ import { YSButton } from "../components/YSButton";
 import EmojiPickerButton from "../components/EmojiPicker";
 import worldWordmark from "../assets/ysong-world.png";
 import { useWorldPlayer } from "../components/WorldPlayer";
+import { bridgeApi, normalizeVisualBroadcastProgram, type VisualBroadcastAssignment, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
+import { normalizeVisualScene, type VisualSceneState } from "../lib/visualsScene";
 import {
 	addTrackToWorldPlaylist,
 	createWorldComment,
@@ -244,7 +246,7 @@ export default function WorldPane() {
 
 	return <div className="h-full min-h-0 flex flex-col bg-neutral-950 text-neutral-100"><div className="flex-1 min-h-0 overflow-y-auto"><div className="p-4 md:p-6 pb-24">
 		{detailTrack ? <TrackDetailView track={detailTrack} onBack={() => setDetailTrack(null)} onPlay={(track) => startQueue(tracks, "YSong World", track.id)} onReact={react} onSave={toggleTrackSave} onSaveRelease={() => toggleReleaseSave(detailTrack.releaseId)} onFollow={() => toggleArtist(detailTrack)} onOpenRelease={() => openRelease(detailTrack.releaseId)} onArtistRadio={() => startArtistRadio(detailTrack)} onSongRadio={() => startSongRadio(detailTrack)} onRemove={() => void removeTrackFromWorld(detailTrack)} />
-		: playlistDetail ? <PlaylistView detail={playlistDetail} onBack={() => setPlaylistDetail(null)} onPlay={(track) => startQueue(playlistDetail.tracks, playlistDetail.playlist.title, track.id)} onOpenTrack={openTrack} onSavePlaylist={async () => { const r=await toggleWorldPlaylistSave(playlistDetail.playlist.id); setPlaylistDetail((p)=>p?{...p,playlist:{...p.playlist,isSaved:r.saved}}:p); setPlaylists((prev)=>prev.map((p)=>p.id===playlistDetail.playlist.id?{...p,isSaved:r.saved}:p)); }} onPlayAll={() => startQueue(playlistDetail.tracks, playlistDetail.playlist.title)} onRemove={async (trackId) => { await removeTrackFromWorldPlaylist(playlistDetail.playlist.id,trackId); setPlaylistDetail(await fetchWorldPlaylist(playlistDetail.playlist.id)); }} onMove={async (trackId,dir) => { if(!playlistDetail.playlist.isOwner)return; const ids=playlistDetail.tracks.map((t)=>t.id); const i=ids.indexOf(trackId), j=i+dir; if(i<0||j<0||j>=ids.length)return; [ids[i],ids[j]]=[ids[j],ids[i]]; await reorderWorldPlaylist(playlistDetail.playlist.id,ids); setPlaylistDetail(await fetchWorldPlaylist(playlistDetail.playlist.id)); }} />
+		: playlistDetail ? <PlaylistView detail={playlistDetail} onBack={() => setPlaylistDetail(null)} onPlay={(track) => startQueue(playlistDetail.tracks, playlistDetail.playlist.title, track.id, playlistDetail.playlist.id)} onOpenTrack={openTrack} onSavePlaylist={async () => { const r=await toggleWorldPlaylistSave(playlistDetail.playlist.id); setPlaylistDetail((p)=>p?{...p,playlist:{...p.playlist,isSaved:r.saved}}:p); setPlaylists((prev)=>prev.map((p)=>p.id===playlistDetail.playlist.id?{...p,isSaved:r.saved}:p)); }} onPlayAll={() => startQueue(playlistDetail.tracks, playlistDetail.playlist.title, undefined, playlistDetail.playlist.id)} onRemove={async (trackId) => { await removeTrackFromWorldPlaylist(playlistDetail.playlist.id,trackId); setPlaylistDetail(await fetchWorldPlaylist(playlistDetail.playlist.id)); }} onMove={async (trackId,dir) => { if(!playlistDetail.playlist.isOwner)return; const ids=playlistDetail.tracks.map((t)=>t.id); const i=ids.indexOf(trackId), j=i+dir; if(i<0||j<0||j>=ids.length)return; [ids[i],ids[j]]=[ids[j],ids[i]]; await reorderWorldPlaylist(playlistDetail.playlist.id,ids); setPlaylistDetail(await fetchWorldPlaylist(playlistDetail.playlist.id)); }} />
 		: release ? <ReleaseView release={release} onBack={() => setRelease(null)} onPlay={(track) => startQueue(release.tracks, release.title, track.id)} onReact={react} onOpenTrack={openTrack} onEditTrack={setEditingTrack} onEditRelease={() => setEditingRelease(release)} onSaveRelease={() => toggleReleaseSave(release.id)} onFollowArtist={() => release.tracks[0] && toggleArtist(release.tracks[0])} onArtistRadio={() => release.tracks[0] && startArtistRadio(release.tracks[0])} onSaveTrack={toggleTrackSave} onSongRadio={startSongRadio} onRemoveTrack={removeTrackFromWorld} onRemoveRelease={() => void removeReleaseFromWorld(release)} currentId={current?.id} playing={playing} />
 		: <>
 			<div className="flex flex-col lg:flex-row lg:items-end gap-4 justify-between mb-5"><div className="min-w-0"><div className="text-xs uppercase tracking-[0.22em] text-indigo-300">Independent music lives here</div><img src={worldWordmark} alt="YSong World" className="mt-2 h-[72px] w-[min(78vw,300px)] md:h-[86px] md:w-[360px] max-w-full object-cover object-center" /><p className="text-sm text-neutral-400 mt-2">Discover releases, songs, playlists and artists without turning your mobile device into a tiny desktop grid.</p></div><YSButton onClick={openUpload} className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 border border-indigo-400/40 font-medium">+ Upload Music</YSButton></div>
@@ -398,8 +400,120 @@ function TrackDetailView({track,onBack,onPlay,onReact,onSave,onSaveRelease,onFol
 }
 
 function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll,onRemove,onMove}:{detail:WorldPlaylistDetail;onBack:()=>void;onPlay:(t:WorldTrack)=>void;onOpenTrack:(t:WorldTrack)=>void;onSavePlaylist:()=>void;onPlayAll:()=>void;onRemove:(id:string)=>void;onMove:(id:string,dir:-1|1)=>void}) {
-	const {playlist,tracks}=detail; const cover=playlist.coverTrackId;
-	return <div className="max-w-5xl mx-auto"><button onClick={onBack} className="text-sm text-neutral-400 hover:text-white mb-5">← Back to World</button><div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-6 items-end mb-6">{cover?<img src={worldArtworkUrl(cover)} alt="" className="w-full max-w-[240px] aspect-square rounded-2xl object-cover"/>:<div className="w-full max-w-[240px] aspect-square rounded-2xl bg-gradient-to-br from-indigo-500/30 to-neutral-950 grid place-items-center text-6xl">♫</div>}<div><div className="uppercase tracking-[.2em] text-xs text-neutral-500">Playlist</div><h1 className="text-3xl md:text-4xl font-bold mt-1">{playlist.title}</h1><div className="text-neutral-400 mt-2">by {playlist.ownerName} • {tracks.length} songs</div>{playlist.description&&<p className="text-sm text-neutral-500 mt-2">{playlist.description}</p>}<div className="flex gap-2 mt-4"><YSButton disabled={!tracks.length} onClick={onPlayAll} className="rounded-full bg-white text-black px-5 py-2">▶ Play All</YSButton>{!playlist.isOwner&&<YSButton onClick={onSavePlaylist} className="rounded-full border border-neutral-700 px-4 py-2">{playlist.isSaved?"✓ Saved":"＋ Save Playlist"}</YSButton>}</div></div></div><div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.length===0?<div className="p-8 text-center text-neutral-500">This playlist is empty.</div>:tracks.map((t,i)=><div key={t.id} className="grid grid-cols-[40px_minmax(0,1fr)_auto] gap-3 items-center p-2.5 border-b last:border-0 border-neutral-800"><button onClick={()=>onPlay(t)} className="h-9 w-9 rounded-full border border-neutral-700">▶</button><button onClick={()=>onOpenTrack(t)} className="text-left min-w-0"><div className="font-medium truncate">{i+1}. {t.title}</div><div className="text-xs text-neutral-500 truncate">{t.artistName}</div></button>{playlist.isOwner&&<div className="flex gap-1"><button disabled={i===0} onClick={()=>onMove(t.id,-1)} className="px-2 py-1 rounded hover:bg-neutral-800 disabled:opacity-25">↑</button><button disabled={i===tracks.length-1} onClick={()=>onMove(t.id,1)} className="px-2 py-1 rounded hover:bg-neutral-800 disabled:opacity-25">↓</button><button onClick={()=>onRemove(t.id)} className="px-2 py-1 rounded hover:bg-red-500/10 text-red-300">✕</button></div>}</div>)}</div></div>;
+	const {playlist,tracks}=detail;
+	const cover=playlist.coverTrackId;
+	const albumNames=[...new Set(tracks.map(t=>t.albumName).filter(Boolean))];
+	const [visuals,setVisuals]=useState<VisualScenePreset<VisualSceneState>[]>([]);
+	const [program,setProgram]=useState<VisualBroadcastProgram|null>(null);
+	const [broadcastBusy,setBroadcastBusy]=useState(false);
+	const [broadcastNote,setBroadcastNote]=useState("");
+	const [previewing,setPreviewing]=useState("");
+	useEffect(()=>{
+		let cancelled=false;
+		Promise.all([bridgeApi.getVisualLibrary<VisualSceneState>(), bridgeApi.getVisualProgram(playlist.id)])
+			.then(([library,nextProgram])=>{if(cancelled)return;setVisuals(library.presets||[]);setProgram(normalizeVisualBroadcastProgram(nextProgram,playlist.id))})
+			.catch(()=>{if(!cancelled)setBroadcastNote("Start YSong Bridge to edit broadcast visuals.")});
+		return()=>{cancelled=true};
+	},[playlist.id]);
+	const saveProgram=async(next:VisualBroadcastProgram)=>{
+		const normalized=normalizeVisualBroadcastProgram(next,playlist.id);
+		setProgram(normalized);setBroadcastBusy(true);setBroadcastNote("");
+		try{await bridgeApi.setVisualProgram(playlist.id,normalized);window.dispatchEvent(new CustomEvent("ysong:world-broadcast-program",{detail:normalized}));setBroadcastNote("Broadcast program saved.")}
+		catch(e:any){setBroadcastNote(e?.message||"Could not save broadcast program.")}
+		finally{setBroadcastBusy(false)}
+	};
+	const patchProgram=(patch:Partial<VisualBroadcastProgram>)=>{if(program)void saveProgram({...program,...patch})};
+	const togglePool=(current:string[],sceneId:string)=>current.includes(sceneId)?current.filter(id=>id!==sceneId):[...current,sceneId];
+	const toggleDefaultScene=(sceneId:string)=>{if(program)void saveProgram({...program,defaultSceneIds:togglePool(program.defaultSceneIds,sceneId)})};
+	const toggleAlbumScene=(albumName:string,sceneId:string)=>{
+		if(!program)return;
+		const next={...program.albumDefaults};
+		const ids=togglePool(next[albumName]||[],sceneId);
+		if(ids.length)next[albumName]=ids;else delete next[albumName];
+		void saveProgram({...program,albumDefaults:next});
+	};
+	const patchTrackAssignment=(trackId:string,patch:Partial<VisualBroadcastAssignment>)=>{
+		if(!program)return;
+		const current:VisualBroadcastAssignment=program.trackAssignments[trackId]||{sceneIds:[]};
+		const nextAssignment={...current,...patch};
+		const hasOverrides=nextAssignment.sceneIds.length||nextAssignment.visualTransition||nextAssignment.visualTransitionSeconds!=null||nextAssignment.audioTransition||nextAssignment.crossfadeSeconds!=null;
+		const nextAssignments={...program.trackAssignments};
+		if(hasOverrides)nextAssignments[trackId]=nextAssignment;else delete nextAssignments[trackId];
+		void saveProgram({...program,trackAssignments:nextAssignments});
+	};
+	const toggleTrackScene=(trackId:string,sceneId:string)=>{
+		if(!program)return;
+		const current=program.trackAssignments[trackId]?.sceneIds||[];
+		patchTrackAssignment(trackId,{sceneIds:togglePool(current,sceneId)});
+	};
+	const clearTrackOverrides=(trackId:string)=>{
+		if(!program)return;
+		const next={...program.trackAssignments};delete next[trackId];void saveProgram({...program,trackAssignments:next});
+	};
+	const previewScene=async(preset:VisualScenePreset<VisualSceneState>,track?:WorldTrack)=>{
+		setPreviewing(preset.id);
+		try{
+			const base=normalizeVisualScene(preset.scene);
+			const next={...base,nowPlaying:{...base.nowPlaying,title:track?.title||base.nowPlaying.title,artist:track?.artistName||base.nowPlaying.artist,album:track?.albumName||base.nowPlaying.album},updatedAt:Date.now()};
+			await bridgeApi.setVisualScene(next);setBroadcastNote(`Previewing visual scene “${preset.name}”.`);
+		}catch(e:unknown){setBroadcastNote(e instanceof Error?e.message:"Could not preview visual scene.")}
+		finally{setPreviewing("")}
+	};
+	const sceneNames=(ids:string[])=>ids.map(id=>visuals.find(v=>v.id===id)?.name).filter(Boolean) as string[];
+	const resolvedVisualLabel=(track:WorldTrack)=>{
+		const direct=program?.trackAssignments[track.id]?.sceneIds||[];
+		if(direct.length)return `${direct.length} song visual${direct.length===1?"":"s"}`;
+		const album=program?.albumDefaults[track.albumName]||[];
+		if(album.length)return `${album.length} album visual${album.length===1?"":"s"}`;
+		const defaults=program?.defaultSceneIds||[];
+		if(defaults.length)return `${defaults.length} playlist visual${defaults.length===1?"":"s"}`;
+		return "current scene fallback";
+	};
+
+	return <div className="max-w-6xl mx-auto">
+		<button onClick={onBack} className="text-sm text-neutral-400 hover:text-white mb-5">← Back to World</button>
+		<div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-6 items-end mb-6">
+			{cover?<img src={worldArtworkUrl(cover)} alt="" className="w-full max-w-[240px] aspect-square rounded-2xl object-cover"/>:<div className="w-full max-w-[240px] aspect-square rounded-2xl bg-gradient-to-br from-indigo-500/30 to-neutral-950 grid place-items-center text-6xl">♫</div>}
+			<div><div className="uppercase tracking-[.2em] text-xs text-neutral-500">Playlist</div><h1 className="text-3xl md:text-4xl font-bold mt-1">{playlist.title}</h1><div className="text-neutral-400 mt-2">by {playlist.ownerName} • {tracks.length} songs</div>{playlist.description&&<p className="text-sm text-neutral-500 mt-2">{playlist.description}</p>}<div className="flex flex-wrap gap-2 mt-4"><YSButton disabled={!tracks.length} onClick={onPlayAll} className="rounded-full bg-white text-black px-5 py-2">{playlist.isOwner&&program?"▶ Start Broadcast":"▶ Play All"}</YSButton>{!playlist.isOwner&&<YSButton onClick={onSavePlaylist} className="rounded-full border border-neutral-700 px-4 py-2">{playlist.isSaved?"✓ Saved":"＋ Save Playlist"}</YSButton>}</div></div>
+		</div>
+		{playlist.isOwner&&program?<div className="mb-5 rounded-2xl border border-violet-500/25 bg-violet-500/5 p-4">
+			<div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-bold uppercase tracking-[.18em] text-violet-300">Broadcast Program</div><div className="mt-1 text-sm text-neutral-400">Songs, visual pools, radio rules and scene transitions travel together with this playlist.</div></div><div className="text-right"><div className="text-xs text-neutral-500">{broadcastBusy?"Saving…":broadcastNote}</div><div className="mt-1 text-[10px] text-neutral-600">{visuals.length} saved visual scene{visuals.length===1?"":"s"} available</div></div></div>
+			<div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
+				<label className="text-xs text-neutral-400">Audio transition<select value={program.audioTransition} onChange={e=>patchProgram({audioTransition:e.target.value as VisualBroadcastProgram["audioTransition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="regular">Regular</option><option value="gapless">Gapless</option><option value="crossfade">Crossfade</option></select></label>
+				<label className="text-xs text-neutral-400">Crossfade<input type="number" min={0.5} max={20} step={0.5} value={program.crossfadeSeconds} onChange={e=>patchProgram({crossfadeSeconds:Math.max(.5,Math.min(20,Number(e.target.value)||5))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+				<label className="text-xs text-neutral-400">Visual transition<select value={program.visualTransition} onChange={e=>patchProgram({visualTransition:e.target.value as VisualBroadcastProgram["visualTransition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="cut">Cut</option><option value="fade">Dissolve</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+				<label className="text-xs text-neutral-400">Visual seconds<input type="number" min={0.1} max={12} step={0.1} value={program.visualTransitionSeconds} onChange={e=>patchProgram({visualTransitionSeconds:Math.max(.1,Math.min(12,Number(e.target.value)||1.4))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+				<label className="text-xs text-neutral-400">Repeat<select value={program.repeatMode} onChange={e=>patchProgram({repeatMode:e.target.value as VisualBroadcastProgram["repeatMode"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="all">All</option><option value="off">Off</option><option value="one">One</option></select></label>
+				<label className="flex items-center gap-2 self-end rounded-lg border border-neutral-800 bg-neutral-950 px-2 py-2.5 text-xs"><input type="checkbox" checked={program.shuffle} onChange={e=>patchProgram({shuffle:e.target.checked})}/> Shuffle</label>
+				<label className="text-[11px] text-neutral-400">Avoid songs<input type="number" min={0} max={100} value={program.avoidRecent} onChange={e=>patchProgram({avoidRecent:Math.max(0,Math.min(100,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+				<label className="text-[11px] text-neutral-400">Avoid visuals<input type="number" min={0} max={50} value={program.visualAvoidRecent} onChange={e=>patchProgram({visualAvoidRecent:Math.max(0,Math.min(50,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+			</div>
+
+			<div className="mt-4 border-t border-violet-400/10 pt-3">
+				<div className="mb-2 flex items-center justify-between gap-3"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Playlist visual pool</div><div className="text-[10px] text-neutral-600">Used when a song and album do not override it. Several checked scenes rotate randomly without immediate repeats.</div></div><span className="text-[10px] text-violet-300">{program.defaultSceneIds.length} selected</span></div>
+				<div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-4">{visuals.length?visuals.map(v=><div key={v.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${program.defaultSceneIds.includes(v.id)?"border-violet-400/30 bg-violet-500/10":"border-neutral-800 bg-neutral-950"}`}><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={program.defaultSceneIds.includes(v.id)} onChange={()=>toggleDefaultScene(v.id)}/><span className="truncate">{v.name}</span></label><button onClick={()=>void previewScene(v)} disabled={previewing===v.id} className="rounded px-1.5 py-1 text-[10px] text-neutral-500 hover:bg-neutral-800 hover:text-white">{previewing===v.id?"…":"Preview"}</button></div>):<div className="text-xs text-neutral-500">Save scenes from Visuals first.</div>}</div>
+			</div>
+
+			{albumNames.length?<div className="mt-4 border-t border-violet-400/10 pt-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Album visual pools</div><div className="grid grid-cols-1 gap-2 md:grid-cols-2">{albumNames.map(album=>{const selected=program.albumDefaults[album]||[];return <details key={album} className="rounded-xl border border-neutral-800 bg-neutral-950/70 p-2"><summary className="cursor-pointer text-xs text-neutral-300"><span className="font-semibold">{album}</span><span className="ml-2 text-[10px] text-violet-300">{selected.length?`${selected.length} visual${selected.length===1?"":"s"}`:"playlist pool"}</span></summary><div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.map(v=><label key={v.id} className="flex items-center gap-2 rounded border border-neutral-800 px-2 py-1 text-[10px] text-neutral-400"><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggleAlbumScene(album,v.id)}/><span className="truncate">{v.name}</span></label>)}</div></details>})}</div></div>:null}
+		</div>:null}
+
+		<div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.length===0?<div className="p-8 text-center text-neutral-500">This playlist is empty.</div>:tracks.map((t,i)=>{
+			const assignment=program?.trackAssignments[t.id];
+			const assigned=assignment?.sceneIds||[];
+			const directNames=sceneNames(assigned);
+			return <div key={t.id} className="border-b last:border-0 border-neutral-800"><div className="grid grid-cols-[40px_minmax(0,1fr)_auto] gap-3 items-center p-2.5"><button onClick={()=>onPlay(t)} className="h-9 w-9 rounded-full border border-neutral-700">▶</button><button onClick={()=>onOpenTrack(t)} className="text-left min-w-0"><div className="font-medium truncate">{i+1}. {t.title}</div><div className="text-xs text-neutral-500 truncate">{t.artistName} • {t.albumName}</div>{program?<div className="mt-1 text-[10px] text-violet-300/80">{resolvedVisualLabel(t)}{directNames.length?` • ${directNames.join(" / ")}`:""}</div>:null}</button>{playlist.isOwner&&<div className="flex gap-1"><button disabled={i===0} onClick={()=>onMove(t.id,-1)} className="px-2 py-1 rounded hover:bg-neutral-800 disabled:opacity-25">↑</button><button disabled={i===tracks.length-1} onClick={()=>onMove(t.id,1)} className="px-2 py-1 rounded hover:bg-neutral-800 disabled:opacity-25">↓</button><button onClick={()=>onRemove(t.id)} className="px-2 py-1 rounded hover:bg-red-500/10 text-red-300">✕</button></div>}</div>
+			{playlist.isOwner&&program&&<details className="border-t border-neutral-900 bg-neutral-950/70 px-3 py-2"><summary className="cursor-pointer text-xs text-violet-300">Broadcast setup: {resolvedVisualLabel(t)}{assignment?.audioTransition?` • ${assignment.audioTransition}`:""}</summary>
+				<div className="mt-3"><div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-neutral-600">Song visual pool</div><div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">{visuals.length?visuals.map(v=><div key={v.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${assigned.includes(v.id)?"border-violet-400/30 bg-violet-500/10":"border-neutral-800"}`}><label className="flex min-w-0 flex-1 items-center gap-2 text-neutral-300"><input type="checkbox" checked={assigned.includes(v.id)} onChange={()=>toggleTrackScene(t.id,v.id)}/><span className="truncate">{v.name}</span></label><button onClick={()=>void previewScene(v,t)} className="rounded px-1 text-[9px] text-neutral-600 hover:text-white">Preview</button></div>):<span className="text-xs text-neutral-500">Save scenes from Visuals first.</span>}</div></div>
+				<div className="mt-3 grid grid-cols-1 gap-2 border-t border-neutral-900 pt-3 sm:grid-cols-2 lg:grid-cols-5">
+					<label className="text-[10px] text-neutral-500">Audio into this track<select value={assignment?.audioTransition||""} onChange={e=>patchTrackAssignment(t.id,{audioTransition:(e.target.value||undefined) as VisualBroadcastAssignment["audioTransition"]})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"><option value="">Program default</option><option value="regular">Regular</option><option value="gapless">Gapless</option><option value="crossfade">Crossfade</option></select></label>
+					<label className="text-[10px] text-neutral-500">Track crossfade<input type="number" min={0.5} max={20} step={0.5} value={assignment?.crossfadeSeconds??program.crossfadeSeconds} onChange={e=>patchTrackAssignment(t.id,{crossfadeSeconds:Math.max(.5,Math.min(20,Number(e.target.value)||program.crossfadeSeconds))})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"/></label>
+					<label className="text-[10px] text-neutral-500">Visual into this track<select value={assignment?.visualTransition||""} onChange={e=>patchTrackAssignment(t.id,{visualTransition:(e.target.value||undefined) as VisualBroadcastAssignment["visualTransition"]})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"><option value="">Program default</option><option value="cut">Cut</option><option value="fade">Dissolve</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+					<label className="text-[10px] text-neutral-500">Visual seconds<input type="number" min={0.1} max={12} step={0.1} value={assignment?.visualTransitionSeconds??program.visualTransitionSeconds} onChange={e=>patchTrackAssignment(t.id,{visualTransitionSeconds:Math.max(.1,Math.min(12,Number(e.target.value)||program.visualTransitionSeconds))})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"/></label>
+					<div className="flex items-end"><button onClick={()=>clearTrackOverrides(t.id)} className="w-full rounded border border-neutral-800 px-2 py-1.5 text-[10px] text-neutral-500 hover:border-red-400/30 hover:text-red-300">Clear song overrides</button></div>
+				</div>
+			</details>}
+			</div>})}</div>
+	</div>;
 }
 
 function CommentThread({track}:{track:WorldTrack}) {

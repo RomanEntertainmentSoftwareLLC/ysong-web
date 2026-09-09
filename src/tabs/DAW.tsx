@@ -806,6 +806,7 @@ export default function DAW(_props: TabRendererProps) {
 	// WebAudio context (lazy)
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const masterGainRef = useRef<GainNode | null>(null);
+	const masterVisualAnalyserRef = useRef<AnalyserNode | null>(null);
 	type TrackAudioBus = {
 		input: GainNode; trim: GainNode; hpf: BiquadFilterNode; lpf: BiquadFilterNode; low: BiquadFilterNode; lowMid: BiquadFilterNode; highMid: BiquadFilterNode; high: BiquadFilterNode; compressor: DynamicsCompressorNode;
 		gain: GainNode; widthInput: GainNode; splitter: ChannelSplitterNode; widthLL: GainNode; widthLR: GainNode; widthRL: GainNode; widthRR: GainNode; merger: ChannelMergerNode; panner: StereoPannerNode; analyser: AnalyserNode;
@@ -833,6 +834,7 @@ export default function DAW(_props: TabRendererProps) {
 	const loopScheduleNextCtxTimeRef = useRef(0);
 	const loopSchedulerBusyRef = useRef(false);
 	const transportPrimedRef = useRef(false);
+	const lastVisualTransportPushRef = useRef(0);
 
 	const stopSourcesForClip = (clipId: string) => {
 		const sources = activeClipSourcesRef.current.get(clipId);
@@ -1701,6 +1703,13 @@ export default function DAW(_props: TabRendererProps) {
 			masterGainRef.current = audioCtxRef.current.createGain();
 			masterGainRef.current.gain.value = clamp(masterLevel / 100, 0, 1.27);
 			masterGainRef.current.connect(audioCtxRef.current.destination);
+			const visualAnalyser = audioCtxRef.current.createAnalyser();
+			visualAnalyser.fftSize = 2048;
+			visualAnalyser.smoothingTimeConstant = 0.72;
+			visualAnalyser.minDecibels = -90;
+			visualAnalyser.maxDecibels = -10;
+			masterGainRef.current.connect(visualAnalyser);
+			masterVisualAnalyserRef.current = visualAnalyser;
 		} catch {
 			masterGainRef.current = null;
 		}
@@ -3699,6 +3708,13 @@ export default function DAW(_props: TabRendererProps) {
 		else if (command.type === "set-master-level") setMasterLevel(clamp(Math.round(command.value), 0, 127));
 		else if (command.type === "transport-toggle") togglePlay();
 		else if (command.type === "transport-stop") stop();
+		else if (command.type === "transport-seek-seconds") {
+			const beatSeconds = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
+			const barSeconds = beatSeconds * Math.max(1, sigNum);
+			const nextBar = clamp(1 + Math.max(0, command.value) / Math.max(0.001, barSeconds), 1, endBar);
+			setPlayheadPosBars(nextBar);
+			lastPosRef.current = nextBar;
+		}
 		else if (command.type === "set-bpm") changeBpm(command.value);
 		else if (command.type === "select-track") { setSelectedTrackId(command.trackId); setSelectedClipId(null); }
 		else if (command.type === "rename-track") setTracks((prev) => prev.map((track) => track.id === command.trackId ? { ...track, name: command.name } : track));
@@ -3729,6 +3745,7 @@ export default function DAW(_props: TabRendererProps) {
 			projectName,
 			playing: isPlaying,
 			playheadBar: playheadPosBars,
+			endBar,
 			bpm,
 			sigNum,
 			sigDen,
@@ -3755,7 +3772,85 @@ export default function DAW(_props: TabRendererProps) {
 				};
 			}),
 		});
-	}, [dawHydrated, projectName, isPlaying, playheadPosBars, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, trackMeters]);
+		const now = Date.now();
+		if (now - lastVisualTransportPushRef.current >= 100) {
+			lastVisualTransportPushRef.current = now;
+			const beatSeconds = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
+			const barSeconds = beatSeconds * Math.max(1, sigNum);
+			void bridgeApi.setVisualTransport({
+				source: "daw", playing: isPlaying, positionSeconds: Math.max(0, playheadPosBars - 1) * barSeconds,
+				durationSeconds: Math.max(0, endBar - 1) * barSeconds, title: projectName, artist: "", album: "", updatedAt: now,
+			}).catch(() => {});
+		}
+	}, [dawHydrated, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, trackMeters]);
+
+	// Feed browser/WebAudio master analysis into the native Bridge. Native VST3
+	// instruments are analyzed inside Bridge itself, then both paths are merged there.
+	// Keeping the Bridge as the rendezvous point also lets OBS Browser Source receive
+	// the exact same visual state even though OBS runs a different Chromium process.
+	useEffect(() => {
+		if (!dawHydrated) return;
+		let slowBass = 0;
+		let kickEnvelope = 0;
+		let busy = false;
+		const timer = window.setInterval(() => {
+			const analyser = masterVisualAnalyserRef.current;
+			const ctx = audioCtxRef.current;
+			if (!analyser || !ctx || busy) return;
+			busy = true;
+			try {
+				const time = new Float32Array(analyser.fftSize);
+				const freq = new Float32Array(analyser.frequencyBinCount);
+				analyser.getFloatTimeDomainData(time);
+				analyser.getFloatFrequencyData(freq);
+
+				let sumSq = 0;
+				let peak = 0;
+				for (const sample of time) {
+					sumSq += sample * sample;
+					peak = Math.max(peak, Math.abs(sample));
+				}
+				const rms = clamp(Math.sqrt(sumSq / Math.max(1, time.length)) * 2.1, 0, 1);
+				const nyquist = ctx.sampleRate / 2;
+				const hzPerBin = nyquist / Math.max(1, freq.length);
+				const normalizedDb = (db: number) => clamp((db + 78) / 68, 0, 1);
+				let bassSum = 0, bassN = 0, midsSum = 0, midsN = 0, highsSum = 0, highsN = 0;
+				for (let i = 1; i < freq.length; i++) {
+					const hz = i * hzPerBin;
+					const value = normalizedDb(freq[i]);
+					if (hz >= 25 && hz < 250) { bassSum += value; bassN++; }
+					else if (hz >= 250 && hz < 2200) { midsSum += value; midsN++; }
+					else if (hz >= 2200 && hz <= Math.min(16000, nyquist)) { highsSum += value; highsN++; }
+				}
+				const bass = bassN ? bassSum / bassN : 0;
+				const mids = midsN ? midsSum / midsN : 0;
+				const highs = highsN ? highsSum / highsN : 0;
+				const energy = clamp(bass * 0.38 + mids * 0.40 + highs * 0.22, 0, 1);
+				slowBass = slowBass * 0.94 + bass * 0.06;
+				const transient = clamp((bass - slowBass * 1.12) * 5.5, 0, 1);
+				kickEnvelope = Math.max(transient, kickEnvelope * 0.74);
+
+				const spectrum = Array.from({ length: 64 }, (_, displayBin) => {
+					const minHz = 30;
+					const maxHz = Math.max(minHz + 1, Math.min(16000, nyquist));
+					const f0 = minHz * Math.pow(maxHz / minHz, displayBin / 64);
+					const f1 = minHz * Math.pow(maxHz / minHz, (displayBin + 1) / 64);
+					const first = Math.max(1, Math.floor(f0 / hzPerBin));
+					const last = Math.min(freq.length - 1, Math.max(first, Math.ceil(f1 / hzPerBin)));
+					let total = 0;
+					for (let i = first; i <= last; i++) total += normalizedDb(freq[i]);
+					return total / Math.max(1, last - first + 1);
+				});
+
+				void bridgeApi.pushVisualBrowserAudio({
+					timestampUnixMs: Date.now(), rms, peak: clamp(peak, 0, 1), bass, mids, highs, energy, kick: kickEnvelope, spectrum,
+				}).catch(() => {});
+			} finally {
+				busy = false;
+			}
+		}, 50);
+		return () => window.clearInterval(timer);
+	}, [dawHydrated]);
 
 	// Spacebar toggles play/stop (unless you're typing)
 	useEffect(() => {
@@ -3792,6 +3887,8 @@ export default function DAW(_props: TabRendererProps) {
 				try { bus.analyser.disconnect(); } catch {}
 			}
 			trackAudioBusesRef.current.clear();
+			try { masterVisualAnalyserRef.current?.disconnect(); } catch {}
+			masterVisualAnalyserRef.current = null;
 		};
 	}, []);
 

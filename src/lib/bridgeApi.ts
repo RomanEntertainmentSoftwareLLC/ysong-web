@@ -113,6 +113,123 @@ export type Vst3InstanceStatus = {
 	error?: string | null;
 };
 
+
+export type VisualAudioFrame = {
+	sequence: number;
+	timestampUnixMs: number;
+	source: "browser" | "native" | "browser+native" | "idle" | string;
+	rms: number;
+	peak: number;
+	bass: number;
+	mids: number;
+	highs: number;
+	energy: number;
+	kick: number;
+	spectrum: number[];
+};
+
+export type BrowserVisualAudioFrame = Omit<VisualAudioFrame, "sequence" | "source">;
+
+
+export type VisualTransportState = {
+	source: "daw" | "world" | "idle" | string;
+	playing: boolean;
+	positionSeconds: number;
+	durationSeconds: number;
+	trackId?: string;
+	title?: string;
+	artist?: string;
+	album?: string;
+	playlistId?: string;
+	playlistName?: string;
+	transitionMode?: "regular" | "gapless" | "crossfade";
+	audioTransitionProgress?: number;
+	transitionProgress?: number;
+	transitionSequence?: number;
+	visualTransition?: "cut" | "fade" | "black" | "flash";
+	visualTransitionSeconds?: number;
+	visualSceneId?: string;
+	visualSceneName?: string;
+	nextTrackId?: string;
+	nextTitle?: string;
+	nextArtist?: string;
+	nextAlbum?: string;
+	updatedAt: number;
+};
+
+export type VisualScenePreset<T = unknown> = {
+	id: string;
+	name: string;
+	updatedAt: number;
+	scene: T;
+};
+
+export type VisualBroadcastAssignment = {
+	sceneIds: string[];
+	visualTransition?: "cut" | "fade" | "black" | "flash";
+	visualTransitionSeconds?: number;
+	audioTransition?: "regular" | "gapless" | "crossfade";
+	crossfadeSeconds?: number;
+};
+
+export type VisualBroadcastProgram = {
+	version: 2;
+	playlistId: string;
+	defaultSceneIds: string[];
+	albumDefaults: Record<string, string[]>;
+	trackAssignments: Record<string, VisualBroadcastAssignment>;
+	audioTransition: "regular" | "gapless" | "crossfade";
+	crossfadeSeconds: number;
+	visualTransition: "cut" | "fade" | "black" | "flash";
+	visualTransitionSeconds: number;
+	shuffle: boolean;
+	avoidRecent: number;
+	visualAvoidRecent: number;
+	repeatMode: "off" | "all" | "one";
+};
+
+
+export function normalizeVisualBroadcastProgram(program: Partial<VisualBroadcastProgram> | null | undefined, playlistId: string): VisualBroadcastProgram {
+	const assignments: Record<string, VisualBroadcastAssignment> = {};
+	for (const [trackId, raw] of Object.entries(program?.trackAssignments || {})) {
+		const assignment = raw as VisualBroadcastAssignment;
+		assignments[trackId] = {
+			sceneIds: Array.isArray(assignment?.sceneIds) ? assignment.sceneIds.filter(Boolean) : [],
+			...(assignment?.visualTransition ? { visualTransition: assignment.visualTransition } : {}),
+			...(Number.isFinite(assignment?.visualTransitionSeconds) ? { visualTransitionSeconds: Math.max(0.1, Math.min(12, Number(assignment.visualTransitionSeconds))) } : {}),
+			...(assignment?.audioTransition ? { audioTransition: assignment.audioTransition } : {}),
+			...(Number.isFinite(assignment?.crossfadeSeconds) ? { crossfadeSeconds: Math.max(0.5, Math.min(20, Number(assignment.crossfadeSeconds))) } : {}),
+		};
+	}
+	const albumDefaults: Record<string, string[]> = {};
+	for (const [album, ids] of Object.entries(program?.albumDefaults || {})) albumDefaults[album] = Array.isArray(ids) ? ids.filter(Boolean) : [];
+	return {
+		version: 2,
+		playlistId,
+		defaultSceneIds: Array.isArray(program?.defaultSceneIds) ? program!.defaultSceneIds!.filter(Boolean) : [],
+		albumDefaults,
+		trackAssignments: assignments,
+		audioTransition: program?.audioTransition || "regular",
+		crossfadeSeconds: Math.max(0.5, Math.min(20, Number(program?.crossfadeSeconds) || 5)),
+		visualTransition: program?.visualTransition || "fade",
+		visualTransitionSeconds: Math.max(0.1, Math.min(12, Number(program?.visualTransitionSeconds) || 1.4)),
+		shuffle: !!program?.shuffle,
+		avoidRecent: Number.isFinite(Number(program?.avoidRecent)) ? Math.max(0, Math.min(100, Number(program?.avoidRecent))) : 12,
+		visualAvoidRecent: Number.isFinite(Number(program?.visualAvoidRecent)) ? Math.max(0, Math.min(50, Number(program?.visualAvoidRecent))) : 3,
+		repeatMode: program?.repeatMode === "one" || program?.repeatMode === "off" ? program.repeatMode : "all",
+	};
+}
+
+export type VisualMediaUpload = {
+	ok: true;
+	id: string;
+	fileName: string;
+	contentType: string;
+	bytes: number;
+	path: string;
+	url: string;
+};
+
 export class BridgeRequestError extends Error {
 	status?: number;
 	constructor(message: string, status?: number) {
@@ -214,8 +331,65 @@ async function bridgePostAudioForEncode(wav: Blob, format: "flac" | "mp3", bitra
 	}
 }
 
+
+async function bridgeUploadVisualMedia(file: File): Promise<VisualMediaUpload> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), 300000);
+	try {
+		const qs = new URLSearchParams({ fileName: file.name });
+		const res = await fetch(`${BRIDGE_BASE}/visuals/media?${qs.toString()}`, {
+			method: "POST",
+			body: file,
+			headers: { "Content-Type": file.type || "application/octet-stream" },
+			signal: controller.signal,
+		});
+		if (!res.ok) {
+			let detail = "";
+			try { const body = await res.json() as { detail?: string }; detail = body.detail || ""; } catch { try { detail = await res.text(); } catch { /* ignore */ } }
+			throw new BridgeRequestError(detail || `YSong Bridge returned HTTP ${res.status}.`, res.status);
+		}
+		const body = await res.json() as Omit<VisualMediaUpload, "url">;
+		return { ...body, url: `${BRIDGE_BASE}${body.path}` };
+	} catch (error) {
+		if (error instanceof BridgeRequestError) throw error;
+		if (error instanceof DOMException && error.name === "AbortError") throw new BridgeRequestError("Visual media import timed out.");
+		throw new BridgeRequestError(error instanceof Error ? error.message : "Could not import visual media.");
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function bridgeEventSource<T>(path: string, onEvent: (event: T) => void, onConnection?: (connected: boolean) => void) {
+	const source = new EventSource(`${BRIDGE_BASE}${path}`);
+	source.onopen = () => onConnection?.(true);
+	source.onerror = () => onConnection?.(false);
+	source.onmessage = (message) => {
+		try { onEvent(JSON.parse(message.data) as T); } catch { /* malformed native event */ }
+	};
+	return () => source.close();
+}
+
 export const bridgeApi = {
 	health: () => bridgeFetch<BridgeHealth>("/health"),
+	getVisualAudio: () => bridgeFetch<VisualAudioFrame>("/visuals/audio", undefined, 5000),
+	pushVisualBrowserAudio: (frame: BrowserVisualAudioFrame) =>
+		bridgeFetch<{ ok: true }>("/visuals/audio/browser", { method: "POST", body: JSON.stringify(frame) }, 3000),
+	subscribeVisualAudio: (onEvent: (frame: VisualAudioFrame) => void, onConnection?: (connected: boolean) => void) =>
+		bridgeEventSource<VisualAudioFrame>("/visuals/audio/events", onEvent, onConnection),
+	getVisualScene: <T = unknown>() => bridgeFetch<{ sequence: number; scene: T }>("/visuals/state", undefined, 5000),
+	setVisualScene: (scene: unknown) => bridgeFetch<{ ok: true; sequence: number }>("/visuals/state", { method: "POST", body: JSON.stringify(scene) }, 5000),
+	subscribeVisualScene: <T = unknown>(onEvent: (payload: { sequence: number; scene: T }) => void, onConnection?: (connected: boolean) => void) =>
+		bridgeEventSource<{ sequence: number; scene: T }>("/visuals/state/events", onEvent, onConnection),
+	uploadVisualMedia: (file: File) => bridgeUploadVisualMedia(file),
+	getVisualTransport: () => bridgeFetch<VisualTransportState>("/visuals/transport", undefined, 5000),
+	setVisualTransport: (state: VisualTransportState) => bridgeFetch<{ ok: true; sequence: number }>("/visuals/transport", { method: "POST", body: JSON.stringify(state) }, 5000),
+	subscribeVisualTransport: (onEvent: (state: VisualTransportState) => void, onConnection?: (connected: boolean) => void) =>
+		bridgeEventSource<VisualTransportState>("/visuals/transport/events", onEvent, onConnection),
+	getVisualLibrary: <T = unknown>() => bridgeFetch<{ presets: VisualScenePreset<T>[] }>("/visuals/library", undefined, 5000),
+	saveVisualPreset: <T = unknown>(name: string, scene: T, id?: string) => bridgeFetch<{ ok: true; preset: VisualScenePreset<T> }>("/visuals/library", { method: "POST", body: JSON.stringify({ id, name, scene }) }, 5000),
+	deleteVisualPreset: (id: string) => bridgeFetch<{ ok: true }>(`/visuals/library/${encodeURIComponent(id)}`, { method: "DELETE" }, 5000),
+	getVisualProgram: (playlistId: string) => bridgeFetch<VisualBroadcastProgram>(`/visuals/programs/${encodeURIComponent(playlistId)}`, undefined, 5000),
+	setVisualProgram: (playlistId: string, program: VisualBroadcastProgram) => bridgeFetch<{ ok: true }>(`/visuals/programs/${encodeURIComponent(playlistId)}`, { method: "POST", body: JSON.stringify(program) }, 5000),
 	getPluginPaths: () => bridgeFetch<{ paths: string[] }>("/settings/plugin-paths"),
 	setPluginPaths: (paths: string[]) =>
 		bridgeFetch<{ ok: true; paths: string[] }>("/settings/plugin-paths", {

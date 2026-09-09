@@ -20,6 +20,7 @@ export type DawSessionSnapshot = {
   projectName: string;
   playing: boolean;
   playheadBar: number;
+  endBar: number;
   bpm: number;
   sigNum: number;
   sigDen: number;
@@ -39,6 +40,7 @@ export type DawSessionCommand =
   | { type: "set-master-level"; value: number }
   | { type: "transport-toggle" }
   | { type: "transport-stop" }
+  | { type: "transport-seek-seconds"; value: number }
   | { type: "open-track-fx"; trackId: string }
   | { type: "set-bpm"; value: number }
   | { type: "select-track"; trackId: string }

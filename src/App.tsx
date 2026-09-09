@@ -19,10 +19,13 @@ import TermsOfService from "./pages/TermsOfService";
 import TosGate from "./components/ToSGate";
 import { apiGet, apiPost } from "./lib/authApi";
 import DevViewportBadge from "./components/DevViewportBadge";
+import VisualOutput from "./pages/VisualOutput";
 
 type CurrentUser = {
 	id: string;
 	email: string;
+	displayName?: string;
+	avatarObjectKey?: string;
 	tosAcceptedAt?: string | null;
 	tosAcceptedVersion?: string | null;
 	currentTosVersion?: string | null;
@@ -128,10 +131,13 @@ function App() {
 	}, [currentUser?.id, currentUser?.currentTosVersion, currentUser?.tosAcceptedAt, currentUser?.tosAcceptedVersion]);
 	// ---------------------------------------------------------------------------
 
+	const isVisualOutput = location.pathname.startsWith("/visual-output");
+
 	return (
 		<>
-		<DevViewportBadge />
+		{!isVisualOutput && <DevViewportBadge />}
 		<Routes>
+			<Route path="/visual-output" element={<VisualOutput />} />
 			{/* Everything renders inside the shell so the correct header shows */}
 			<Route element={<AppShell />}>
 				<Route path="/" element={<HomeResponsive />} />
@@ -156,7 +162,7 @@ function App() {
 								userId={currentUser?.id}
 								onAccepted={refetchMe} // refresh /auth/me after accept
 							>
-								<UI />
+								<UI currentUser={currentUser} />
 							</TosGate>
 						</RequireAuth>
 					}
