@@ -1,14 +1,21 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { bridgeApi, normalizeVisualBroadcastProgram, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
+import { bridgeApi, normalizeVisualAdvertisingSettings, normalizeVisualBroadcastGlobals, normalizeVisualBroadcastProgram, type VisualAdvertisingSettings, type VisualBroadcastGlobals, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
 import { startVisualAnalysisForMediaElement } from "../lib/browserVisualAudio";
+import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
+import { publishLocalVisualTransport } from "../lib/visualsRealtime";
 import { normalizeVisualScene, type VisualSceneState } from "../lib/visualsScene";
+import { applyRadioStationDefaults, radioStationById } from "../lib/ysongRadio";
+import { createYSongAdSession, effectiveAdSchedule, isAdDue, noteCompletedMusicTrack, notePlayedAd, requestYSongAd, type YSongAdDecision, type YSongAdSessionState } from "../lib/ysongAds";
 import {
 	addTrackToWorldPlaylist,
 	countWorldPlay,
+	updateWorldPlayProgress,
 	createWorldPlaylist,
 	fetchWorldLibrary,
+	fetchWorldPlaylist,
+	fetchWorldTrack,
 	reactToWorldTrack,
 	toggleWorldArtistFollow,
 	toggleWorldReleaseSave,
@@ -23,6 +30,18 @@ import {
 type RepeatMode = "off" | "all" | "one";
 type WorldTransitionMode = "regular" | "gapless" | "crossfade";
 type WorldVisualTransition = "cut" | "fade" | "black" | "flash";
+export type WorldQueueKind = "playlist" | "radio" | "ad-hoc";
+
+export type WorldTransportCommand =
+	| { type: "play" | "pause" | "toggle" | "stop" | "previous" | "next" }
+	| { type: "seek"; seconds: number };
+
+const WORLD_TRANSPORT_COMMAND_EVENT = "ysong:world-transport-command";
+
+export function requestWorldTransport(command: WorldTransportCommand) {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new CustomEvent<WorldTransportCommand>(WORLD_TRANSPORT_COMMAND_EVENT, { detail: command }));
+}
 
 type WorldPlayerContextValue = {
 	current: WorldTrack | null;
@@ -31,8 +50,10 @@ type WorldPlayerContextValue = {
 	queue: WorldTrack[];
 	queueLabel: string;
 	queueId: string;
+	programId: string;
+	queueKind: WorldQueueKind;
 	playTrack: (track: WorldTrack) => void;
-	startQueue: (tracks: WorldTrack[], label: string, startTrackId?: string, queueId?: string) => void;
+	startQueue: (tracks: WorldTrack[], label: string, startTrackId?: string, queueId?: string, broadcastProgramId?: string, queueKind?: WorldQueueKind) => void;
 	next: () => void;
 	previous: () => void;
 	canNext: boolean;
@@ -51,6 +72,9 @@ type WorldPlayerContextValue = {
 	seek: (seconds: number) => void;
 	toggle: () => void;
 	patchCurrent: (patch: Partial<WorldTrack>) => void;
+	adBreakActive: boolean;
+	adTitle: string;
+	adSponsor: string;
 };
 
 const WorldPlayerContext = createContext<WorldPlayerContextValue | null>(null);
@@ -66,15 +90,55 @@ function storedShuffle() {
 	try { return localStorage.getItem("ysong:world-shuffle") === "1"; } catch { return false; }
 }
 
-const DEFAULT_BROADCAST_PROGRAM = (playlistId: string): VisualBroadcastProgram => normalizeVisualBroadcastProgram(null, playlistId);
+type StoredWorldPlayerState = {
+	current: WorldTrack | null;
+	queue: WorldTrack[];
+	queueIndex: number;
+	queueLabel: string;
+	queueId: string;
+	programId: string;
+	queueKind: WorldQueueKind;
+	positionSeconds: number;
+};
+
+const WORLD_PLAYER_STATE_KEY = "ysong:world-player-state:v1";
+
+function readStoredWorldPlayerState(): StoredWorldPlayerState | null {
+	try {
+		const raw = localStorage.getItem(WORLD_PLAYER_STATE_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as Partial<StoredWorldPlayerState>;
+		const current = parsed.current && typeof parsed.current.id === "string" ? parsed.current : null;
+		const queue = Array.isArray(parsed.queue) ? parsed.queue.filter((track): track is WorldTrack => !!track && typeof track.id === "string") : [];
+		const normalizedQueue = queue.length ? queue : current ? [current] : [];
+		const queueIndex = normalizedQueue.length ? Math.max(0, Math.min(normalizedQueue.length - 1, Number.isFinite(parsed.queueIndex) ? Number(parsed.queueIndex) : Math.max(0, normalizedQueue.findIndex((track) => track.id === current?.id)))) : -1;
+		return {
+			current: current ?? normalizedQueue[queueIndex] ?? null,
+			queue: normalizedQueue,
+			queueIndex,
+			queueLabel: typeof parsed.queueLabel === "string" ? parsed.queueLabel : "",
+			queueId: typeof parsed.queueId === "string" ? parsed.queueId : "",
+			programId: typeof parsed.programId === "string" ? parsed.programId : (typeof parsed.queueId === "string" ? parsed.queueId : ""),
+			queueKind: parsed.queueKind === "radio" || parsed.queueKind === "playlist" ? parsed.queueKind : (parsed.queueId ? "playlist" : "ad-hoc"),
+			positionSeconds: Math.max(0, Number(parsed.positionSeconds) || 0),
+		};
+	} catch { return null; }
+}
+
+const DEFAULT_BROADCAST_GLOBALS = normalizeVisualBroadcastGlobals(null);
+const DEFAULT_ADVERTISING_SETTINGS = normalizeVisualAdvertisingSettings(null);
+const DEFAULT_BROADCAST_PROGRAM = (programId: string, identity?: { playlistId?: string; stationId?: string; kind?: VisualBroadcastProgram["kind"]; name?: string }): VisualBroadcastProgram => normalizeVisualBroadcastProgram(null, programId, identity);
 
 export function WorldPlayerProvider({ children }: { children: ReactNode }) {
-	const [current, setCurrent] = useState<WorldTrack | null>(null);
+	const [restoredState] = useState<StoredWorldPlayerState | null>(() => readStoredWorldPlayerState());
+	const [current, setCurrent] = useState<WorldTrack | null>(() => restoredState?.current ?? null);
 	const [playing, setPlaying] = useState(false);
-	const [queue, setQueue] = useState<WorldTrack[]>([]);
-	const [queueIndex, setQueueIndex] = useState(-1);
-	const [queueLabel, setQueueLabel] = useState("");
-	const [queueId, setQueueId] = useState("");
+	const [queue, setQueue] = useState<WorldTrack[]>(() => restoredState?.queue ?? []);
+	const [queueIndex, setQueueIndex] = useState(() => restoredState?.queueIndex ?? -1);
+	const [queueLabel, setQueueLabel] = useState(() => restoredState?.queueLabel ?? "");
+	const [queueId, setQueueId] = useState(() => restoredState?.queueId ?? "");
+	const [programId, setProgramId] = useState(() => restoredState?.programId ?? restoredState?.queueId ?? "");
+	const [queueKind, setQueueKind] = useState<WorldQueueKind>(() => restoredState?.queueKind ?? (restoredState?.queueId ? "playlist" : "ad-hoc"));
 	const [repeatMode, setRepeatMode] = useState<RepeatMode>(() => storedRepeatMode());
 	const [shuffle, setShuffle] = useState(() => storedShuffle());
 	const [transitionMode, setTransitionMode] = useState<WorldTransitionMode>("regular");
@@ -83,13 +147,19 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	const [visualTransitionSeconds, setVisualTransitionSeconds] = useState(1.4);
 	const [crossfading, setCrossfading] = useState(false);
 	const [activeDeck, setActiveDeck] = useState<"a" | "b">("a");
+	const [activeAd, setActiveAd] = useState<YSongAdDecision | null>(null);
 	const audioARef = useRef<HTMLAudioElement | null>(null);
 	const audioBRef = useRef<HTMLAudioElement | null>(null);
+	const adAudioRef = useRef<HTMLAudioElement | null>(null);
 	const activeDeckRef = useRef<"a" | "b">("a");
-	const queueRef = useRef<WorldTrack[]>([]);
-	const queueIndexRef = useRef(-1);
-	const currentRef = useRef<WorldTrack | null>(null);
-	const queueIdRef = useRef("");
+	const queueRef = useRef<WorldTrack[]>(queue);
+	const queueIndexRef = useRef(queueIndex);
+	const currentRef = useRef<WorldTrack | null>(current);
+	const queueIdRef = useRef(queueId);
+	const programIdRef = useRef(programId);
+	const queueKindRef = useRef<WorldQueueKind>(queueKind);
+	const restoredPositionRef = useRef(Math.max(0, restoredState?.positionSeconds ?? 0));
+	const restoredProgramHydratedRef = useRef(false);
 	const transitionModeRef = useRef<WorldTransitionMode>("regular");
 	const crossfadeSecondsRef = useRef(5);
 	const visualTransitionRef = useRef<WorldVisualTransition>("fade");
@@ -104,20 +174,36 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	const recentVisualIdsRef = useRef<string[]>([]);
 	const plannedNextIndexRef = useRef(-1);
 	const playbackHistoryRef = useRef<number[]>([]);
+	const shuffleBagRef = useRef<number[]>([]);
+	const shuffleCycleRef = useRef(0);
 	const crossfadeBusyRef = useRef(false);
 	const crossfadeProgressRef = useRef(0);
 	const transitionSequenceRef = useRef(0);
 	const activeProgramRef = useRef<VisualBroadcastProgram | null>(null);
+	const activeGlobalsRef = useRef<VisualBroadcastGlobals>(DEFAULT_BROADCAST_GLOBALS);
+	const advertisingSettingsRef = useRef<VisualAdvertisingSettings>(DEFAULT_ADVERTISING_SETTINGS);
+	const adSessionRef = useRef<YSongAdSessionState>(createYSongAdSession());
+	const activeAdRef = useRef<YSongAdDecision | null>(null);
+	const pendingAfterAdIndexRef = useRef(-1);
 	const visualLibraryRef = useRef<VisualScenePreset<VisualSceneState>[]>([]);
 	const activeVisualSceneIdRef = useRef("");
 	const activeVisualSceneNameRef = useRef("");
-	const audioRef = activeDeck === "a" ? audioARef : audioBRef;
+	// Phase 16 Flashback uses actual listened time when available instead of
+	// treating every click as a full song. The event id comes from the World API;
+	// the browser keeps a small wall-clock accumulator while music is really playing.
+	const activePlayEventIdRef = useRef("");
+	const activePlayTrackIdRef = useRef("");
+	const listenedSecondsRef = useRef(0);
+	const listenClockStartedAtRef = useRef<number | null>(null);
+	const audioRef = activeAd ? adAudioRef : activeDeck === "a" ? audioARef : audioBRef;
 
 	useEffect(() => { activeDeckRef.current = activeDeck; }, [activeDeck]);
 	useEffect(() => { queueRef.current = queue; }, [queue]);
 	useEffect(() => { queueIndexRef.current = queueIndex; }, [queueIndex]);
 	useEffect(() => { currentRef.current = current; }, [current]);
 	useEffect(() => { queueIdRef.current = queueId; }, [queueId]);
+	useEffect(() => { programIdRef.current = programId; }, [programId]);
+	useEffect(() => { queueKindRef.current = queueKind; }, [queueKind]);
 	useEffect(() => { transitionModeRef.current = transitionMode; }, [transitionMode]);
 	useEffect(() => { crossfadeSecondsRef.current = crossfadeSeconds; }, [crossfadeSeconds]);
 	useEffect(() => { visualTransitionRef.current = visualTransition; }, [visualTransition]);
@@ -125,35 +211,175 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	useEffect(() => { shuffleRef.current = shuffle; try { localStorage.setItem("ysong:world-shuffle", shuffle ? "1" : "0"); } catch {} }, [shuffle]);
 	useEffect(() => { repeatRef.current = repeatMode; try { localStorage.setItem("ysong:world-repeat", repeatMode); } catch {} }, [repeatMode]);
 
+	useEffect(() => { activeAdRef.current = activeAd; }, [activeAd]);
+
 	const getDeck = useCallback((deck: "a" | "b") => deck === "a" ? audioARef.current : audioBRef.current, []);
 	const otherDeck = (deck: "a" | "b") => deck === "a" ? "b" as const : "a" as const;
+
+	const accrueListenClock = useCallback(() => {
+		const started = listenClockStartedAtRef.current;
+		if (started != null) {
+			listenedSecondsRef.current += Math.max(0, (performance.now() - started) / 1000);
+			listenClockStartedAtRef.current = null;
+		}
+		return listenedSecondsRef.current;
+	}, []);
+
+	const startListenClock = useCallback(() => {
+		if (!activePlayTrackIdRef.current || activeAdRef.current || listenClockStartedAtRef.current != null) return;
+		listenClockStartedAtRef.current = performance.now();
+	}, []);
+
+	const flushListenProgress = useCallback((completed = false, reset = false) => {
+		const seconds = accrueListenClock();
+		const eventId = activePlayEventIdRef.current;
+		if (eventId) void updateWorldPlayProgress(eventId, seconds, completed).catch(() => {});
+		if (reset) {
+			activePlayEventIdRef.current = "";
+			activePlayTrackIdRef.current = "";
+			listenedSecondsRef.current = 0;
+			listenClockStartedAtRef.current = null;
+		}
+		return seconds;
+	}, [accrueListenClock]);
+
+	// Restore the last World track/queue without autoplay. The dock and Visuals transport
+	// should still know what the user left off on after a reload/restart.
+	// If this is the first run of the persistence fix, recover the last World track
+	// from the Bridge transport snapshot so a patch reload does not erase the dock.
+	useEffect(() => {
+		if (restoredState?.current) return;
+		let cancelled = false;
+		void bridgeApi.getVisualTransport().then(async snapshot => {
+			if (cancelled || snapshot.source !== "world" || !snapshot.trackId) return;
+			try {
+				let restoredQueue: WorldTrack[] = [];
+				let restoredLabel = snapshot.playlistName || "";
+				if (snapshot.playlistId) {
+					try {
+						const detail = await fetchWorldPlaylist(snapshot.playlistId);
+						if (!cancelled && detail.tracks?.length) {
+							restoredQueue = detail.tracks;
+							restoredLabel = detail.playlist?.title || restoredLabel;
+						}
+					} catch { /* fall through to single-track recovery */ }
+				}
+				let track = restoredQueue.find(candidate => candidate.id === snapshot.trackId) || null;
+				if (!track) {
+					const fetched = await fetchWorldTrack(snapshot.trackId);
+					track = fetched.track;
+				}
+				if (cancelled || !track) return;
+				if (!restoredQueue.length) restoredQueue = [track];
+				const restoredIndex = Math.max(0, restoredQueue.findIndex(candidate => candidate.id === track!.id));
+				restoredPositionRef.current = Math.max(0, snapshot.positionSeconds || 0);
+				currentRef.current = track; setCurrent(track);
+				queueRef.current = restoredQueue; setQueue(restoredQueue);
+				queueIndexRef.current = restoredIndex; setQueueIndex(restoredIndex);
+				setQueueLabel(restoredLabel); setQueueId(snapshot.playlistId || ""); queueIdRef.current = snapshot.playlistId || "";
+				const restoredProgramId = snapshot.broadcastProgramId || snapshot.playlistId || "";
+				const restoredKind: WorldQueueKind = snapshot.broadcastKind === "radio" || snapshot.broadcastKind === "playlist" ? snapshot.broadcastKind : (snapshot.playlistId ? "playlist" : "ad-hoc");
+				setProgramId(restoredProgramId); programIdRef.current = restoredProgramId;
+				setQueueKind(restoredKind); queueKindRef.current = restoredKind;
+				const audio = getDeck(activeDeckRef.current);
+				if (audio) {
+					const url = worldAudioUrl(track.id); audio.src = url; audio.preload = "auto";
+					const position = restoredPositionRef.current;
+					const restore = () => { try { audio.currentTime = Math.min(position, Number.isFinite(audio.duration) && audio.duration > 0 ? Math.max(0, audio.duration - .01) : position); } catch {} };
+					if (audio.readyState >= 1) restore(); else audio.addEventListener("loadedmetadata", restore, { once: true });
+				}
+			} catch { /* stale Bridge snapshot can be ignored */ }
+		}).catch(() => {});
+		return () => { cancelled = true; };
+	}, [getDeck, restoredState]);
+
+	useEffect(() => {
+		const track = currentRef.current;
+		const audio = getDeck(activeDeckRef.current);
+		if (!track || !audio) return;
+		const url = worldAudioUrl(track.id);
+		const absolute = new URL(url, window.location.origin).href;
+		if (audio.src !== absolute) audio.src = url;
+		audio.preload = "auto";
+		const restorePosition = () => {
+			const limit = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.max(0, audio.duration - 0.01) : restoredPositionRef.current;
+			try { audio.currentTime = Math.min(restoredPositionRef.current, limit); } catch { /* metadata can race */ }
+		};
+		if (audio.readyState >= 1) restorePosition();
+		else audio.addEventListener("loadedmetadata", restorePosition, { once: true });
+		return () => audio.removeEventListener("loadedmetadata", restorePosition);
+	}, [getDeck]);
+
+	useEffect(() => {
+		if (!current) return;
+		let lastWrite = 0;
+		const save = () => {
+			const audio = getDeck(activeDeckRef.current);
+			const now = performance.now();
+			if (now - lastWrite < 400) return;
+			lastWrite = now;
+			const state: StoredWorldPlayerState = {
+				current,
+				queue: queue.length ? queue : [current],
+				queueIndex: queueIndex >= 0 ? queueIndex : 0,
+				queueLabel,
+				queueId,
+				programId,
+				queueKind,
+				positionSeconds: Math.max(0, audio?.currentTime || 0),
+			};
+			try { localStorage.setItem(WORLD_PLAYER_STATE_KEY, JSON.stringify(state)); } catch { /* best effort */ }
+		};
+		const timer = window.setInterval(save, 500);
+		window.addEventListener("beforeunload", save);
+		return () => { save(); window.clearInterval(timer); window.removeEventListener("beforeunload", save); };
+	}, [current, getDeck, programId, queue, queueId, queueIndex, queueKind, queueLabel]);
 
 	useEffect(() => {
 		const stops: Array<() => void> = [];
 		if (audioARef.current) stops.push(startVisualAnalysisForMediaElement(audioARef.current));
 		if (audioBRef.current) stops.push(startVisualAnalysisForMediaElement(audioBRef.current));
+		if (adAudioRef.current) stops.push(startVisualAnalysisForMediaElement(adAudioRef.current));
 		return () => stops.forEach((stopAnalysis) => stopAnalysis());
 	}, []);
 
-	const claimWorldPlayback = useCallback(() => { window.dispatchEvent(new Event("ysong:world-play-request")); }, []);
+	// Checkpoint active listening so Flashback stays current even during a long
+	// uninterrupted song. Pauses, track changes and completions also flush.
+	useEffect(() => {
+		const timer = window.setInterval(() => {
+			if (getPlaybackOwner() !== "world" || activeAdRef.current || listenClockStartedAtRef.current == null) return;
+			const seconds = accrueListenClock();
+			const eventId = activePlayEventIdRef.current;
+			if (eventId) void updateWorldPlayProgress(eventId, seconds, false).catch(() => {});
+			startListenClock();
+		}, 15000);
+		return () => window.clearInterval(timer);
+	}, [accrueListenClock, startListenClock]);
+
+	const requestWorldPlayback = useCallback(() => { window.dispatchEvent(new Event("ysong:world-play-request")); }, []);
 
 	useEffect(() => {
-		const onDawPlay = () => { audioARef.current?.pause(); audioBRef.current?.pause(); };
+		const onDawPlay = () => { audioARef.current?.pause(); audioBRef.current?.pause(); adAudioRef.current?.pause(); };
 		window.addEventListener("ysong:daw-play-request", onDawPlay);
 		return () => window.removeEventListener("ysong:daw-play-request", onDawPlay);
 	}, []);
 
 	const countAndSelect = useCallback((track: WorldTrack) => {
+		// Commit any time accumulated for the previous track before the active World
+		// item changes. This also handles manual next/previous and crossfades.
+		flushListenProgress(false, true);
+		activePlayTrackIdRef.current = track.id;
 		setCurrent(track);
 		currentRef.current = track;
 		recentIdsRef.current = [track.id, ...recentIdsRef.current.filter((id) => id !== track.id)].slice(0, Math.max(4, avoidRecentRef.current));
 		countWorldPlay(track.id)
 			.then((r) => {
+				if (activePlayTrackIdRef.current === track.id) activePlayEventIdRef.current = r.playEventId || "";
 				setCurrent((cur) => cur?.id === track.id ? { ...cur, playCount: r.playCount } : cur);
 				window.dispatchEvent(new CustomEvent("ysong:world-play-count", { detail: { trackId: track.id, playCount: r.playCount } }));
 			})
 			.catch(() => {});
-	}, []);
+	}, [flushListenProgress]);
 
 	const runVisualSceneTransition = useCallback((scene: VisualSceneState, mode: WorldVisualTransition, seconds: number, sceneId = "", sceneName = "") => {
 		if (visualTransitionRafRef.current != null) cancelAnimationFrame(visualTransitionRafRef.current);
@@ -187,6 +413,27 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		} catch { return visualLibraryRef.current; }
 	}, []);
 
+	const refreshBroadcastGlobals = useCallback(async () => {
+		try {
+			const globals = normalizeVisualBroadcastGlobals(await bridgeApi.getVisualBroadcastGlobals());
+			activeGlobalsRef.current = globals;
+			return globals;
+		} catch { return activeGlobalsRef.current; }
+	}, []);
+
+	const refreshAdvertisingSettings = useCallback(async () => {
+		try {
+			const settings = normalizeVisualAdvertisingSettings(await bridgeApi.getVisualAdvertisingSettings());
+			advertisingSettingsRef.current = settings;
+			return settings;
+		} catch { return advertisingSettingsRef.current; }
+	}, []);
+
+	// Global broadcast defaults also apply to ad-hoc World queues (song radio,
+	// artist radio, search playback), so hydrate them even before a playlist or
+	// first-class station program is opened.
+	useEffect(() => { void refreshBroadcastGlobals(); void refreshAdvertisingSettings(); }, [refreshAdvertisingSettings, refreshBroadcastGlobals]);
+
 	const effectiveAudioTransitionForTrack = useCallback((track: WorldTrack) => {
 		const program = activeProgramRef.current;
 		const assignment = program?.trackAssignments?.[track.id];
@@ -196,34 +443,65 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		};
 	}, []);
 
-	const applyVisualForTrack = useCallback(async (track: WorldTrack, playlistId = queueIdRef.current) => {
+	const applyVisualForTrack = useCallback(async (track: WorldTrack, activeProgramId = programIdRef.current) => {
 		try {
 			let scene: VisualSceneState | null = null;
 			let sceneId = "";
 			let sceneName = "";
 			let transition: WorldVisualTransition = visualTransitionRef.current;
 			let transitionSeconds = visualTransitionSecondsRef.current;
-			if (playlistId) {
-				const rawProgram = activeProgramRef.current?.playlistId === playlistId ? activeProgramRef.current : await bridgeApi.getVisualProgram(playlistId).catch(() => DEFAULT_BROADCAST_PROGRAM(playlistId));
-				const program = normalizeVisualBroadcastProgram(rawProgram, playlistId);
+			if (activeProgramId) {
+				const rawProgram = activeProgramRef.current?.programId === activeProgramId
+					? activeProgramRef.current
+					: await bridgeApi.getVisualProgram(activeProgramId).catch(() => DEFAULT_BROADCAST_PROGRAM(activeProgramId, { playlistId: queueIdRef.current, kind: queueKindRef.current, name: queueLabel }));
+				const stationId = queueKindRef.current === "radio" ? activeProgramId.replace(/^ysong-radio-/, "") : "";
+				const seededProgram = applyRadioStationDefaults(rawProgram as VisualBroadcastProgram & { isDefault?: boolean }, radioStationById(stationId));
+				const program = normalizeVisualBroadcastProgram(seededProgram, activeProgramId, { playlistId: queueIdRef.current, stationId: stationId || undefined, kind: queueKindRef.current, name: queueLabel });
 				activeProgramRef.current = program;
 				const assignment = program.trackAssignments[track.id];
 				transition = assignment?.visualTransition || program.visualTransition || "fade";
 				transitionSeconds = Math.max(0.1, Math.min(12, Number(assignment?.visualTransitionSeconds ?? program.visualTransitionSeconds) || 1.4));
-				const ids = assignment?.sceneIds?.length ? assignment.sceneIds : program.albumDefaults[track.albumName]?.length ? program.albumDefaults[track.albumName] : program.defaultSceneIds;
+				const globalIds = activeGlobalsRef.current.defaultSceneIds;
+				// New programs key album pools by release id so two artists can both have
+				// an album named e.g. "Greatest Hits" without sharing visuals. Album-name
+				// lookup remains as a compatibility fallback for older saved programs.
+				const albumIds = program.albumDefaults[track.releaseId] || program.albumDefaults[track.albumName] || [];
+				const ids = assignment?.sceneIds?.length
+					? assignment.sceneIds
+					: albumIds.length
+						? albumIds
+						: program.defaultSceneIds.length
+							? program.defaultSceneIds
+							: globalIds;
 				if (ids?.length) {
 					const library = visualLibraryRef.current.length ? visualLibraryRef.current : await refreshVisualLibrary();
 					const available = ids.filter((id) => library.some((item) => item.id === id));
 					if (available.length) {
-						const recent = new Set(recentVisualIdsRef.current.slice(0, visualAvoidRecentRef.current));
+						const avoidCount = Math.max(program.visualAvoidRecent, activeGlobalsRef.current.visualAvoidRecent);
+						const recent = new Set(recentVisualIdsRef.current.slice(0, avoidCount));
 						let candidates = available.filter((id) => !recent.has(id));
 						if (!candidates.length) candidates = available.filter((id) => id !== activeVisualSceneIdRef.current);
 						if (!candidates.length) candidates = available;
 						sceneId = candidates[Math.floor(Math.random() * candidates.length)] || available[0];
 						const preset = library.find((item) => item.id === sceneId);
 						if (preset) { scene = normalizeVisualScene(preset.scene); sceneName = preset.name; }
-						recentVisualIdsRef.current = [sceneId, ...recentVisualIdsRef.current.filter((id) => id !== sceneId)].slice(0, Math.max(4, visualAvoidRecentRef.current + 2));
+						recentVisualIdsRef.current = [sceneId, ...recentVisualIdsRef.current.filter((id) => id !== sceneId)].slice(0, Math.max(4, avoidCount + 2));
 					}
+				}
+			}
+			if (!scene && !activeProgramId && activeGlobalsRef.current.defaultSceneIds.length) {
+				const library = visualLibraryRef.current.length ? visualLibraryRef.current : await refreshVisualLibrary();
+				const available = activeGlobalsRef.current.defaultSceneIds.filter((id) => library.some((item) => item.id === id));
+				if (available.length) {
+					const avoidCount = activeGlobalsRef.current.visualAvoidRecent;
+					const recent = new Set(recentVisualIdsRef.current.slice(0, avoidCount));
+					let candidates = available.filter((id) => !recent.has(id));
+					if (!candidates.length) candidates = available.filter((id) => id !== activeVisualSceneIdRef.current);
+					if (!candidates.length) candidates = available;
+					sceneId = candidates[Math.floor(Math.random() * candidates.length)] || available[0];
+					const preset = library.find((item) => item.id === sceneId);
+					if (preset) { scene = normalizeVisualScene(preset.scene); sceneName = preset.name; }
+					recentVisualIdsRef.current = [sceneId, ...recentVisualIdsRef.current.filter((id) => id !== sceneId)].slice(0, Math.max(4, avoidCount + 2));
 				}
 			}
 			if (!scene) {
@@ -239,15 +517,25 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 				void bridgeApi.setVisualScene(scene).catch(() => {});
 			} else runVisualSceneTransition(scene, transition, transitionSeconds, sceneId, sceneName);
 		} catch { /* Visual assignment must never stop audio playback. */ }
-	}, [refreshVisualLibrary, runVisualSceneTransition]);
+	}, [queueLabel, refreshVisualLibrary, runVisualSceneTransition]);
 
-	const loadProgram = useCallback(async (playlistId: string): Promise<VisualBroadcastProgram | null> => {
-		if (!playlistId) { activeProgramRef.current = null; visualLibraryRef.current = []; return null; }
+	const loadProgram = useCallback(async (activeProgramId: string, identity?: { playlistId?: string; stationId?: string; kind?: VisualBroadcastProgram["kind"]; name?: string }): Promise<VisualBroadcastProgram | null> => {
+		if (!activeProgramId) {
+			activeProgramRef.current = null;
+			visualLibraryRef.current = [];
+			void refreshBroadcastGlobals();
+			return null;
+		}
 		let program: VisualBroadcastProgram;
-		try { program = normalizeVisualBroadcastProgram(await bridgeApi.getVisualProgram(playlistId), playlistId); }
-		catch { program = DEFAULT_BROADCAST_PROGRAM(playlistId); }
+		try {
+			const raw = await bridgeApi.getVisualProgram(activeProgramId);
+			const stationId = identity?.stationId || (activeProgramId.startsWith("ysong-radio-") ? activeProgramId.replace(/^ysong-radio-/, "") : "");
+			const seeded = applyRadioStationDefaults(raw as VisualBroadcastProgram & { isDefault?: boolean }, radioStationById(stationId));
+			program = normalizeVisualBroadcastProgram(seeded, activeProgramId, identity);
+		}
+		catch { program = DEFAULT_BROADCAST_PROGRAM(activeProgramId, identity); }
 		activeProgramRef.current = program;
-		void refreshVisualLibrary();
+		await Promise.all([refreshVisualLibrary(), refreshBroadcastGlobals()]);
 		setTransitionMode(program.audioTransition); transitionModeRef.current = program.audioTransition;
 		const seconds = Math.max(0.5, Math.min(20, program.crossfadeSeconds || 5)); setCrossfadeSeconds(seconds); crossfadeSecondsRef.current = seconds;
 		setVisualTransition(program.visualTransition || "fade"); visualTransitionRef.current = program.visualTransition || "fade";
@@ -256,8 +544,90 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		avoidRecentRef.current = Math.max(0, Math.min(100, program.avoidRecent));
 		visualAvoidRecentRef.current = Math.max(0, Math.min(50, program.visualAvoidRecent));
 		setRepeatMode(program.repeatMode); repeatRef.current = program.repeatMode;
+		shuffleBagRef.current = []; shuffleCycleRef.current = 0; plannedNextIndexRef.current = -1;
 		return program;
-	}, [refreshVisualLibrary]);
+	}, [refreshBroadcastGlobals, refreshVisualLibrary]);
+
+	const applyAdBreakVisual = useCallback(async (decision: YSongAdDecision) => {
+		const settings = advertisingSettingsRef.current;
+		const presentation = settings.presentation;
+		if (!presentation.enabled || !presentation.sceneId) return;
+		try {
+			const library = visualLibraryRef.current.length ? visualLibraryRef.current : await refreshVisualLibrary();
+			const preset = library.find((item) => item.id === presentation.sceneId);
+			if (!preset) return;
+			const scene = normalizeVisualScene(preset.scene);
+			scene.nowPlaying = {
+				...scene.nowPlaying,
+				title: presentation.label || "Ad Break",
+				artist: presentation.showSponsor ? decision.creative.sponsor : "",
+				album: "",
+			};
+			scene.updatedAt = Date.now();
+			runVisualSceneTransition(scene, presentation.visualTransition, presentation.visualTransitionSeconds, preset.id, preset.name);
+		} catch { /* Ad-break visuals are optional and must never stop audio. */ }
+	}, [refreshVisualLibrary, runVisualSceneTransition]);
+
+	const tryBeginAdBreak = useCallback(async (nextIndex: number, completedMusicSeconds: number) => {
+		// YSong ads are intentionally narrow: radio interstitials only. Playlists, albums,
+		// direct World playback and search queues never receive mid-roll ads. Live Rooms
+		// use a separate one-time audio pre-roll before stage entry.
+		if (queueKindRef.current !== "radio") {
+			adSessionRef.current = noteCompletedMusicTrack(adSessionRef.current, completedMusicSeconds);
+			return false;
+		}
+		const nowMs = Date.now();
+		const settings = advertisingSettingsRef.current;
+		const stateBefore = adSessionRef.current;
+		const due = isAdDue(settings, stateBefore, programIdRef.current, nowMs, completedMusicSeconds, 1, queueKindRef.current);
+		adSessionRef.current = noteCompletedMusicTrack(stateBefore, completedMusicSeconds);
+		if (!due) return false;
+
+		const currentTrack = currentRef.current;
+		const nextTrack = nextIndex >= 0 ? queueRef.current[nextIndex] : undefined;
+		const schedule = effectiveAdSchedule(settings, programIdRef.current);
+		const decision = await requestYSongAd(settings, {
+			programId: programIdRef.current,
+			programKind: queueKindRef.current,
+			queueLabel,
+			currentTrackId: currentTrack?.id,
+			nextTrackId: nextTrack?.id,
+			recentCreativeIds: adSessionRef.current.recentCreativeIds.slice(0, schedule.recentCreativeWindow),
+			nowMs,
+		});
+		if (!decision) return false;
+		const adAudio = adAudioRef.current;
+		if (!adAudio) return false;
+
+		for (const deck of ["a", "b"] as const) getDeck(deck)?.pause();
+		pendingAfterAdIndexRef.current = nextIndex;
+		activeAdRef.current = decision;
+		setActiveAd(decision);
+		adAudio.src = decision.creative.audioUrl;
+		adAudio.currentTime = 0;
+		adAudio.volume = storedVolume();
+		adAudio.preload = "auto";
+		requestWorldPlayback();
+		try {
+			await adAudio.play();
+			adSessionRef.current = notePlayedAd(adSessionRef.current, decision.creative.id, schedule.recentCreativeWindow, Date.now());
+			setPlaying(true);
+			void applyAdBreakVisual(decision);
+			return true;
+		} catch {
+			pendingAfterAdIndexRef.current = -1;
+			activeAdRef.current = null;
+			setActiveAd(null);
+			return false;
+		}
+	}, [applyAdBreakVisual, getDeck, queueLabel, requestWorldPlayback]);
+
+
+	useEffect(() => {
+		if (restoredProgramHydratedRef.current || !restoredState?.current || !programIdRef.current) return;
+		restoredProgramHydratedRef.current = true;
+		void loadProgram(programIdRef.current, { playlistId: queueIdRef.current, kind: queueKindRef.current, name: queueLabel });
+	}, [loadProgram, queueLabel, restoredState]);
 
 	const playOnDeck = useCallback((deck: "a" | "b", track: WorldTrack, volume = storedVolume()) => {
 		const audio = getDeck(deck);
@@ -266,10 +636,10 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		if (audio.src !== new URL(url, window.location.origin).href) audio.src = url;
 		audio.currentTime = 0;
 		audio.volume = Math.max(0, Math.min(1, volume));
-		claimWorldPlayback();
+		requestWorldPlayback();
 		void audio.play().catch(() => setPlaying(false));
 		return true;
-	}, [claimWorldPlayback, getDeck]);
+	}, [requestWorldPlayback, getDeck]);
 
 	const chooseNextIndex = useCallback((refresh = false) => {
 		const q = queueRef.current;
@@ -279,10 +649,24 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		if (!refresh && planned >= 0 && planned < q.length && planned !== index) return planned;
 		let result = -1;
 		if (shuffleRef.current && q.length > 1) {
-			const recent = new Set(recentIdsRef.current.slice(0, avoidRecentRef.current));
-			let candidates = q.map((track, i) => ({ track, i })).filter(({ track, i }) => i !== index && !recent.has(track.id));
-			if (!candidates.length) candidates = q.map((track, i) => ({ track, i })).filter(({ i }) => i !== index);
-			result = candidates[Math.floor(Math.random() * candidates.length)]?.i ?? -1;
+			let bag = shuffleBagRef.current.filter((candidate) => candidate >= 0 && candidate < q.length && candidate !== index);
+			if (!bag.length) {
+				if (shuffleCycleRef.current > 0 && repeatRef.current !== "all") { plannedNextIndexRef.current = -1; return -1; }
+				const recent = new Set(recentIdsRef.current.slice(0, avoidRecentRef.current));
+				const candidates = q.map((track, i) => ({ track, i })).filter(({ i }) => i !== index);
+				const preferred = candidates.filter(({ track }) => !recent.has(track.id));
+				const deferred = candidates.filter(({ track }) => recent.has(track.id));
+				const randomize = <T,>(items: T[]) => {
+					const next = [...items];
+					for (let i = next.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [next[i], next[j]] = [next[j], next[i]]; }
+					return next;
+				};
+				bag = [...randomize(preferred), ...randomize(deferred)].map(({ i }) => i);
+				shuffleBagRef.current = bag;
+				shuffleCycleRef.current += 1;
+			}
+			result = bag.shift() ?? -1;
+			shuffleBagRef.current = bag;
 		} else if (index < q.length - 1) result = index + 1;
 		else if (repeatRef.current === "all" && q.length > 1) result = 0;
 		plannedNextIndexRef.current = result;
@@ -303,8 +687,9 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		void applyVisualForTrack(track);
 	}, [applyVisualForTrack, countAndSelect, playOnDeck]);
 
-	const beginCrossfade = useCallback((nextIndex: number, requestedSeconds?: number) => {
-		if (crossfadeBusyRef.current || nextIndex < 0 || nextIndex >= queueRef.current.length) return;
+	const beginCrossfade = useCallback((nextIndex: number, requestedSeconds?: number, completedMusicSeconds?: number) => {
+		if (crossfadeBusyRef.current || activeAdRef.current || nextIndex < 0 || nextIndex >= queueRef.current.length) return;
+		if (completedMusicSeconds != null) adSessionRef.current = noteCompletedMusicTrack(adSessionRef.current, completedMusicSeconds);
 		const fromDeck = activeDeckRef.current;
 		const toDeck = otherDeck(fromDeck);
 		const fromAudio = getDeck(fromDeck);
@@ -316,7 +701,7 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		const url = worldAudioUrl(track.id);
 		if (toAudio.src !== new URL(url, window.location.origin).href) toAudio.src = url;
 		toAudio.currentTime = 0; toAudio.volume = 0;
-		claimWorldPlayback();
+		requestWorldPlayback();
 		void toAudio.play().catch(() => { crossfadeBusyRef.current = false; setCrossfading(false); activateIndex(nextIndex, fromDeck); });
 		playbackHistoryRef.current.push(queueIndexRef.current);
 		queueIndexRef.current = nextIndex; setQueueIndex(nextIndex);
@@ -342,41 +727,59 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 			}
 		};
 		requestAnimationFrame(step);
-	}, [activateIndex, applyVisualForTrack, claimWorldPlayback, countAndSelect, getDeck]);
+	}, [activateIndex, applyVisualForTrack, requestWorldPlayback, countAndSelect, getDeck]);
+
+	const cancelAdBreak = useCallback(() => {
+		const adAudio = adAudioRef.current;
+		if (adAudio) { adAudio.pause(); adAudio.currentTime = 0; }
+		activeAdRef.current = null;
+		setActiveAd(null);
+		pendingAfterAdIndexRef.current = -1;
+	}, []);
 
 	const playTrack = useCallback((track: WorldTrack) => {
+		cancelAdBreak();
 		const audio = getDeck(activeDeckRef.current);
 		if (currentRef.current?.id === track.id && audio) {
-			if (audio.paused) { claimWorldPlayback(); void audio.play().catch(() => {}); } else audio.pause();
+			if (audio.paused) { requestWorldPlayback(); void audio.play().catch(() => {}); } else audio.pause();
 			return;
 		}
 		setQueue([track]); queueRef.current = [track];
 		setQueueIndex(0); queueIndexRef.current = 0;
 		setQueueLabel(""); setQueueId(""); queueIdRef.current = "";
+		setProgramId(""); programIdRef.current = ""; setQueueKind("ad-hoc"); queueKindRef.current = "ad-hoc"; activeProgramRef.current = null;
+		shuffleBagRef.current = []; shuffleCycleRef.current = 0; plannedNextIndexRef.current = -1;
 		countAndSelect(track); playOnDeck(activeDeckRef.current, track); transitionSequenceRef.current += 1; void applyVisualForTrack(track, "");
-	}, [applyVisualForTrack, claimWorldPlayback, countAndSelect, getDeck, playOnDeck]);
+	}, [applyVisualForTrack, cancelAdBreak, requestWorldPlayback, countAndSelect, getDeck, playOnDeck]);
 
-	const startQueue = useCallback((tracks: WorldTrack[], label: string, startTrackId?: string, playlistId = "") => {
+	const startQueue = useCallback((tracks: WorldTrack[], label: string, startTrackId?: string, playlistId = "", broadcastProgramId = playlistId, nextQueueKind?: WorldQueueKind) => {
+		cancelAdBreak();
 		const seen = new Set<string>();
 		const clean = tracks.filter((track) => track?.id && !seen.has(track.id) && seen.add(track.id));
 		if (!clean.length) return;
+		const resolvedKind: WorldQueueKind = nextQueueKind || (playlistId ? "playlist" : broadcastProgramId ? "radio" : "ad-hoc");
+		const resolvedProgramId = broadcastProgramId || playlistId || "";
 		setQueue(clean); queueRef.current = clean;
 		setQueueLabel(label); setQueueId(playlistId); queueIdRef.current = playlistId;
+		setProgramId(resolvedProgramId); programIdRef.current = resolvedProgramId;
+		setQueueKind(resolvedKind); queueKindRef.current = resolvedKind;
 		plannedNextIndexRef.current = -1;
+		shuffleBagRef.current = []; shuffleCycleRef.current = 0;
 		playbackHistoryRef.current = []; recentIdsRef.current = []; recentVisualIdsRef.current = [];
 		const launch = async () => {
-			const program = playlistId ? await loadProgram(playlistId) : null;
+			const program = resolvedProgramId ? await loadProgram(resolvedProgramId, { playlistId, stationId: resolvedKind === "radio" ? resolvedProgramId.replace(/^ysong-radio-/, "") : undefined, kind: resolvedKind, name: label }) : null;
 			let index = startTrackId ? clean.findIndex((track) => track.id === startTrackId) : 0;
 			if (index < 0) index = 0;
 			if (!startTrackId && program?.shuffle && clean.length > 1) index = Math.floor(Math.random() * clean.length);
 			setQueueIndex(index); queueIndexRef.current = index;
 			const track = clean[index];
-			countAndSelect(track); playOnDeck(activeDeckRef.current, track); transitionSequenceRef.current += 1; void applyVisualForTrack(track, playlistId);
+			countAndSelect(track); playOnDeck(activeDeckRef.current, track); transitionSequenceRef.current += 1; void applyVisualForTrack(track, resolvedProgramId);
 		};
 		void launch();
-	}, [applyVisualForTrack, countAndSelect, loadProgram, playOnDeck]);
+	}, [applyVisualForTrack, cancelAdBreak, countAndSelect, loadProgram, playOnDeck]);
 
 	const next = useCallback(() => {
+		if (activeAdRef.current) return;
 		const index = chooseNextIndex();
 		if (index < 0) return;
 		const incoming = queueRef.current[index];
@@ -388,6 +791,7 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	}, [activateIndex, beginCrossfade, chooseNextIndex, effectiveAudioTransitionForTrack, getDeck]);
 
 	const previous = useCallback(() => {
+		if (activeAdRef.current) return;
 		const audio = getDeck(activeDeckRef.current);
 		if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
 		let index = -1;
@@ -400,10 +804,10 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		else if (audio) audio.currentTime = 0;
 	}, [activateIndex, getDeck]);
 
-	const canPrevious = queue.length > 1 || (audioRef.current?.currentTime ?? 0) > 0;
-	const canNext = queue.length > 1 && (shuffle || queueIndex < queue.length - 1 || repeatMode === "all");
+	const canPrevious = !activeAd && (queue.length > 1 || (audioRef.current?.currentTime ?? 0) > 0);
+	const canNext = !activeAd && queue.length > 1 && (shuffle || queueIndex < queue.length - 1 || repeatMode === "all");
 	const cycleRepeat = useCallback(() => setRepeatMode((mode) => mode === "off" ? "all" : mode === "all" ? "one" : "off"), []);
-	const toggleShuffle = useCallback(() => setShuffle((value) => !value), []);
+	const toggleShuffle = useCallback(() => setShuffle((value) => { shuffleBagRef.current = []; shuffleCycleRef.current = 0; plannedNextIndexRef.current = -1; return !value; }), []);
 	const patchCurrent = useCallback((patch: Partial<WorldTrack>) => setCurrent((cur) => cur ? { ...cur, ...patch } : cur), []);
 	const cancelCrossfade = useCallback((resetActive = false) => {
 		crossfadeBusyRef.current = false;
@@ -419,34 +823,110 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 			if (deck !== active || resetActive) audio.currentTime = 0;
 		}
 	}, [getDeck]);
-	const pause = useCallback(() => { cancelCrossfade(false); setPlaying(false); }, [cancelCrossfade]);
-	const stop = useCallback(() => { cancelCrossfade(true); setPlaying(false); }, [cancelCrossfade]);
-	const seek = useCallback((seconds: number) => { const audio = getDeck(activeDeckRef.current); if (audio) audio.currentTime = Math.max(0, Math.min(Number.isFinite(audio.duration) ? audio.duration : seconds, seconds)); }, [getDeck]);
-	const toggle = useCallback(() => {
+	const pause = useCallback(() => {
+		if (activeAdRef.current) adAudioRef.current?.pause();
+		else cancelCrossfade(false);
+		setPlaying(false);
+	}, [cancelCrossfade]);
+	const stop = useCallback(() => {
+		if (activeAdRef.current) {
+			const adAudio = adAudioRef.current;
+			if (adAudio) { adAudio.pause(); adAudio.currentTime = 0; }
+			activeAdRef.current = null; setActiveAd(null); pendingAfterAdIndexRef.current = -1;
+		}
+		cancelCrossfade(true); setPlaying(false);
+	}, [cancelCrossfade]);
+	const seek = useCallback((seconds: number) => {
+		if (activeAdRef.current) return;
 		const audio = getDeck(activeDeckRef.current);
-		if (!audio || !currentRef.current) return;
-		if (audio.paused) { claimWorldPlayback(); void audio.play().catch(() => {}); } else pause();
-	}, [claimWorldPlayback, getDeck, pause]);
+		if (audio) audio.currentTime = Math.max(0, Math.min(Number.isFinite(audio.duration) ? audio.duration : seconds, seconds));
+	}, [getDeck]);
+	const toggle = useCallback(() => {
+		const audio = activeAdRef.current ? adAudioRef.current : getDeck(activeDeckRef.current);
+		if (!audio || (!activeAdRef.current && !currentRef.current)) return;
+		if (audio.paused) { requestWorldPlayback(); void audio.play().catch(() => {}); } else pause();
+	}, [requestWorldPlayback, getDeck, pause]);
+
+	// One authoritative World transport command surface. Visuals, the World player UI,
+	// and future remote/broadcast controls all drive the same audio elements through here.
+	useEffect(() => {
+		const onCommand = (event: Event) => {
+			const command = (event as CustomEvent<WorldTransportCommand>).detail;
+			if (!command) return;
+			if (command.type === "previous") { previous(); return; }
+			if (command.type === "next") { next(); return; }
+			if (command.type === "stop") { stop(); return; }
+			if (command.type === "pause") { pause(); return; }
+			if (command.type === "seek") { seek(command.seconds); return; }
+			if (command.type === "toggle") { toggle(); return; }
+			const adAudio = adAudioRef.current;
+			if (command.type === "play" && activeAdRef.current && adAudio?.paused) {
+				requestWorldPlayback();
+				void adAudio.play().catch(() => setPlaying(false));
+				return;
+			}
+			const audio = getDeck(activeDeckRef.current);
+			const track = currentRef.current;
+			if (command.type === "play" && audio && track && audio.paused) {
+				const url = worldAudioUrl(track.id);
+				const absolute = new URL(url, window.location.origin).href;
+				if (audio.src !== absolute) audio.src = url;
+				requestWorldPlayback();
+				void audio.play().catch(() => setPlaying(false));
+			}
+		};
+		window.addEventListener(WORLD_TRANSPORT_COMMAND_EVENT, onCommand as EventListener);
+		return () => window.removeEventListener(WORLD_TRANSPORT_COMMAND_EVENT, onCommand as EventListener);
+	}, [getDeck, next, pause, previous, requestWorldPlayback, seek, stop, toggle]);
 
 	const handleEnded = useCallback((deck: "a" | "b") => {
-		if (deck !== activeDeckRef.current || crossfadeBusyRef.current) return;
+		if (deck !== activeDeckRef.current || crossfadeBusyRef.current || activeAdRef.current) return;
 		const audio = getDeck(deck);
-		if (repeatRef.current === "one" && audio) { audio.currentTime = 0; void audio.play().catch(() => setPlaying(false)); return; }
-		const index = chooseNextIndex();
-		if (index < 0) { setPlaying(false); return; }
-		const incoming = queueRef.current[index];
-		const transition = effectiveAudioTransitionForTrack(incoming);
-		setTransitionMode(transition.mode); transitionModeRef.current = transition.mode;
-		setCrossfadeSeconds(transition.seconds); crossfadeSecondsRef.current = transition.seconds;
-		if (transition.mode === "gapless") {
-			const toDeck = otherDeck(deck); const nextAudio = getDeck(toDeck); const track = incoming;
-			if (nextAudio) {
-				const url = worldAudioUrl(track.id); if (nextAudio.src !== new URL(url, window.location.origin).href) nextAudio.src = url;
-				activateIndex(index, toDeck); return;
-			}
+		flushListenProgress(true, false);
+		if (repeatRef.current === "one" && audio) {
+			// A completed repeat is a new listen event, just like manually replaying it.
+			const track = currentRef.current;
+			if (track) countAndSelect(track);
+			audio.currentTime = 0; void audio.play().catch(() => setPlaying(false)); return;
 		}
-		activateIndex(index, deck);
-	}, [activateIndex, chooseNextIndex, effectiveAudioTransitionForTrack, getDeck]);
+		const completedSeconds = Math.max(0, Number.isFinite(audio?.duration) ? Number(audio?.duration) : Number(audio?.currentTime) || 0);
+		const index = chooseNextIndex();
+		if (index < 0) {
+			adSessionRef.current = noteCompletedMusicTrack(adSessionRef.current, completedSeconds);
+			setPlaying(false);
+			return;
+		}
+		void (async () => {
+			const adStarted = await tryBeginAdBreak(index, completedSeconds);
+			if (adStarted) return;
+			const incoming = queueRef.current[index];
+			if (!incoming) return;
+			const transition = effectiveAudioTransitionForTrack(incoming);
+			setTransitionMode(transition.mode); transitionModeRef.current = transition.mode;
+			setCrossfadeSeconds(transition.seconds); crossfadeSecondsRef.current = transition.seconds;
+			if (transition.mode === "gapless") {
+				const toDeck = otherDeck(deck); const nextAudio = getDeck(toDeck);
+				if (nextAudio) {
+					const url = worldAudioUrl(incoming.id); if (nextAudio.src !== new URL(url, window.location.origin).href) nextAudio.src = url;
+					activateIndex(index, toDeck); return;
+				}
+			}
+			activateIndex(index, deck);
+		})();
+	}, [activateIndex, chooseNextIndex, countAndSelect, effectiveAudioTransitionForTrack, flushListenProgress, getDeck, tryBeginAdBreak]);
+
+	const handleAdEnded = useCallback(() => {
+		const index = pendingAfterAdIndexRef.current;
+		pendingAfterAdIndexRef.current = -1;
+		activeAdRef.current = null;
+		setActiveAd(null);
+		const adAudio = adAudioRef.current;
+		if (adAudio) { adAudio.pause(); adAudio.currentTime = 0; }
+		if (index >= 0 && index < queueRef.current.length) {
+			setTransitionMode("regular"); transitionModeRef.current = "regular";
+			activateIndex(index);
+		} else setPlaying(false);
+	}, [activateIndex]);
 
 	useEffect(() => {
 		const timer = window.setInterval(() => {
@@ -459,9 +939,12 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 			if (transition.mode !== "crossfade") return;
 			const remaining = audio.duration - audio.currentTime;
 			if (remaining <= transition.seconds) {
+				const settings = advertisingSettingsRef.current;
+				const hasPotentialAd = settings.providerId !== "house" || settings.fallbackProviderId !== "house" || settings.houseCreatives.some((creative) => creative.enabled && !!creative.audioUrl);
+				if (queueKindRef.current === "radio" && hasPotentialAd && isAdDue(settings, adSessionRef.current, programIdRef.current, Date.now(), audio.duration, 1, queueKindRef.current)) return;
 				setTransitionMode("crossfade"); transitionModeRef.current = "crossfade";
 				setCrossfadeSeconds(transition.seconds); crossfadeSecondsRef.current = transition.seconds;
-				beginCrossfade(index, transition.seconds);
+				beginCrossfade(index, transition.seconds, audio.duration);
 			}
 		}, 100);
 		return () => window.clearInterval(timer);
@@ -469,13 +952,63 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		const timer = window.setInterval(() => {
+			if (getPlaybackOwner() !== "world") return;
 			const track = currentRef.current;
+			const activeProgram = activeProgramRef.current;
+			const broadcastBranding = activeProgram?.branding || activeGlobalsRef.current.branding;
+			const broadcastTiming = activeProgram?.timing || activeGlobalsRef.current.timing;
+			const ad = activeAdRef.current;
+			const adAudio = adAudioRef.current;
+			if (ad && adAudio) {
+				const nextIndex = pendingAfterAdIndexRef.current;
+				const nextTrack = nextIndex >= 0 ? queueRef.current[nextIndex] : undefined;
+				const presentation = advertisingSettingsRef.current.presentation;
+				const visualTransport = {
+					source: "world" as const,
+					playing: !adAudio.paused,
+					positionSeconds: adAudio.currentTime || 0,
+					durationSeconds: Number.isFinite(adAudio.duration) ? adAudio.duration : (ad.creative.durationSeconds || 0),
+					playlistId: queueIdRef.current || undefined,
+					playlistName: queueLabel || undefined,
+					broadcastProgramId: programIdRef.current || undefined,
+					broadcastProgramName: activeProgram?.name || queueLabel || undefined,
+					broadcastKind: queueKindRef.current,
+					broadcastBranding,
+					broadcastTiming,
+					transitionMode: "regular" as const,
+					audioTransitionProgress: 0,
+					transitionProgress: visualTransitionProgressRef.current,
+					transitionSequence: transitionSequenceRef.current,
+					visualTransition: visualTransitionRef.current,
+					visualTransitionSeconds: visualTransitionSecondsRef.current,
+					visualSceneId: activeVisualSceneIdRef.current || undefined,
+					visualSceneName: activeVisualSceneNameRef.current || undefined,
+					nextTrackId: nextTrack?.id,
+					nextTitle: nextTrack?.title,
+					nextArtist: nextTrack?.artistName,
+					nextAlbum: nextTrack?.albumName,
+					adBreakActive: true,
+					adPresentationEnabled: presentation.enabled,
+					adShowSponsor: presentation.showSponsor,
+					adCreativeId: ad.creative.id,
+					adProviderId: ad.providerId,
+					adTitle: presentation.label || ad.creative.title || "Ad Break",
+					adSponsor: presentation.showSponsor ? ad.creative.sponsor : undefined,
+					adPositionSeconds: adAudio.currentTime || 0,
+					adDurationSeconds: Number.isFinite(adAudio.duration) ? adAudio.duration : (ad.creative.durationSeconds || 0),
+					updatedAt: Date.now(),
+				};
+				publishLocalVisualTransport(visualTransport);
+				void bridgeApi.setVisualTransport(visualTransport).catch(() => {});
+				return;
+			}
+
 			const audio = getDeck(activeDeckRef.current);
 			if (!track || !audio) return;
 			const nextIndex = chooseNextIndex();
 			const nextTrack = nextIndex >= 0 ? queueRef.current[nextIndex] : undefined;
-			void bridgeApi.setVisualTransport({
-				source: "world",
+			const visualTransport = {
+				source: "world" as const,
 				playing: !audio.paused,
 				positionSeconds: audio.currentTime || 0,
 				durationSeconds: Number.isFinite(audio.duration) ? audio.duration : (track.durationSeconds || 0),
@@ -485,6 +1018,11 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 				album: track.albumName,
 				playlistId: queueIdRef.current || undefined,
 				playlistName: queueLabel || undefined,
+				broadcastProgramId: programIdRef.current || undefined,
+				broadcastProgramName: activeProgram?.name || queueLabel || undefined,
+				broadcastKind: queueKindRef.current,
+				broadcastBranding,
+				broadcastTiming,
 				transitionMode: transitionModeRef.current,
 				audioTransitionProgress: crossfadeProgressRef.current,
 				transitionProgress: visualTransitionProgressRef.current,
@@ -497,8 +1035,11 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 				nextTitle: nextTrack?.title,
 				nextArtist: nextTrack?.artistName,
 				nextAlbum: nextTrack?.albumName,
+				adBreakActive: false,
 				updatedAt: Date.now(),
-			}).catch(() => {});
+			};
+			publishLocalVisualTransport(visualTransport);
+			void bridgeApi.setVisualTransport(visualTransport).catch(() => {});
 		}, 100);
 		return () => window.clearInterval(timer);
 	}, [chooseNextIndex, getDeck, queueLabel]);
@@ -519,10 +1060,11 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	useEffect(() => {
 		const onProgram = (event: Event) => {
 			const raw = (event as CustomEvent<VisualBroadcastProgram>).detail;
-			if (!raw || raw.playlistId !== queueIdRef.current) return;
-			const detail = normalizeVisualBroadcastProgram(raw, raw.playlistId);
+			const incomingId = raw?.programId || raw?.playlistId || "";
+			if (!raw || !incomingId || incomingId !== programIdRef.current) return;
+			const detail = normalizeVisualBroadcastProgram(raw, incomingId, { playlistId: queueIdRef.current, kind: queueKindRef.current, name: queueLabel });
 			activeProgramRef.current = detail;
-			plannedNextIndexRef.current = -1;
+			plannedNextIndexRef.current = -1; shuffleBagRef.current = []; shuffleCycleRef.current = 0;
 			setTransitionMode(detail.audioTransition); transitionModeRef.current = detail.audioTransition;
 			const seconds = Math.max(0.5, Math.min(20, detail.crossfadeSeconds || 5)); setCrossfadeSeconds(seconds); crossfadeSecondsRef.current = seconds;
 			setVisualTransition(detail.visualTransition || "fade"); visualTransitionRef.current = detail.visualTransition || "fade";
@@ -531,27 +1073,54 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 			avoidRecentRef.current = Math.max(0, Math.min(100, detail.avoidRecent || 0));
 			visualAvoidRecentRef.current = Math.max(0, Math.min(50, detail.visualAvoidRecent || 0));
 			setRepeatMode(detail.repeatMode); repeatRef.current = detail.repeatMode;
-			void refreshVisualLibrary().then(() => { if (currentRef.current) void applyVisualForTrack(currentRef.current, detail.playlistId); });
+			void refreshVisualLibrary().then(() => { if (currentRef.current) void applyVisualForTrack(currentRef.current, detail.programId); });
 		};
 		window.addEventListener("ysong:world-broadcast-program", onProgram as EventListener);
 		return () => window.removeEventListener("ysong:world-broadcast-program", onProgram as EventListener);
-	}, [applyVisualForTrack, refreshVisualLibrary]);
+	}, [applyVisualForTrack, queueLabel, refreshVisualLibrary]);
+
+	useEffect(() => {
+		const onGlobals = (event: Event) => {
+			const raw = (event as CustomEvent<VisualBroadcastGlobals>).detail;
+			if (!raw) return;
+			activeGlobalsRef.current = normalizeVisualBroadcastGlobals(raw);
+			if (currentRef.current) void applyVisualForTrack(currentRef.current, programIdRef.current);
+		};
+		window.addEventListener("ysong:world-broadcast-globals", onGlobals as EventListener);
+		return () => window.removeEventListener("ysong:world-broadcast-globals", onGlobals as EventListener);
+	}, [applyVisualForTrack]);
+
+	useEffect(() => {
+		const onAdvertising = (event: Event) => {
+			const raw = (event as CustomEvent<VisualAdvertisingSettings>).detail;
+			if (!raw) return;
+			advertisingSettingsRef.current = normalizeVisualAdvertisingSettings(raw);
+		};
+		window.addEventListener("ysong:world-advertising-settings", onAdvertising as EventListener);
+		return () => window.removeEventListener("ysong:world-advertising-settings", onAdvertising as EventListener);
+	}, []);
 
 	useEffect(() => () => { if (visualTransitionRafRef.current != null) cancelAnimationFrame(visualTransitionRafRef.current); }, []);
 
 	const value = useMemo<WorldPlayerContextValue>(() => ({
-		current, playing, audioRef, queue, queueLabel, queueId, playTrack, startQueue, next, previous, canNext, canPrevious,
+		current, playing, audioRef, queue, queueLabel, queueId, programId, queueKind, playTrack, startQueue, next, previous, canNext, canPrevious,
 		repeatMode, cycleRepeat, shuffle, toggleShuffle, transitionMode, crossfadeSeconds, visualTransition, visualTransitionSeconds, crossfading, pause, stop, seek, toggle, patchCurrent,
-	}), [current, playing, audioRef, queue, queueLabel, queueId, playTrack, startQueue, next, previous, canNext, canPrevious, repeatMode, cycleRepeat, shuffle, toggleShuffle, transitionMode, crossfadeSeconds, visualTransition, visualTransitionSeconds, crossfading, pause, stop, seek, toggle, patchCurrent]);
+		adBreakActive: !!activeAd, adTitle: advertisingSettingsRef.current.presentation.label || activeAd?.creative.title || "Ad Break", adSponsor: activeAd?.creative.sponsor || "",
+	}), [activeAd, current, playing, audioRef, queue, queueLabel, queueId, programId, queueKind, playTrack, startQueue, next, previous, canNext, canPrevious, repeatMode, cycleRepeat, shuffle, toggleShuffle, transitionMode, crossfadeSeconds, visualTransition, visualTransitionSeconds, crossfading, pause, stop, seek, toggle, patchCurrent]);
 
-	const onPlay = (deck: "a" | "b") => { if (deck === activeDeckRef.current) setPlaying(true); };
-	const onPause = (deck: "a" | "b") => { if (deck === activeDeckRef.current && !crossfadeBusyRef.current) setPlaying(false); };
+	const onPlay = (deck: "a" | "b") => {
+		if (deck === activeDeckRef.current) { claimPlaybackOwner("world"); setPlaying(true); startListenClock(); }
+	};
+	const onPause = (deck: "a" | "b") => {
+		if (deck === activeDeckRef.current && !crossfadeBusyRef.current) { setPlaying(false); flushListenProgress(false, false); }
+	};
 
 	return (
 		<WorldPlayerContext.Provider value={value}>
 			{children}
 			<audio ref={audioARef} onPlay={() => onPlay("a")} onPause={() => onPause("a")} onEnded={() => handleEnded("a")} />
 			<audio ref={audioBRef} onPlay={() => onPlay("b")} onPause={() => onPause("b")} onEnded={() => handleEnded("b")} />
+			<audio ref={adAudioRef} onPlay={() => { claimPlaybackOwner("world"); setPlaying(true); }} onPause={() => { if (activeAdRef.current && !adAudioRef.current?.ended) setPlaying(false); }} onEnded={handleAdEnded} />
 		</WorldPlayerContext.Provider>
 	);
 }
@@ -580,7 +1149,7 @@ function storedVolume() {
 }
 
 export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean; workspaceLeftPx: number }) {
-	const { current, playing, toggle, audioRef, queueLabel, next, previous, canNext, canPrevious, repeatMode, cycleRepeat, shuffle, toggleShuffle, crossfading, patchCurrent } = useWorldPlayer();
+	const { current, playing, toggle, audioRef, queueLabel, next, previous, canNext, canPrevious, repeatMode, cycleRepeat, shuffle, toggleShuffle, crossfading, patchCurrent, adBreakActive, adTitle, adSponsor } = useWorldPlayer();
 	const audio = audioRef.current;
 	const [time, setTime] = useState(0);
 	const [duration, setDuration] = useState(0);
@@ -617,7 +1186,7 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 	useEffect(() => {
 		setSaveMenu(false);
 		setPlaylistDialog(null);
-	}, [current?.id]);
+	}, [current?.id, adBreakActive]);
 
 	if (!current || hidden) return null;
 
@@ -688,7 +1257,7 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 		<div className="fixed right-0 bottom-0 z-[65] border-t border-neutral-800 bg-neutral-950/96 backdrop-blur-xl text-neutral-100 shadow-[0_-16px_45px_rgba(0,0,0,.28)]" style={{ left: workspaceLeftPx }}>
 			{/* Desktop player */}
 			<div className="hidden md:grid min-h-[78px] grid-cols-[minmax(190px,280px)_minmax(320px,1fr)_auto] gap-5 items-center px-4 py-2">
-				<NowPlaying current={current} queueLabel={queueLabel} />
+				<NowPlaying current={current} queueLabel={queueLabel} adBreakActive={adBreakActive} adTitle={adTitle} adSponsor={adSponsor} />
 				<div className="min-w-0">
 					<div className="flex items-center justify-center gap-2 mb-1">
 						<IconButton onClick={previous} disabled={!canPrevious && time <= 3} title="Previous"><PreviousIcon /></IconButton>
@@ -697,13 +1266,13 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 						<IconButton onClick={cycleRepeat} title={repeatTitle} active={repeatMode !== "off"}><RepeatIcon one={repeatMode === "one"} /></IconButton>
 						<IconButton onClick={toggleShuffle} title={shuffle ? "Shuffle on" : "Shuffle off"} active={shuffle}><ShuffleIcon /></IconButton>
 					</div>
-					<SeekBar audio={audio} time={time} duration={duration} />
+					<SeekBar audio={audio} time={time} duration={duration} disabled={adBreakActive} />
 				</div>
 				<div className="relative flex items-center justify-end gap-0.5">
-					<IconButton onClick={() => react(1)} title={current.myReaction === 1 ? "Remove like" : "Like"} active={current.myReaction === 1}><ThumbUpIcon /></IconButton>
-					<IconButton onClick={() => react(-1)} title={current.myReaction === -1 ? "Remove dislike" : "Dislike"} active={current.myReaction === -1}><ThumbDownIcon /></IconButton>
-					<IconButton onClick={saveCurrent} title={current.isSaved ? "Remove from saved songs" : "Save song"} active={current.isSaved}><HeartIcon filled={current.isSaved} /></IconButton>
-					<IconButton onClick={openSaveMenu} title="Save and playlist options" active={saveMenu}><PlusIcon /></IconButton>
+					<IconButton disabled={adBreakActive} onClick={() => react(1)} title={current.myReaction === 1 ? "Remove like" : "Like"} active={current.myReaction === 1}><ThumbUpIcon /></IconButton>
+					<IconButton disabled={adBreakActive} onClick={() => react(-1)} title={current.myReaction === -1 ? "Remove dislike" : "Dislike"} active={current.myReaction === -1}><ThumbDownIcon /></IconButton>
+					<IconButton disabled={adBreakActive} onClick={saveCurrent} title={current.isSaved ? "Remove from saved songs" : "Save song"} active={current.isSaved}><HeartIcon filled={current.isSaved} /></IconButton>
+					<IconButton disabled={adBreakActive} onClick={openSaveMenu} title="Save and playlist options" active={saveMenu}><PlusIcon /></IconButton>
 					<div className="flex items-center gap-1.5 ml-2 min-w-[116px]">
 						<IconButton onClick={() => setMuted((v) => !v)} title={muted ? "Unmute" : "Mute"}><VolumeIcon mode={volumeIcon} /></IconButton>
 						<input aria-label="Volume" type="range" min={0} max={1} step="0.01" value={volume} onChange={(e) => { setVolume(Number(e.target.value)); if (Number(e.target.value) > 0) setMuted(false); }} className="ys-player-range w-20" />
@@ -715,12 +1284,12 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 			{/* Mobile / narrow dev-window player */}
 			<div className="md:hidden px-3 pt-2 pb-[max(.5rem,env(safe-area-inset-bottom))]">
 				<div className="flex items-center gap-2">
-					<NowPlaying current={current} queueLabel={queueLabel} compact />
+					<NowPlaying current={current} queueLabel={queueLabel} compact adBreakActive={adBreakActive} adTitle={adTitle} adSponsor={adSponsor} />
 					<div className="ml-auto relative flex items-center gap-0.5">
-						<IconButton onClick={() => react(1)} title="Like" active={current.myReaction === 1}><ThumbUpIcon /></IconButton>
-						<IconButton onClick={() => react(-1)} title="Dislike" active={current.myReaction === -1}><ThumbDownIcon /></IconButton>
-						<IconButton onClick={saveCurrent} title="Save song" active={current.isSaved}><HeartIcon filled={current.isSaved} /></IconButton>
-						<IconButton onClick={openSaveMenu} title="More save options" active={saveMenu}><PlusIcon /></IconButton>
+						<IconButton disabled={adBreakActive} onClick={() => react(1)} title="Like" active={current.myReaction === 1}><ThumbUpIcon /></IconButton>
+						<IconButton disabled={adBreakActive} onClick={() => react(-1)} title="Dislike" active={current.myReaction === -1}><ThumbDownIcon /></IconButton>
+						<IconButton disabled={adBreakActive} onClick={saveCurrent} title="Save song" active={current.isSaved}><HeartIcon filled={current.isSaved} /></IconButton>
+						<IconButton disabled={adBreakActive} onClick={openSaveMenu} title="More save options" active={saveMenu}><PlusIcon /></IconButton>
 						{saveMenu && <SaveMenu current={current} playlists={playlists} loading={menuLoading} onSaveRelease={saveRelease} onFavoriteArtist={favoriteArtist} onNewPlaylist={openNewPlaylist} onExistingPlaylist={openExistingPlaylist} onClose={() => setSaveMenu(false)} />}
 					</div>
 				</div>
@@ -731,7 +1300,7 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 					<IconButton onClick={cycleRepeat} title={repeatTitle} active={repeatMode !== "off"}><RepeatIcon one={repeatMode === "one"} /></IconButton>
 					<IconButton onClick={toggleShuffle} title={shuffle ? "Shuffle on" : "Shuffle off"} active={shuffle}><ShuffleIcon /></IconButton>
 				</div>
-				<SeekBar audio={audio} time={time} duration={duration} compact />
+				<SeekBar audio={audio} time={time} duration={duration} compact disabled={adBreakActive} />
 			</div>
 
 			{playlistDialog === "new" && (
@@ -754,17 +1323,19 @@ export function WorldPlayerDock({ hidden, workspaceLeftPx }: { hidden?: boolean;
 	);
 }
 
-function NowPlaying({ current, queueLabel, compact = false }: { current: WorldTrack; queueLabel: string; compact?: boolean }) {
+function NowPlaying({ current, queueLabel, compact = false, adBreakActive = false, adTitle = "Ad Break", adSponsor = "" }: { current: WorldTrack; queueLabel: string; compact?: boolean; adBreakActive?: boolean; adTitle?: string; adSponsor?: string }) {
 	return <div className={`min-w-0 flex items-center gap-2.5 ${compact ? "flex-1" : ""}`}>
-		{current.hasArtwork ? <img src={worldArtworkUrl(current.id)} alt="" className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg object-cover bg-neutral-900`} /> : <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg bg-neutral-900 grid place-items-center text-neutral-600`}>♪</div>}
-		<div className="min-w-0"><div className="font-medium text-sm truncate">{current.title}</div><div className="text-xs text-neutral-500 truncate">{current.artistName}</div>{queueLabel && !compact && <div className="text-[10px] text-neutral-600 truncate">{queueLabel}</div>}</div>
+		{adBreakActive
+			? <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg border border-amber-400/20 bg-amber-500/10 grid place-items-center text-[10px] font-black tracking-widest text-amber-200`}>AD</div>
+			: current.hasArtwork ? <img src={worldArtworkUrl(current.id)} alt="" className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg object-cover bg-neutral-900`} /> : <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg bg-neutral-900 grid place-items-center text-neutral-600`}>♪</div>}
+		<div className="min-w-0"><div className="font-medium text-sm truncate">{adBreakActive ? adTitle : current.title}</div><div className="text-xs text-neutral-500 truncate">{adBreakActive ? (adSponsor || "Sponsored message") : current.artistName}</div>{queueLabel && !compact && <div className="text-[10px] text-neutral-600 truncate">{queueLabel}</div>}</div>
 	</div>;
 }
 
-function SeekBar({ audio, time, duration, compact = false }: { audio: HTMLAudioElement | null; time: number; duration: number; compact?: boolean }) {
+function SeekBar({ audio, time, duration, compact = false, disabled = false }: { audio: HTMLAudioElement | null; time: number; duration: number; compact?: boolean; disabled?: boolean }) {
 	return <div className={`flex items-center gap-2 ${compact ? "mt-1" : ""}`}>
 		<span className="text-[10px] tabular-nums text-neutral-500 w-8 text-right">{durationLabel(time)}</span>
-		<input aria-label="Seek" type="range" min={0} max={duration || 1} step="0.1" value={Math.min(time, duration || 1)} onChange={(e) => { if (audio) audio.currentTime = Number(e.target.value); }} className="ys-player-range min-w-0 flex-1" />
+		<input aria-label="Seek" disabled={disabled} type="range" min={0} max={duration || 1} step="0.1" value={Math.min(time, duration || 1)} onChange={(e) => { if (!disabled && audio) audio.currentTime = Number(e.target.value); }} className="ys-player-range min-w-0 flex-1 disabled:opacity-40" />
 		<span className="text-[10px] tabular-nums text-neutral-500 w-8">{durationLabel(duration)}</span>
 	</div>;
 }

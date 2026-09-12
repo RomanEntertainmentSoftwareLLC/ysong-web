@@ -31,6 +31,8 @@ import LibraryPane from "../tabs/Library";
 import AchievementsPane from "../tabs/Achievements";
 import SingerStudioPane from "../tabs/SingerStudio";
 import AnalyticsPane from "../tabs/Analytics";
+import FlashbackPane from "../tabs/Flashback";
+import ToolsPane from "../tabs/Tools";
 import RoomsPane from "../tabs/Rooms";
 import { signedProfileAssetUrl } from "../lib/profileApi";
 import NotificationBell from "../components/NotificationBell";
@@ -113,6 +115,8 @@ function BootTabs({
 						band: "Band Creation",
 						singers: "Singer Studio",
 						analytics: "Analytics",
+						flashback: "Flashback",
+						tools: "Tools",
 						artwork: "Artwork Studio",
 						library: "My Library",
 						achievements: "Achievements",
@@ -530,6 +534,8 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 		band: BandCreationPane,
 		singers: SingerStudioPane,
 		analytics: AnalyticsPane,
+		flashback: FlashbackPane,
+		tools: ToolsPane,
 		artwork: ArtworkStudioPane,
 		library: LibraryPane,
 		achievements: AchievementsPane,
@@ -607,6 +613,8 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 				band: "Band Creation",
 				singers: "Singer Studio",
 				analytics: "Analytics",
+				flashback: "Flashback",
+				tools: "Tools",
 				artwork: "Artwork Studio",
 				library: "My Library",
 				achievements: "Achievements",

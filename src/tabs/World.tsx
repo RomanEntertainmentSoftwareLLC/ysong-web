@@ -5,8 +5,9 @@ import { YSButton } from "../components/YSButton";
 import EmojiPickerButton from "../components/EmojiPicker";
 import worldWordmark from "../assets/ysong-world.png";
 import { useWorldPlayer } from "../components/WorldPlayer";
-import { bridgeApi, normalizeVisualBroadcastProgram, type VisualBroadcastAssignment, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
+import { bridgeApi, normalizeVisualAdvertisingSettings, normalizeVisualBroadcastGlobals, normalizeVisualBroadcastProgram, type VisualAdCreative, type VisualVideoPrerollCreative, type VisualAdvertisingSettings, type VisualBroadcastAssignment, type VisualBroadcastGlobals, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
 import { normalizeVisualScene, type VisualSceneState } from "../lib/visualsScene";
+import { applyRadioStationDefaults, radioProgramId, tracksForRadioStation, ysongRadioStationsForCatalog, type YSongRadioStation } from "../lib/ysongRadio";
 import {
 	addTrackToWorldPlaylist,
 	createWorldComment,
@@ -59,6 +60,9 @@ function uniqueTracks(list: WorldTrack[]) {
 	const seen = new Set<string>();
 	return list.filter((t) => !seen.has(t.id) && seen.add(t.id));
 }
+function errorMessage(error: unknown, fallback: string) {
+	return error instanceof Error && error.message ? error.message : fallback;
+}
 
 export default function WorldPane() {
 	const { tabs, openTab, activateTab } = useTabManager();
@@ -75,6 +79,8 @@ export default function WorldPane() {
 	const [playlistDetail, setPlaylistDetail] = useState<WorldPlaylistDetail | null>(null);
 	const [editingTrack, setEditingTrack] = useState<WorldTrack | null>(null);
 	const [editingRelease, setEditingRelease] = useState<WorldRelease | null>(null);
+	const [radioStudio, setRadioStudio] = useState<YSongRadioStation | null>(null);
+	const [advertisingStudio, setAdvertisingStudio] = useState(false);
 	const { current, playing, startQueue } = useWorldPlayer();
 
 	const patchTrackEverywhere = (trackId: string, patch: Partial<WorldTrack>) => {
@@ -184,17 +190,23 @@ export default function WorldPane() {
 		catch (e: any) { setError(e?.message || "Could not open playlist"); }
 	};
 
+	const startBuiltInRadio = (station: YSongRadioStation) => {
+		const stationTracks = tracksForRadioStation(station, tracks);
+		if (!stationTracks.length) return;
+		startQueue(stationTracks, `YSong Radio · ${station.name}`, undefined, "", radioProgramId(station.id), "radio");
+	};
+
 	const startArtistRadio = (seed: WorldTrack) => {
 		const sameArtist = tracks.filter((t) => t.ownerUserId === seed.ownerUserId && t.artistName === seed.artistName);
 		const related = tracks.filter((t) => t.genre === seed.genre && t.artistName !== seed.artistName).sort((a,b) => trackScore(b)-trackScore(a));
 		const rest = tracks.filter((t) => t.genre !== seed.genre).sort((a,b) => trackScore(b)-trackScore(a));
-		startQueue(uniqueTracks([seed, ...sameArtist, ...related, ...rest]), `${seed.artistName} Radio`, seed.id);
+		startQueue(uniqueTracks([seed, ...sameArtist, ...related, ...rest]), `${seed.artistName} Radio`, seed.id, "", "", "radio");
 	};
 	const startGenreRadio = (genreName: string, seed?: WorldTrack) => {
 		const inGenre = tracks.filter((t) => t.genre === genreName).sort((a,b) => trackScore(b)-trackScore(a));
 		if (!inGenre.length) return;
 		const start = seed && inGenre.some((t) => t.id === seed.id) ? seed : inGenre[0];
-		startQueue(uniqueTracks([start, ...inGenre]), `${genreName} Radio`, start.id);
+		startQueue(uniqueTracks([start, ...inGenre]), `${genreName} Radio`, start.id, "", "", "radio");
 	};
 	const startSongRadio = (seed: WorldTrack) => {
 		const related = tracks.filter((t) => t.id !== seed.id).sort((a,b) => {
@@ -202,7 +214,7 @@ export default function WorldPane() {
 			const bRel = (b.genre === seed.genre ? 10000 : 0) + b.tags.filter((x) => seed.tags.includes(x)).length * 2000 + trackScore(b);
 			return bRel - aRel;
 		});
-		startQueue([seed, ...related], `${seed.title} Radio`, seed.id);
+		startQueue([seed, ...related], `${seed.title} Radio`, seed.id, "", "", "radio");
 	};
 
 	const saveTrackEdit = async (draft: WorldTrack) => {
@@ -243,6 +255,7 @@ export default function WorldPane() {
 	const albumPicks = useMemo(() => releaseSeeds(tracks).filter((t) => t.releaseType === "album").sort((a,b) => trackScore(b)-trackScore(a)).slice(0, 40), [tracks]);
 	const trending = useMemo(() => [...tracks].sort((a,b) => trackScore(b)-trackScore(a)).slice(0, 12), [tracks]);
 	const filteredMode = !!search.trim() || genre !== "all" || sort !== "algorithm";
+	const radioEntries = useMemo(() => ysongRadioStationsForCatalog(tracks).map((station) => ({ station, tracks: tracksForRadioStation(station, tracks) })), [tracks]);
 
 	return <div className="h-full min-h-0 flex flex-col bg-neutral-950 text-neutral-100"><div className="flex-1 min-h-0 overflow-y-auto"><div className="p-4 md:p-6 pb-24">
 		{detailTrack ? <TrackDetailView track={detailTrack} onBack={() => setDetailTrack(null)} onPlay={(track) => startQueue(tracks, "YSong World", track.id)} onReact={react} onSave={toggleTrackSave} onSaveRelease={() => toggleReleaseSave(detailTrack.releaseId)} onFollow={() => toggleArtist(detailTrack)} onOpenRelease={() => openRelease(detailTrack.releaseId)} onArtistRadio={() => startArtistRadio(detailTrack)} onSongRadio={() => startSongRadio(detailTrack)} onRemove={() => void removeTrackFromWorld(detailTrack)} />
@@ -256,14 +269,286 @@ export default function WorldPane() {
 			{loading ? <div className="text-neutral-400">Loading YSong World…</div> : tracks.length===0 ? <div className="rounded-2xl border border-dashed border-neutral-700 bg-neutral-900/50 p-10 text-center"><div className="text-5xl mb-3">🌎</div><h2 className="text-xl font-semibold">YSong World is empty.</h2><p className="text-neutral-400 mt-1 mb-4">Be the first artist to ruin the silence.</p><YSButton onClick={openUpload} className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2">Upload Music</YSButton></div>
 			: filteredMode ? <div><SectionTitle title="Results" subtitle={`${tracks.length} songs`} /> <div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.map((t)=><TrackRow key={t.id} track={t} current={current?.id===t.id} playing={playing} onPlay={(track)=>startQueue(tracks,"Search Results",track.id)} onOpen={openTrack} onOpenRelease={openRelease} onReact={react} onSave={toggleTrackSave} onRadio={startSongRadio} onEdit={setEditingTrack} onRemove={removeTrackFromWorld} />)}</div></div>
 			: <div className="space-y-8">
+				<RadioShelf entries={radioEntries} onPlay={startBuiltInRadio} onProgram={setRadioStudio} onAdvertising={()=>setAdvertisingStudio(true)} />
 				<ReleaseShelf title="Released This Week" subtitle="Fresh releases from YSong artists" items={(releasedThisWeek.length?releasedThisWeek:released).slice(0,30)} onOpen={openRelease} />
 				{albumPicks.length>0 && <ReleaseShelf title="Album Picks" subtitle="Albums worth opening up" items={albumPicks} onOpen={openRelease} />}
-				<div><SectionTitle title="Trending Songs" subtitle="One song per row — play, react, save or open the menu" action={<button onClick={()=>startQueue(trending,"Trending Radio")} className="text-xs text-indigo-300">▶ Play as Radio</button>} /><div className="rounded-2xl border border-neutral-800 overflow-hidden">{trending.slice(0,8).map((t)=><TrackRow key={t.id} track={t} current={current?.id===t.id} playing={playing} onPlay={(track)=>startQueue(trending,"Trending",track.id)} onOpen={openTrack} onOpenRelease={openRelease} onReact={react} onSave={toggleTrackSave} onRadio={startSongRadio} onEdit={setEditingTrack} onRemove={removeTrackFromWorld} />)}</div></div>
+				<div><SectionTitle title="Trending Songs" subtitle="One song per row — play, react, save or open the menu" action={<button onClick={()=>startQueue(trending,"Trending Radio",undefined,"","","radio")} className="text-xs text-indigo-300">▶ Play as Radio</button>} /><div className="rounded-2xl border border-neutral-800 overflow-hidden">{trending.slice(0,8).map((t)=><TrackRow key={t.id} track={t} current={current?.id===t.id} playing={playing} onPlay={(track)=>startQueue(trending,"Trending",track.id)} onOpen={openTrack} onOpenRelease={openRelease} onReact={react} onSave={toggleTrackSave} onRadio={startSongRadio} onEdit={setEditingTrack} onRemove={removeTrackFromWorld} />)}</div></div>
 				{playlists.length>0 && <PlaylistShelf title="Playlists" subtitle="Made and saved by the YSong community" items={playlists} onOpen={openPlaylist} />}
 				<ReleaseShelf title="Fresh Finds" subtitle="Keep swiping — the shelf can hold the whole catalog" items={released.slice(0,60)} onOpen={openRelease} />
 			</div>}
 		</>}
-	</div></div>{editingTrack && <TrackEditModal track={editingTrack} onCancel={()=>setEditingTrack(null)} onSave={saveTrackEdit} />}{editingRelease && <ReleaseEditModal release={editingRelease} onCancel={()=>setEditingRelease(null)} onSave={saveReleaseEdit} />}</div>;
+	</div></div>{editingTrack && <TrackEditModal track={editingTrack} onCancel={()=>setEditingTrack(null)} onSave={saveTrackEdit} />}{editingRelease && <ReleaseEditModal release={editingRelease} onCancel={()=>setEditingRelease(null)} onSave={saveReleaseEdit} />}{radioStudio && <RadioProgramModal station={radioStudio} tracks={tracksForRadioStation(radioStudio,tracks)} onClose={()=>setRadioStudio(null)} onStart={()=>startBuiltInRadio(radioStudio)} />}{advertisingStudio && <AdvertisingStudioModal onClose={()=>setAdvertisingStudio(false)} />}</div>;
+}
+
+function RadioShelf({entries,onPlay,onProgram,onAdvertising}:{entries:Array<{station:YSongRadioStation;tracks:WorldTrack[]}>;onPlay:(station:YSongRadioStation)=>void;onProgram:(station:YSongRadioStation)=>void;onAdvertising:()=>void}) {
+	return <div>
+		<SectionTitle title="YSong Radio" subtitle="Catalog-driven stations with shuffle bags, recent-song avoidance and Visual Broadcast programs." action={<button onClick={onAdvertising} className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-500/10">Advertising Studio</button>} />
+		<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+			{entries.map(({station,tracks})=><div key={station.id} className="relative overflow-hidden rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/10 via-neutral-900 to-neutral-950 p-4 shadow-lg">
+				<div className="absolute right-3 top-2 text-5xl opacity-[.06]">📻</div>
+				<div className="relative"><div className="text-[10px] font-bold uppercase tracking-[.2em] text-violet-300">YSong Radio</div><div className="mt-1 text-lg font-semibold">{station.name}</div><div className="mt-1 min-h-[2.5rem] text-xs leading-relaxed text-neutral-500">{station.description}</div>
+					<div className="mt-3 flex items-center justify-between gap-2"><div className="text-[10px] uppercase tracking-wider text-neutral-600">{tracks.length} eligible song{tracks.length===1?"":"s"}</div><div className="flex gap-2"><button onClick={()=>onProgram(station)} className="rounded-lg border border-neutral-700 px-2.5 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800">Program</button><button disabled={!tracks.length} onClick={()=>onPlay(station)} className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-30">▶ Listen</button></div></div>
+				</div>
+			</div>)}
+		</div>
+	</div>;
+}
+
+function RadioProgramModal({station,tracks,onClose,onStart}:{station:YSongRadioStation;tracks:WorldTrack[];onClose:()=>void;onStart:()=>void}) {
+	const id=radioProgramId(station.id);
+	const [visuals,setVisuals]=useState<VisualScenePreset<VisualSceneState>[]>([]);
+	const [program,setProgram]=useState<VisualBroadcastProgram|null>(null);
+	const [globals,setGlobals]=useState<VisualBroadcastGlobals|null>(null);
+	const [advertising,setAdvertising]=useState<VisualAdvertisingSettings|null>(null);
+	const [assignmentSearch,setAssignmentSearch]=useState("");
+	const [busy,setBusy]=useState(false);
+	const [note,setNote]=useState("Loading broadcast program…");
+	const albumEntries=useMemo(()=>[...new Map(tracks.filter(track=>track.albumName).map(track=>[track.releaseId||track.albumName,{key:track.releaseId||track.albumName,label:track.albumName}])).values()].sort((a,b)=>a.label.localeCompare(b.label)),[tracks]);
+	const assignmentTracks=useMemo(()=>{
+		const q=assignmentSearch.trim().toLowerCase();
+		if(!q)return tracks;
+		return tracks.filter(track=>`${track.title} ${track.artistName} ${track.albumName}`.toLowerCase().includes(q));
+	},[assignmentSearch,tracks]);
+	useEffect(()=>{
+		let cancelled=false;
+		Promise.all([bridgeApi.getVisualLibrary<VisualSceneState>(),bridgeApi.getVisualProgram(id),bridgeApi.getVisualBroadcastGlobals(),bridgeApi.getVisualAdvertisingSettings()]).then(([library,rawProgram,rawGlobals,rawAdvertising])=>{
+			if(cancelled)return;
+			setVisuals(library.presets||[]);
+			setProgram(normalizeVisualBroadcastProgram(applyRadioStationDefaults(rawProgram as VisualBroadcastProgram & {isDefault?:boolean},station),id,{stationId:station.id,kind:"radio",name:`YSong Radio · ${station.name}`}));
+			setGlobals(normalizeVisualBroadcastGlobals(rawGlobals));
+			setAdvertising(normalizeVisualAdvertisingSettings(rawAdvertising));
+			setNote("");
+		}).catch((error:unknown)=>{if(!cancelled)setNote(errorMessage(error,"Start YSong Bridge to edit radio programs."))});
+		return()=>{cancelled=true};
+	},[id,station]);
+	const saveProgram=async(next:VisualBroadcastProgram)=>{
+		const normalized=normalizeVisualBroadcastProgram({...next,programId:id,stationId:station.id,kind:"radio",name:`YSong Radio · ${station.name}`},id,{stationId:station.id,kind:"radio",name:`YSong Radio · ${station.name}`});
+		setProgram(normalized);setBusy(true);setNote("");
+		try{await bridgeApi.setVisualProgram(id,normalized);window.dispatchEvent(new CustomEvent("ysong:world-broadcast-program",{detail:normalized}));setNote("Radio program saved.")}
+		catch(error:unknown){setNote(errorMessage(error,"Could not save radio program."))}
+		finally{setBusy(false)}
+	};
+	const saveGlobals=async(next:VisualBroadcastGlobals)=>{
+		const normalized=normalizeVisualBroadcastGlobals(next);setGlobals(normalized);setBusy(true);setNote("");
+		try{await bridgeApi.setVisualBroadcastGlobals(normalized);window.dispatchEvent(new CustomEvent("ysong:world-broadcast-globals",{detail:normalized}));setNote("Global broadcast fallback saved.")}
+		catch(error:unknown){setNote(errorMessage(error,"Could not save global fallback."))}
+		finally{setBusy(false)}
+	};
+	const saveAdvertising=async(next:VisualAdvertisingSettings)=>{
+		const normalized=normalizeVisualAdvertisingSettings(next);setAdvertising(normalized);setBusy(true);setNote("");
+		try{await bridgeApi.setVisualAdvertisingSettings(normalized);window.dispatchEvent(new CustomEvent("ysong:world-advertising-settings",{detail:normalized}));setNote("Station advertising override saved.")}
+		catch(error:unknown){setNote(errorMessage(error,"Could not save station advertising override."))}
+		finally{setBusy(false)}
+	};
+	const patchAdvertisingOverride=(patch:Partial<VisualAdvertisingSettings["programOverrides"][string]>)=>{
+		if(!advertising)return;
+		const current=advertising.programOverrides[id]||{mode:"inherit" as const};
+		const nextOverride={...current,...patch};
+		const programOverrides={...advertising.programOverrides};
+		const hasSpacing=nextOverride.minSongsBetweenAds!=null||nextOverride.minMinutesBetweenAds!=null||nextOverride.maxAdsPerHour!=null;
+		if(nextOverride.mode==="inherit"&&!hasSpacing)delete programOverrides[id];else programOverrides[id]=nextOverride;
+		void saveAdvertising({...advertising,programOverrides});
+	};
+	const togglePool=(pool:string[],sceneId:string)=>pool.includes(sceneId)?pool.filter(id=>id!==sceneId):[...pool,sceneId];
+	const patch=(patch:Partial<VisualBroadcastProgram>)=>program&&void saveProgram({...program,...patch});
+	const patchBranding=(patch:Partial<VisualBroadcastProgram["branding"]>)=>program&&void saveProgram({...program,branding:{...program.branding,...patch}});
+	const patchTiming=(patch:Partial<VisualBroadcastProgram["timing"]>)=>program&&void saveProgram({...program,timing:{...program.timing,...patch}});
+	const toggleAlbumScene=(albumKey:string,sceneId:string,legacyAlbumName?:string)=>{
+		if(!program)return;
+		const next={...program.albumDefaults};
+		const inherited=next[albumKey]||(legacyAlbumName?next[legacyAlbumName]:undefined)||[];
+		const ids=togglePool(inherited,sceneId);
+		if(legacyAlbumName&&legacyAlbumName!==albumKey)delete next[legacyAlbumName];
+		if(ids.length)next[albumKey]=ids;else delete next[albumKey];
+		void saveProgram({...program,albumDefaults:next});
+	};
+	const toggleSongScene=(trackId:string,sceneId:string)=>{
+		if(!program)return;
+		const current:VisualBroadcastAssignment=program.trackAssignments[trackId]||{sceneIds:[]};
+		const sceneIds=togglePool(current.sceneIds||[],sceneId);
+		const nextAssignments={...program.trackAssignments};
+		const nextAssignment={...current,sceneIds};
+		const hasOverrides=sceneIds.length||nextAssignment.visualTransition||nextAssignment.visualTransitionSeconds!=null||nextAssignment.audioTransition||nextAssignment.crossfadeSeconds!=null;
+		if(hasOverrides)nextAssignments[trackId]=nextAssignment;else delete nextAssignments[trackId];
+		void saveProgram({...program,trackAssignments:nextAssignments});
+	};
+	return <ModalShell title={`YSong Radio · ${station.name}`} onCancel={onClose}>
+		<div className="space-y-5">
+			<div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 text-sm"><div className="font-semibold text-violet-200">{tracks.length} eligible songs</div><div className="mt-1 text-xs text-neutral-500">Radio uses a true shuffle bag: songs are exhausted before a new cycle begins, while the recent-song window pushes recently heard tracks to the back of the next bag.</div></div>
+			{program?<>
+				<div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+					<label className="text-xs text-neutral-400">Audio<select value={program.audioTransition} onChange={e=>patch({audioTransition:e.target.value as VisualBroadcastProgram["audioTransition"]})} className="world-edit-input mt-1"><option value="regular">Regular</option><option value="gapless">Gapless</option><option value="crossfade">Crossfade</option></select></label>
+					<label className="text-xs text-neutral-400">Crossfade<input type="number" min={.5} max={20} step={.5} value={program.crossfadeSeconds} onChange={e=>patch({crossfadeSeconds:Number(e.target.value)||5})} className="world-edit-input mt-1"/></label>
+					<label className="text-xs text-neutral-400">Visual<select value={program.visualTransition} onChange={e=>patch({visualTransition:e.target.value as VisualBroadcastProgram["visualTransition"]})} className="world-edit-input mt-1"><option value="cut">Cut</option><option value="fade">Soft Fade</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+					<label className="text-xs text-neutral-400">Visual seconds<input type="number" min={.1} max={12} step={.1} value={program.visualTransitionSeconds} onChange={e=>patch({visualTransitionSeconds:Number(e.target.value)||1.4})} className="world-edit-input mt-1"/></label>
+					<label className="text-xs text-neutral-400">Repeat<select value={program.repeatMode} onChange={e=>patch({repeatMode:e.target.value as VisualBroadcastProgram["repeatMode"]})} className="world-edit-input mt-1"><option value="all">Forever</option><option value="off">One bag</option><option value="one">One song</option></select></label>
+					<label className="flex items-center gap-2 self-end rounded-xl border border-neutral-800 p-2.5 text-xs"><input type="checkbox" checked={program.shuffle} onChange={e=>patch({shuffle:e.target.checked})}/> Shuffle bag</label>
+					<label className="text-xs text-neutral-400">Avoid songs<input type="number" min={0} max={100} value={program.avoidRecent} onChange={e=>patch({avoidRecent:Number(e.target.value)||0})} className="world-edit-input mt-1"/></label>
+					<label className="text-xs text-neutral-400">Avoid visuals<input type="number" min={0} max={50} value={program.visualAvoidRecent} onChange={e=>patch({visualAvoidRecent:Number(e.target.value)||0})} className="world-edit-input mt-1"/></label>
+				</div>
+				{advertising?<AdProgramOverrideEditor programId={id} settings={advertising} onPatch={patchAdvertisingOverride}/>:null}
+				<div><div className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Station visual pool</div><div className="grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.length?visuals.map(v=><label key={v.id} className={`flex items-center gap-2 rounded-lg border px-2 py-2 text-xs ${program.defaultSceneIds.includes(v.id)?"border-violet-400/40 bg-violet-500/10":"border-neutral-800"}`}><input type="checkbox" checked={program.defaultSceneIds.includes(v.id)} onChange={()=>saveProgram({...program,defaultSceneIds:togglePool(program.defaultSceneIds,v.id)})}/><span className="truncate">{v.name}</span></label>):<div className="text-xs text-neutral-500">Save Visual scenes first.</div>}</div><div className="mt-2 text-[10px] text-neutral-600">Resolution order: Song override → Album pool → Station pool → Global pool → current scene.</div></div>
+				{albumEntries.length?<details className="rounded-xl border border-neutral-800 p-3"><summary className="cursor-pointer text-xs font-semibold text-neutral-300">Station Album Overrides <span className="ml-2 text-[10px] font-normal text-neutral-600">optional</span></summary><div className="mt-2 text-[10px] text-neutral-600">Album pools outrank the station pool but remain below direct song assignments. New assignments use release IDs internally so identical album titles never collide.</div><div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">{albumEntries.map(album=>{const selected=program.albumDefaults[album.key]||program.albumDefaults[album.label]||[];return <details key={album.key} className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-2"><summary className="cursor-pointer text-xs text-neutral-300"><span className="font-medium">{album.label}</span><span className="ml-2 text-[9px] text-violet-300">{selected.length?`${selected.length} visual${selected.length===1?"":"s"}`:"station pool"}</span></summary><div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.map(v=><label key={v.id} className={`flex items-center gap-2 rounded border px-2 py-1 text-[10px] ${selected.includes(v.id)?"border-violet-400/30 bg-violet-500/10 text-neutral-200":"border-neutral-800 text-neutral-500"}`}><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggleAlbumScene(album.key,v.id,album.label)}/><span className="truncate">{v.name}</span></label>)}</div></details>})}</div></details>:null}
+				<details className="rounded-xl border border-neutral-800 p-3"><summary className="cursor-pointer text-xs font-semibold text-neutral-300">Station Song Overrides <span className="ml-2 text-[10px] font-normal text-neutral-600">{Object.keys(program.trackAssignments).length} configured</span></summary><div className="mt-2 text-[10px] text-neutral-600">Direct song pools have the highest visual priority. Search is useful for large radio catalogs.</div><input value={assignmentSearch} onChange={e=>setAssignmentSearch(e.target.value)} placeholder="Search title, artist or album…" className="world-edit-input mt-3"/><div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">{assignmentTracks.length?assignmentTracks.map(track=>{const selected=program.trackAssignments[track.id]?.sceneIds||[];return <details key={track.id} className="rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1.5"><summary className="cursor-pointer text-xs text-neutral-300"><span className="font-medium">{track.title}</span><span className="ml-2 text-[9px] text-neutral-600">{track.artistName} · {track.albumName}</span><span className="ml-2 text-[9px] text-violet-300">{selected.length?`${selected.length} direct`:"inherit"}</span></summary><div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.map(v=><label key={v.id} className={`flex items-center gap-2 rounded border px-2 py-1 text-[10px] ${selected.includes(v.id)?"border-violet-400/30 bg-violet-500/10 text-neutral-200":"border-neutral-800 text-neutral-500"}`}><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggleSongScene(track.id,v.id)}/><span className="truncate">{v.name}</span></label>)}</div></details>}):<div className="py-3 text-xs text-neutral-600">No matching station songs.</div>}</div></details>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-3 text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Broadcast Branding</div><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.enabled} onChange={e=>patchBranding({enabled:e.target.checked})}/> Enable program branding</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showStationBug} onChange={e=>patchBranding({showStationBug:e.target.checked})}/> Station bug</label>
+					<label className="text-xs text-neutral-400 sm:col-span-2">Station label<input value={program.branding.stationLabel} onChange={e=>patchBranding({stationLabel:e.target.value})} className="world-edit-input mt-1"/></label>
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showNowPlaying} onChange={e=>patchBranding({showNowPlaying:e.target.checked})}/> Now Playing</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showNextUp} onChange={e=>patchBranding({showNextUp:e.target.checked})}/> Up Next</label>
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showQueueLabel} onChange={e=>patchBranding({showQueueLabel:e.target.checked})}/> Queue label</label><label className="text-xs text-neutral-400">Bug position<select value={program.branding.bugPosition} onChange={e=>patchBranding({bugPosition:e.target.value as VisualBroadcastProgram["branding"]["bugPosition"]})} className="world-edit-input mt-1"><option value="top-right">Top Right</option><option value="top-left">Top Left</option><option value="bottom-right">Bottom Right</option><option value="bottom-left">Bottom Left</option></select></label>
+				</div></div>
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><label className="text-xs text-neutral-400">Now Playing delay<input type="number" min={0} max={30} step={.5} value={program.timing.nowPlayingDelaySeconds} onChange={e=>patchTiming({nowPlayingDelaySeconds:Number(e.target.value)||0})} className="world-edit-input mt-1"/></label><label className="text-xs text-neutral-400">Now Playing hold<input type="number" min={0} max={120} step={.5} value={program.timing.nowPlayingHoldSeconds} onChange={e=>patchTiming({nowPlayingHoldSeconds:Number(e.target.value)||0})} className="world-edit-input mt-1"/><span className="mt-1 block text-[9px] text-neutral-600">0 = whole song</span></label><label className="text-xs text-neutral-400">Up Next lead<input type="number" min={0} max={60} step={.5} value={program.timing.nextUpLeadSeconds} onChange={e=>patchTiming({nextUpLeadSeconds:Number(e.target.value)||0})} className="world-edit-input mt-1"/></label></div>
+			</>:<div className="text-sm text-neutral-500">{note}</div>}
+			{globals?<GlobalBroadcastEditor globals={globals} visuals={visuals} onChange={next=>void saveGlobals(next)}/>:null}
+			<div className="flex items-center justify-between gap-3"><div className="text-xs text-neutral-500">{busy?"Saving…":note}</div><div className="flex gap-2"><YSButton onClick={onClose} className="rounded-lg border border-neutral-700 px-3 py-2">Close</YSButton><YSButton disabled={!tracks.length} onClick={()=>{onStart();onClose()}} className="rounded-lg bg-violet-600 px-4 py-2 disabled:opacity-30">▶ Start Radio</YSButton></div></div>
+		</div>
+		<style>{`.world-edit-input{width:100%;border:1px solid rgb(64 64 64);background:rgb(23 23 23);border-radius:.7rem;padding:.5rem .65rem;outline:none}.world-edit-input:focus{border-color:rgb(139 92 246);box-shadow:0 0 0 2px rgb(124 58 237 / .14)}`}</style>
+	</ModalShell>;
+}
+
+
+function probeAudioDuration(url:string) {
+	return new Promise<number>((resolve) => {
+		const audio = new Audio();
+		const finish = (value:number) => { audio.removeAttribute("src"); audio.load(); resolve(Number.isFinite(value) ? value : 0); };
+		audio.preload = "metadata";
+		audio.onloadedmetadata = () => finish(audio.duration || 0);
+		audio.onerror = () => finish(0);
+		audio.src = url;
+	});
+}
+
+function probeVideoDuration(url:string) {
+	return new Promise<number>((resolve) => {
+		const video = document.createElement("video");
+		const finish = (value:number) => { video.removeAttribute("src"); video.load(); resolve(Number.isFinite(value) ? value : 0); };
+		video.preload = "metadata";
+		video.onloadedmetadata = () => finish(video.duration || 0);
+		video.onerror = () => finish(0);
+		video.src = url;
+	});
+}
+
+function AdvertisingStudioModal({onClose}:{onClose:()=>void}) {
+	const [settings,setSettings]=useState<VisualAdvertisingSettings>(()=>normalizeVisualAdvertisingSettings(null));
+	const [visuals,setVisuals]=useState<VisualScenePreset<VisualSceneState>[]>([]);
+	const [loading,setLoading]=useState(true);
+	const [busy,setBusy]=useState(false);
+	const [note,setNote]=useState("");
+	useEffect(()=>{
+		let cancelled=false;
+		Promise.all([bridgeApi.getVisualAdvertisingSettings(),bridgeApi.getVisualLibrary<VisualSceneState>()]).then(([raw,library])=>{
+			if(cancelled)return;
+			setSettings(normalizeVisualAdvertisingSettings(raw));
+			setVisuals(library.presets||[]);
+		}).catch((error:unknown)=>{if(!cancelled)setNote(errorMessage(error,"Start YSong Bridge to edit advertising."))}).finally(()=>{if(!cancelled)setLoading(false)});
+		return()=>{cancelled=true};
+	},[]);
+	const patch=(next:Partial<VisualAdvertisingSettings>)=>setSettings(prev=>({...prev,...next}));
+	const patchSchedule=(next:Partial<VisualAdvertisingSettings["schedule"]>)=>setSettings(prev=>({...prev,schedule:{...prev.schedule,...next}}));
+	const patchPlacements=(next:Partial<VisualAdvertisingSettings["placements"]>)=>setSettings(prev=>({...prev,placements:{...prev.placements,...next}}));
+	const patchPresentation=(next:Partial<VisualAdvertisingSettings["presentation"]>)=>setSettings(prev=>({...prev,presentation:{...prev.presentation,...next}}));
+	const patchCreative=(id:string,next:Partial<VisualAdCreative>)=>setSettings(prev=>({...prev,houseCreatives:prev.houseCreatives.map(creative=>creative.id===id?{...creative,...next}:creative)}));
+	const removeCreative=(id:string)=>setSettings(prev=>({...prev,houseCreatives:prev.houseCreatives.filter(creative=>creative.id!==id)}));
+	const patchRoomPreroll=(id:string,next:Partial<VisualVideoPrerollCreative>)=>setSettings(prev=>({...prev,liveRoomPrerollCreatives:prev.liveRoomPrerollCreatives.map(creative=>creative.id===id?{...creative,...next}:creative)}));
+	const removeRoomPreroll=(id:string)=>setSettings(prev=>({...prev,liveRoomPrerollCreatives:prev.liveRoomPrerollCreatives.filter(creative=>creative.id!==id)}));
+	const uploadCreative=async(file:File)=>{
+		setBusy(true);setNote(`Importing ${file.name}…`);
+		try{
+			const uploaded=await bridgeApi.uploadVisualMedia(file);
+			const duration=await probeAudioDuration(uploaded.url);
+			const stem=file.name.replace(/\.[^.]+$/g,"").trim()||"House Ad";
+			const creative:VisualAdCreative={id:`house-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`,title:stem,sponsor:"YSong",audioUrl:uploaded.url,audioFileName:file.name,durationSeconds:duration,weight:1,enabled:true};
+			setSettings(prev=>({...prev,houseCreatives:[...prev.houseCreatives,creative]}));
+			setNote(`${file.name} added to the House Ad library. Save settings to commit it.`);
+		}catch(error:unknown){setNote(errorMessage(error,"Could not import ad audio."))}
+		finally{setBusy(false)}
+	};
+	const uploadRoomPreroll=async(file:File)=>{
+		setBusy(true);setNote(`Importing ${file.name}…`);
+		try{
+			const uploaded=await bridgeApi.uploadVisualMedia(file);
+			const duration=await probeVideoDuration(uploaded.url);
+			const stem=file.name.replace(/\.[^.]+$/g,"").trim()||"Live Room Sponsor";
+			const creative:VisualVideoPrerollCreative={id:`room-preroll-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`,title:stem,sponsor:"YSong",videoUrl:uploaded.url,videoFileName:file.name,durationSeconds:duration,weight:1,enabled:true,mutedByDefault:false};
+			setSettings(prev=>({...prev,liveRoomPrerollCreatives:[...prev.liveRoomPrerollCreatives,creative]}));
+			setNote(`${file.name} added to the Live Room video pre-roll library. Save settings to commit it.`);
+		}catch(error:unknown){setNote(errorMessage(error,"Could not import Room pre-roll video."))}
+		finally{setBusy(false)}
+	};
+	const save=async()=>{
+		const normalized=normalizeVisualAdvertisingSettings(settings);
+		setSettings(normalized);setBusy(true);setNote("");
+		try{
+			await bridgeApi.setVisualAdvertisingSettings(normalized);
+			window.dispatchEvent(new CustomEvent("ysong:world-advertising-settings",{detail:normalized}));
+			setNote("Advertising settings saved.");
+		}catch(error:unknown){setNote(errorMessage(error,"Could not save advertising settings."))}
+		finally{setBusy(false)}
+	};
+	const inputClass="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100 outline-none focus:border-amber-400/50";
+	return <ModalShell title="YSong Advertising Studio" onCancel={onClose}>
+		<div className="space-y-5">
+			<div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-neutral-300"><div className="font-semibold text-amber-200">Two placements, deliberately limited</div><div className="mt-1 text-xs leading-relaxed text-neutral-500">YSong Radio uses audio-only interstitials between songs. Live video Rooms may use one video pre-roll before entry. There are no video ads in Radio and no mid-roll/post-roll ads inside livestream Rooms.</div></div>
+			{loading?<div className="text-sm text-neutral-500">Loading advertising settings…</div>:<>
+				<div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+					<label className="flex items-center gap-2 rounded-xl border border-neutral-800 p-3 text-sm"><input type="checkbox" checked={settings.enabled} onChange={e=>patch({enabled:e.target.checked})}/> Enable advertising</label>
+					<label className="text-xs text-neutral-400">Primary provider ID<input value={settings.providerId} onChange={e=>patch({providerId:e.target.value})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">Built-in provider: house. Future adapters register their own provider ID.</span></label>
+					<label className="text-xs text-neutral-400">Fallback<select value={settings.fallbackProviderId} onChange={e=>patch({fallbackProviderId:e.target.value})} className={inputClass}><option value="house">House library</option></select></label>
+				</div>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Placements</div><div className="grid gap-2 sm:grid-cols-2"><label className="flex items-start gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 p-3 text-xs"><input type="checkbox" checked={settings.placements.radio} onChange={e=>patchPlacements({radio:e.target.checked})}/><span><b className="text-neutral-200">YSong Radio</b><span className="mt-1 block text-neutral-600">Audio spot only after the configured song/minute spacing. Playlists and direct World queues stay ad-free.</span></span></label><label className="flex items-start gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 p-3 text-xs"><input type="checkbox" checked={settings.placements.liveRoomPreroll} onChange={e=>patchPlacements({liveRoomPreroll:e.target.checked})}/><span><b className="text-neutral-200">Live video Room pre-roll</b><span className="mt-1 block text-neutral-600">One video pre-roll before a viewer enters a Room with an active video livestream. No pre-roll for ordinary chat/listening Rooms and no mid-roll/post-roll Room ads.</span></span></label></div></div>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-3 text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Radio ad spacing</div><div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+					<label className="text-xs text-neutral-400">Initial songs<input type="number" min={0} max={100} value={settings.schedule.initialGraceSongs} onChange={e=>patchSchedule({initialGraceSongs:Number(e.target.value)||0})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Initial minutes<input type="number" min={0} max={180} step={.5} value={settings.schedule.initialGraceMinutes} onChange={e=>patchSchedule({initialGraceMinutes:Number(e.target.value)||0})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Songs between<input type="number" min={0} max={100} value={settings.schedule.minSongsBetweenAds} onChange={e=>patchSchedule({minSongsBetweenAds:Number(e.target.value)||0})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Minutes between<input type="number" min={0} max={180} step={.5} value={settings.schedule.minMinutesBetweenAds} onChange={e=>patchSchedule({minMinutesBetweenAds:Number(e.target.value)||0})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Max / hour<input type="number" min={0} max={60} value={settings.schedule.maxAdsPerHour} onChange={e=>patchSchedule({maxAdsPerHour:Number(e.target.value)||0})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Avoid recent ads<input type="number" min={0} max={50} value={settings.schedule.recentCreativeWindow} onChange={e=>patchSchedule({recentCreativeWindow:Number(e.target.value)||0})} className={inputClass}/></label>
+				</div><div className="mt-2 text-[10px] text-neutral-600">Both song-count and elapsed-music spacing must be satisfied when both are non-zero. Max/hour is a hard cap. 0 disables that individual constraint; Max/hour 0 disables delivery.</div></div>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Generic radio break visual</div><div className="mt-1 text-[10px] text-neutral-600">Optional YSong visual backdrop while an audio radio ad plays. This is not a video ad creative.</div></div><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={settings.presentation.enabled} onChange={e=>patchPresentation({enabled:e.target.checked})}/> Enable visual</label></div><div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+					<label className="text-xs text-neutral-400 lg:col-span-2">Scene<select value={settings.presentation.sceneId} onChange={e=>patchPresentation({sceneId:e.target.value})} className={inputClass}><option value="">No dedicated scene</option>{visuals.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></label>
+					<label className="text-xs text-neutral-400">Label<input value={settings.presentation.label} onChange={e=>patchPresentation({label:e.target.value})} className={inputClass}/></label>
+					<label className="text-xs text-neutral-400">Transition<select value={settings.presentation.visualTransition} onChange={e=>patchPresentation({visualTransition:e.target.value as VisualAdvertisingSettings["presentation"]["visualTransition"]})} className={inputClass}><option value="cut">Cut</option><option value="fade">Soft Fade</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+					<label className="text-xs text-neutral-400">Seconds<input type="number" min={.1} max={12} step={.1} value={settings.presentation.visualTransitionSeconds} onChange={e=>patchPresentation({visualTransitionSeconds:Number(e.target.value)||.8})} className={inputClass}/></label>
+				</div><label className="mt-3 flex items-center gap-2 text-xs"><input type="checkbox" checked={settings.presentation.showSponsor} onChange={e=>patchPresentation({showSponsor:e.target.checked})}/> Show sponsor name on generic Ad Break overlay</label></div>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-bold uppercase tracking-[.18em] text-neutral-500">House Ad library</div><div className="mt-1 text-[10px] text-neutral-600">Used by the built-in <b>house</b> provider and as the default fallback when an external provider returns no fill.</div></div><label className="cursor-pointer rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200 hover:bg-amber-500/10">+ Import Ad Audio<input type="file" accept="audio/mpeg,audio/wav,audio/flac,audio/ogg,audio/mp4,audio/aac,.mp3,.wav,.flac,.ogg,.m4a,.aac" className="hidden" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value="";if(file)void uploadCreative(file)}}/></label></div>
+					<div className="space-y-2">{settings.houseCreatives.length?settings.houseCreatives.map(creative=><div key={creative.id} className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3"><div className="grid grid-cols-1 gap-2 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_100px_auto] md:items-end"><label className="flex items-center gap-2 self-center text-xs"><input type="checkbox" checked={creative.enabled} onChange={e=>patchCreative(creative.id,{enabled:e.target.checked})}/> Active</label><label className="text-[10px] text-neutral-500">Title<input value={creative.title} onChange={e=>patchCreative(creative.id,{title:e.target.value})} className={inputClass}/></label><label className="text-[10px] text-neutral-500">Sponsor<input value={creative.sponsor} onChange={e=>patchCreative(creative.id,{sponsor:e.target.value})} className={inputClass}/></label><label className="text-[10px] text-neutral-500">Weight<input type="number" min={.01} max={100} step={.25} value={creative.weight} onChange={e=>patchCreative(creative.id,{weight:Number(e.target.value)||1})} className={inputClass}/></label><button onClick={()=>removeCreative(creative.id)} className="rounded-lg border border-red-500/20 px-2 py-2 text-xs text-red-300 hover:bg-red-500/10">Remove</button></div><div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center"><audio controls preload="metadata" src={creative.audioUrl} className="h-8 max-w-full flex-1"/><div className="text-[9px] text-neutral-600">{creative.audioFileName}{creative.durationSeconds>0?` · ${creative.durationSeconds.toFixed(1)}s`:""}</div></div></div>):<div className="rounded-lg border border-dashed border-neutral-800 p-5 text-center text-xs text-neutral-600">No House Ad audio yet. Import an MP3/WAV/FLAC/OGG/M4A/AAC creative. Advertising stays harmlessly silent when no provider returns an ad.</div>}</div>
+				</div>
+				<div className="rounded-xl border border-neutral-800 p-3"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-bold uppercase tracking-[.18em] text-neutral-500">Live Room video pre-roll library</div><div className="mt-1 text-[10px] text-neutral-600">Used only before entry to an active video livestream Room. One pre-roll per live session; never used for Radio, listening Rooms, mid-rolls or post-rolls.</div></div><label className="cursor-pointer rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2 text-xs text-violet-200 hover:bg-violet-500/10">+ Import Pre-roll Video<input type="file" accept="video/mp4,video/webm,.mp4,.webm" className="hidden" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value="";if(file)void uploadRoomPreroll(file)}}/></label></div>
+					<div className="space-y-2">{settings.liveRoomPrerollCreatives.length?settings.liveRoomPrerollCreatives.map(creative=><div key={creative.id} className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-3"><div className="grid grid-cols-1 gap-2 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_100px_auto] md:items-end"><label className="flex items-center gap-2 self-center text-xs"><input type="checkbox" checked={creative.enabled} onChange={e=>patchRoomPreroll(creative.id,{enabled:e.target.checked})}/> Active</label><label className="text-[10px] text-neutral-500">Title<input value={creative.title} onChange={e=>patchRoomPreroll(creative.id,{title:e.target.value})} className={inputClass}/></label><label className="text-[10px] text-neutral-500">Sponsor<input value={creative.sponsor} onChange={e=>patchRoomPreroll(creative.id,{sponsor:e.target.value})} className={inputClass}/></label><label className="text-[10px] text-neutral-500">Weight<input type="number" min={.01} max={100} step={.25} value={creative.weight} onChange={e=>patchRoomPreroll(creative.id,{weight:Number(e.target.value)||1})} className={inputClass}/></label><button onClick={()=>removeRoomPreroll(creative.id)} className="rounded-lg border border-red-500/20 px-2 py-2 text-xs text-red-300 hover:bg-red-500/10">Remove</button></div><div className="mt-2 grid gap-2 md:grid-cols-[240px_1fr]"><video controls preload="metadata" src={creative.videoUrl} className="aspect-video w-full rounded bg-black object-contain"/><div className="flex flex-col justify-between gap-2"><label className="flex items-center gap-2 text-xs text-neutral-400"><input type="checkbox" checked={creative.mutedByDefault} onChange={e=>patchRoomPreroll(creative.id,{mutedByDefault:e.target.checked})}/> Start muted by default</label><div className="text-[9px] text-neutral-600">{creative.videoFileName}{creative.durationSeconds>0?` · ${creative.durationSeconds.toFixed(1)}s`:""}</div></div></div></div>):<div className="rounded-lg border border-dashed border-neutral-800 p-5 text-center text-xs text-neutral-600">No Live Room video pre-rolls yet. Import MP4 or WebM. If no eligible video creative exists, the viewer enters the livestream immediately.</div>}</div>
+				</div>
+			</>}
+			<div className="flex items-center justify-between gap-3 border-t border-neutral-800 pt-3"><div className="text-xs text-neutral-500">{busy?"Working…":note}</div><div className="flex gap-2"><YSButton onClick={onClose} className="rounded-lg border border-neutral-700 px-3 py-2">Close</YSButton><YSButton disabled={busy||loading} onClick={()=>void save()} className="rounded-lg bg-amber-500 px-4 py-2 font-semibold text-black disabled:opacity-40">Save Advertising</YSButton></div></div>
+		</div>
+	</ModalShell>;
+}
+
+function AdProgramOverrideEditor({programId,settings,onPatch}:{programId:string;settings:VisualAdvertisingSettings;onPatch:(patch:Partial<VisualAdvertisingSettings["programOverrides"][string]>)=>void}) {
+	const override=settings.programOverrides[programId]||{mode:"inherit" as const};
+	const inputClass="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100 outline-none focus:border-amber-400/50";
+	const parseOptional=(value:string)=>value.trim()===""?undefined:Math.max(0,Number(value)||0);
+	return <details className="rounded-xl border border-amber-500/20 bg-amber-500/[.025] p-3">
+		<summary className="cursor-pointer text-xs font-semibold text-amber-200">Advertising <span className="ml-2 text-[10px] font-normal text-neutral-500">{override.mode==="inherit"?"inherits global":override.mode==="enabled"?"forced on":"forced off"}</span></summary>
+		<div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+			<label className="text-xs text-neutral-400">Program mode<select value={override.mode} onChange={e=>onPatch({mode:e.target.value as "inherit"|"enabled"|"disabled"})} className={inputClass}><option value="inherit">Inherit global</option><option value="enabled">Force enabled</option><option value="disabled">Force disabled</option></select></label>
+			<label className="text-xs text-neutral-400">Songs between<input type="number" min={0} max={100} placeholder={String(settings.schedule.minSongsBetweenAds)} value={override.minSongsBetweenAds??""} onChange={e=>onPatch({minSongsBetweenAds:parseOptional(e.target.value)})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">Blank = global {settings.schedule.minSongsBetweenAds}</span></label>
+			<label className="text-xs text-neutral-400">Minutes between<input type="number" min={0} max={180} step={.5} placeholder={String(settings.schedule.minMinutesBetweenAds)} value={override.minMinutesBetweenAds??""} onChange={e=>onPatch({minMinutesBetweenAds:parseOptional(e.target.value)})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">Blank = global {settings.schedule.minMinutesBetweenAds}</span></label>
+			<label className="text-xs text-neutral-400">Max / hour<input type="number" min={0} max={60} placeholder={String(settings.schedule.maxAdsPerHour)} value={override.maxAdsPerHour??""} onChange={e=>onPatch({maxAdsPerHour:parseOptional(e.target.value)})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">Blank = global {settings.schedule.maxAdsPerHour}</span></label>
+		</div>
+		<div className="mt-2 text-[10px] text-neutral-600">Initial grace still comes from the global advertising policy. Program overrides only control whether this program serves ads and its recurring spacing/cap.</div>
+	</details>;
+}
+
+function GlobalBroadcastEditor({globals,visuals,onChange}:{globals:VisualBroadcastGlobals;visuals:VisualScenePreset<VisualSceneState>[];onChange:(next:VisualBroadcastGlobals)=>void}) {
+	const inputClass="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100 outline-none focus:border-cyan-400/50";
+	const toggleScene=(sceneId:string)=>onChange({...globals,defaultSceneIds:globals.defaultSceneIds.includes(sceneId)?globals.defaultSceneIds.filter(id=>id!==sceneId):[...globals.defaultSceneIds,sceneId]});
+	const patchBranding=(patch:Partial<VisualBroadcastGlobals["branding"]>)=>onChange({...globals,branding:{...globals.branding,...patch}});
+	const patchTiming=(patch:Partial<VisualBroadcastGlobals["timing"]>)=>onChange({...globals,timing:{...globals.timing,...patch}});
+	return <details className="rounded-xl border border-cyan-500/20 bg-cyan-500/[.025] p-3"><summary className="cursor-pointer text-xs font-semibold text-cyan-200">Global Broadcast Fallback <span className="ml-2 text-[10px] font-normal text-neutral-500">{globals.defaultSceneIds.length} visual{globals.defaultSceneIds.length===1?"":"s"}</span></summary>
+		<div className="mt-2 text-[10px] leading-relaxed text-neutral-600">The visual pool is the last saved-scene fallback for every playlist and radio program. Overlay defaults below are used by ad-hoc World playback such as Song Radio, Artist Radio, Genre Radio and ordinary World queues when no dedicated program is active.</div>
+		<div className="mt-4"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Global visual pool</div><div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-4">{visuals.length?visuals.map(v=><label key={v.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${globals.defaultSceneIds.includes(v.id)?"border-cyan-400/30 bg-cyan-500/10":"border-neutral-800 bg-neutral-950"}`}><input type="checkbox" checked={globals.defaultSceneIds.includes(v.id)} onChange={()=>toggleScene(v.id)}/><span className="truncate">{v.name}</span></label>):<div className="text-xs text-neutral-500">Save scenes from Visuals first.</div>}</div><label className="mt-3 block max-w-[220px] text-[11px] text-neutral-400">Avoid recent visuals<input type="number" min={0} max={50} value={globals.visualAvoidRecent} onChange={e=>onChange({...globals,visualAvoidRecent:Math.max(0,Math.min(50,Number(e.target.value)||0))})} className={inputClass}/></label></div>
+		<div className="mt-4 grid grid-cols-1 gap-3 border-t border-cyan-400/10 pt-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(260px,.7fr)]"><div><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Ad-hoc overlay defaults</div><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={globals.branding.enabled} onChange={e=>patchBranding({enabled:e.target.checked})}/> Enable overlay branding</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={globals.branding.showStationBug} onChange={e=>patchBranding({showStationBug:e.target.checked})}/> World / Radio bug</label><label className="text-xs text-neutral-400 sm:col-span-2">Bug label<input value={globals.branding.stationLabel} onChange={e=>patchBranding({stationLabel:e.target.value})} className={inputClass}/></label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={globals.branding.showNowPlaying} onChange={e=>patchBranding({showNowPlaying:e.target.checked})}/> Now Playing</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={globals.branding.showNextUp} onChange={e=>patchBranding({showNextUp:e.target.checked})}/> Up Next</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={globals.branding.showQueueLabel} onChange={e=>patchBranding({showQueueLabel:e.target.checked})}/> Queue label</label><label className="text-xs text-neutral-400">Bug position<select value={globals.branding.bugPosition} onChange={e=>patchBranding({bugPosition:e.target.value as VisualBroadcastGlobals["branding"]["bugPosition"]})} className={inputClass}><option value="top-right">Top Right</option><option value="top-left">Top Left</option><option value="bottom-right">Bottom Right</option><option value="bottom-left">Bottom Left</option></select></label></div></div>
+		<div><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Ad-hoc timing</div><div className="grid grid-cols-1 gap-3"><label className="text-xs text-neutral-400">Now Playing delay<input type="number" min={0} max={30} step={.5} value={globals.timing.nowPlayingDelaySeconds} onChange={e=>patchTiming({nowPlayingDelaySeconds:Math.max(0,Math.min(30,Number(e.target.value)||0))})} className={inputClass}/></label><label className="text-xs text-neutral-400">Now Playing hold<input type="number" min={0} max={120} step={.5} value={globals.timing.nowPlayingHoldSeconds} onChange={e=>patchTiming({nowPlayingHoldSeconds:Math.max(0,Math.min(120,Number(e.target.value)||0))})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">0 = whole song</span></label><label className="text-xs text-neutral-400">Up Next lead<input type="number" min={0} max={60} step={.5} value={globals.timing.nextUpLeadSeconds} onChange={e=>patchTiming({nextUpLeadSeconds:Math.max(0,Math.min(60,Number(e.target.value)||0))})} className={inputClass}/><span className="mt-1 block text-[9px] text-neutral-600">0 = off</span></label></div></div></div>
+	</details>;
 }
 
 function SectionTitle({ title, subtitle, action }: { title:string; subtitle?:string; action?:React.ReactNode }) { return <div className="flex items-end justify-between gap-3 mb-3"><div><h2 className="text-xl font-semibold">{title}</h2>{subtitle&&<div className="text-xs text-neutral-500 mt-0.5">{subtitle}</div>}</div>{action}</div>; }
@@ -402,34 +687,45 @@ function TrackDetailView({track,onBack,onPlay,onReact,onSave,onSaveRelease,onFol
 function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll,onRemove,onMove}:{detail:WorldPlaylistDetail;onBack:()=>void;onPlay:(t:WorldTrack)=>void;onOpenTrack:(t:WorldTrack)=>void;onSavePlaylist:()=>void;onPlayAll:()=>void;onRemove:(id:string)=>void;onMove:(id:string,dir:-1|1)=>void}) {
 	const {playlist,tracks}=detail;
 	const cover=playlist.coverTrackId;
-	const albumNames=[...new Set(tracks.map(t=>t.albumName).filter(Boolean))];
+	const albumEntries=[...new Map(tracks.filter(t=>t.albumName).map(t=>[t.releaseId||t.albumName,{key:t.releaseId||t.albumName,label:t.albumName}])).values()];
 	const [visuals,setVisuals]=useState<VisualScenePreset<VisualSceneState>[]>([]);
 	const [program,setProgram]=useState<VisualBroadcastProgram|null>(null);
+	const [globals,setGlobals]=useState<VisualBroadcastGlobals|null>(null);
 	const [broadcastBusy,setBroadcastBusy]=useState(false);
 	const [broadcastNote,setBroadcastNote]=useState("");
 	const [previewing,setPreviewing]=useState("");
 	useEffect(()=>{
 		let cancelled=false;
-		Promise.all([bridgeApi.getVisualLibrary<VisualSceneState>(), bridgeApi.getVisualProgram(playlist.id)])
-			.then(([library,nextProgram])=>{if(cancelled)return;setVisuals(library.presets||[]);setProgram(normalizeVisualBroadcastProgram(nextProgram,playlist.id))})
+		Promise.all([bridgeApi.getVisualLibrary<VisualSceneState>(), bridgeApi.getVisualProgram(playlist.id), bridgeApi.getVisualBroadcastGlobals()])
+			.then(([library,nextProgram,nextGlobals])=>{if(cancelled)return;setVisuals(library.presets||[]);setProgram(normalizeVisualBroadcastProgram(nextProgram,playlist.id,{kind:"playlist",name:playlist.title}));setGlobals(normalizeVisualBroadcastGlobals(nextGlobals))})
 			.catch(()=>{if(!cancelled)setBroadcastNote("Start YSong Bridge to edit broadcast visuals.")});
 		return()=>{cancelled=true};
-	},[playlist.id]);
+	},[playlist.id,playlist.title]);
 	const saveProgram=async(next:VisualBroadcastProgram)=>{
-		const normalized=normalizeVisualBroadcastProgram(next,playlist.id);
+		const normalized=normalizeVisualBroadcastProgram({...next,programId:playlist.id,playlistId:playlist.id,kind:"playlist",name:playlist.title},playlist.id,{kind:"playlist",name:playlist.title});
 		setProgram(normalized);setBroadcastBusy(true);setBroadcastNote("");
 		try{await bridgeApi.setVisualProgram(playlist.id,normalized);window.dispatchEvent(new CustomEvent("ysong:world-broadcast-program",{detail:normalized}));setBroadcastNote("Broadcast program saved.")}
 		catch(e:any){setBroadcastNote(e?.message||"Could not save broadcast program.")}
 		finally{setBroadcastBusy(false)}
 	};
+	const saveGlobals=async(next:VisualBroadcastGlobals)=>{
+		const normalized=normalizeVisualBroadcastGlobals(next);setGlobals(normalized);setBroadcastBusy(true);setBroadcastNote("");
+		try{await bridgeApi.setVisualBroadcastGlobals(normalized);window.dispatchEvent(new CustomEvent("ysong:world-broadcast-globals",{detail:normalized}));setBroadcastNote("Global broadcast fallback saved.")}
+		catch(error:unknown){setBroadcastNote(errorMessage(error,"Could not save global fallback."))}
+		finally{setBroadcastBusy(false)}
+	};
 	const patchProgram=(patch:Partial<VisualBroadcastProgram>)=>{if(program)void saveProgram({...program,...patch})};
+	const patchBranding=(patch:Partial<VisualBroadcastProgram["branding"]>)=>{if(program)void saveProgram({...program,branding:{...program.branding,...patch}})};
+	const patchTiming=(patch:Partial<VisualBroadcastProgram["timing"]>)=>{if(program)void saveProgram({...program,timing:{...program.timing,...patch}})};
 	const togglePool=(current:string[],sceneId:string)=>current.includes(sceneId)?current.filter(id=>id!==sceneId):[...current,sceneId];
 	const toggleDefaultScene=(sceneId:string)=>{if(program)void saveProgram({...program,defaultSceneIds:togglePool(program.defaultSceneIds,sceneId)})};
-	const toggleAlbumScene=(albumName:string,sceneId:string)=>{
+	const toggleAlbumScene=(albumKey:string,sceneId:string,legacyAlbumName?:string)=>{
 		if(!program)return;
 		const next={...program.albumDefaults};
-		const ids=togglePool(next[albumName]||[],sceneId);
-		if(ids.length)next[albumName]=ids;else delete next[albumName];
+		const inherited=next[albumKey]||(legacyAlbumName?next[legacyAlbumName]:undefined)||[];
+		const ids=togglePool(inherited,sceneId);
+		if(legacyAlbumName&&legacyAlbumName!==albumKey)delete next[legacyAlbumName];
+		if(ids.length)next[albumKey]=ids;else delete next[albumKey];
 		void saveProgram({...program,albumDefaults:next});
 	};
 	const patchTrackAssignment=(trackId:string,patch:Partial<VisualBroadcastAssignment>)=>{
@@ -463,10 +759,12 @@ function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll
 	const resolvedVisualLabel=(track:WorldTrack)=>{
 		const direct=program?.trackAssignments[track.id]?.sceneIds||[];
 		if(direct.length)return `${direct.length} song visual${direct.length===1?"":"s"}`;
-		const album=program?.albumDefaults[track.albumName]||[];
+		const album=program?.albumDefaults[track.releaseId]||program?.albumDefaults[track.albumName]||[];
 		if(album.length)return `${album.length} album visual${album.length===1?"":"s"}`;
 		const defaults=program?.defaultSceneIds||[];
 		if(defaults.length)return `${defaults.length} playlist visual${defaults.length===1?"":"s"}`;
+		const globalDefaults=globals?.defaultSceneIds||[];
+		if(globalDefaults.length)return `${globalDefaults.length} global visual${globalDefaults.length===1?"":"s"}`;
 		return "current scene fallback";
 	};
 
@@ -481,7 +779,7 @@ function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll
 			<div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
 				<label className="text-xs text-neutral-400">Audio transition<select value={program.audioTransition} onChange={e=>patchProgram({audioTransition:e.target.value as VisualBroadcastProgram["audioTransition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="regular">Regular</option><option value="gapless">Gapless</option><option value="crossfade">Crossfade</option></select></label>
 				<label className="text-xs text-neutral-400">Crossfade<input type="number" min={0.5} max={20} step={0.5} value={program.crossfadeSeconds} onChange={e=>patchProgram({crossfadeSeconds:Math.max(.5,Math.min(20,Number(e.target.value)||5))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
-				<label className="text-xs text-neutral-400">Visual transition<select value={program.visualTransition} onChange={e=>patchProgram({visualTransition:e.target.value as VisualBroadcastProgram["visualTransition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="cut">Cut</option><option value="fade">Dissolve</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+				<label className="text-xs text-neutral-400">Visual transition<select value={program.visualTransition} onChange={e=>patchProgram({visualTransition:e.target.value as VisualBroadcastProgram["visualTransition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="cut">Cut</option><option value="fade">Soft Fade</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
 				<label className="text-xs text-neutral-400">Visual seconds<input type="number" min={0.1} max={12} step={0.1} value={program.visualTransitionSeconds} onChange={e=>patchProgram({visualTransitionSeconds:Math.max(.1,Math.min(12,Number(e.target.value)||1.4))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
 				<label className="text-xs text-neutral-400">Repeat<select value={program.repeatMode} onChange={e=>patchProgram({repeatMode:e.target.value as VisualBroadcastProgram["repeatMode"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="all">All</option><option value="off">Off</option><option value="one">One</option></select></label>
 				<label className="flex items-center gap-2 self-end rounded-lg border border-neutral-800 bg-neutral-950 px-2 py-2.5 text-xs"><input type="checkbox" checked={program.shuffle} onChange={e=>patchProgram({shuffle:e.target.checked})}/> Shuffle</label>
@@ -489,12 +787,31 @@ function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll
 				<label className="text-[11px] text-neutral-400">Avoid visuals<input type="number" min={0} max={50} value={program.visualAvoidRecent} onChange={e=>patchProgram({visualAvoidRecent:Math.max(0,Math.min(50,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
 			</div>
 
+			<div className="mt-4 grid grid-cols-1 gap-3 border-t border-violet-400/10 pt-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,.8fr)]">
+				<div className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-3"><div className="mb-3 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Broadcast Branding</div><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.enabled} onChange={e=>patchBranding({enabled:e.target.checked})}/> Enable program branding</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showStationBug} onChange={e=>patchBranding({showStationBug:e.target.checked})}/> Program bug</label>
+					<label className="text-xs text-neutral-400 sm:col-span-2">Program label<input value={program.branding.stationLabel} placeholder={playlist.title} onChange={e=>patchBranding({stationLabel:e.target.value})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showNowPlaying} onChange={e=>patchBranding({showNowPlaying:e.target.checked})}/> Now Playing</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showNextUp} onChange={e=>patchBranding({showNextUp:e.target.checked})}/> Up Next</label>
+					<label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={program.branding.showQueueLabel} onChange={e=>patchBranding({showQueueLabel:e.target.checked})}/> Queue label</label><label className="text-xs text-neutral-400">Bug position<select value={program.branding.bugPosition} onChange={e=>patchBranding({bugPosition:e.target.value as VisualBroadcastProgram["branding"]["bugPosition"]})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"><option value="top-right">Top Right</option><option value="top-left">Top Left</option><option value="bottom-right">Bottom Right</option><option value="bottom-left">Bottom Left</option></select></label>
+				</div></div>
+				<div className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-3"><div className="mb-3 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Broadcast Timing</div><div className="grid grid-cols-1 gap-3">
+					<label className="text-xs text-neutral-400">Now Playing delay<input type="number" min={0} max={30} step={.5} value={program.timing.nowPlayingDelaySeconds} onChange={e=>patchTiming({nowPlayingDelaySeconds:Math.max(0,Math.min(30,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+					<label className="text-xs text-neutral-400">Now Playing hold<input type="number" min={0} max={120} step={.5} value={program.timing.nowPlayingHoldSeconds} onChange={e=>patchTiming({nowPlayingHoldSeconds:Math.max(0,Math.min(120,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/><span className="mt-1 block text-[9px] text-neutral-600">0 = whole song</span></label>
+					<label className="text-xs text-neutral-400">Up Next lead<input type="number" min={0} max={60} step={.5} value={program.timing.nextUpLeadSeconds} onChange={e=>patchTiming({nextUpLeadSeconds:Math.max(0,Math.min(60,Number(e.target.value)||0))})} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-neutral-100"/></label>
+				</div></div>
+			</div>
+
+
+			<div className="mt-3 rounded-xl border border-cyan-500/15 bg-cyan-500/[.03] px-3 py-2 text-[10px] text-neutral-500"><span className="font-semibold text-cyan-300">Visual resolution:</span> Song override → Album pool → Playlist pool → Global pool → current scene. Every pool can contain several scenes; YSong rotates them while honoring the recent-visual window.</div>
+
 			<div className="mt-4 border-t border-violet-400/10 pt-3">
 				<div className="mb-2 flex items-center justify-between gap-3"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Playlist visual pool</div><div className="text-[10px] text-neutral-600">Used when a song and album do not override it. Several checked scenes rotate randomly without immediate repeats.</div></div><span className="text-[10px] text-violet-300">{program.defaultSceneIds.length} selected</span></div>
 				<div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-4">{visuals.length?visuals.map(v=><div key={v.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 text-xs ${program.defaultSceneIds.includes(v.id)?"border-violet-400/30 bg-violet-500/10":"border-neutral-800 bg-neutral-950"}`}><label className="flex min-w-0 flex-1 items-center gap-2"><input type="checkbox" checked={program.defaultSceneIds.includes(v.id)} onChange={()=>toggleDefaultScene(v.id)}/><span className="truncate">{v.name}</span></label><button onClick={()=>void previewScene(v)} disabled={previewing===v.id} className="rounded px-1.5 py-1 text-[10px] text-neutral-500 hover:bg-neutral-800 hover:text-white">{previewing===v.id?"…":"Preview"}</button></div>):<div className="text-xs text-neutral-500">Save scenes from Visuals first.</div>}</div>
 			</div>
 
-			{albumNames.length?<div className="mt-4 border-t border-violet-400/10 pt-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Album visual pools</div><div className="grid grid-cols-1 gap-2 md:grid-cols-2">{albumNames.map(album=>{const selected=program.albumDefaults[album]||[];return <details key={album} className="rounded-xl border border-neutral-800 bg-neutral-950/70 p-2"><summary className="cursor-pointer text-xs text-neutral-300"><span className="font-semibold">{album}</span><span className="ml-2 text-[10px] text-violet-300">{selected.length?`${selected.length} visual${selected.length===1?"":"s"}`:"playlist pool"}</span></summary><div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.map(v=><label key={v.id} className="flex items-center gap-2 rounded border border-neutral-800 px-2 py-1 text-[10px] text-neutral-400"><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggleAlbumScene(album,v.id)}/><span className="truncate">{v.name}</span></label>)}</div></details>})}</div></div>:null}
+			{globals?<div className="mt-4"><GlobalBroadcastEditor globals={globals} visuals={visuals} onChange={next=>void saveGlobals(next)}/></div>:null}
+
+			{albumEntries.length?<div className="mt-4 border-t border-violet-400/10 pt-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-neutral-500">Album visual pools</div><div className="grid grid-cols-1 gap-2 md:grid-cols-2">{albumEntries.map(album=>{const selected=program.albumDefaults[album.key]||program.albumDefaults[album.label]||[];return <details key={album.key} className="rounded-xl border border-neutral-800 bg-neutral-950/70 p-2"><summary className="cursor-pointer text-xs text-neutral-300"><span className="font-semibold">{album.label}</span><span className="ml-2 text-[10px] text-violet-300">{selected.length?`${selected.length} visual${selected.length===1?"":"s"}`:"playlist pool"}</span></summary><div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">{visuals.map(v=><label key={v.id} className="flex items-center gap-2 rounded border border-neutral-800 px-2 py-1 text-[10px] text-neutral-400"><input type="checkbox" checked={selected.includes(v.id)} onChange={()=>toggleAlbumScene(album.key,v.id,album.label)}/><span className="truncate">{v.name}</span></label>)}</div></details>})}</div></div>:null}
 		</div>:null}
 
 		<div className="rounded-2xl border border-neutral-800 overflow-hidden">{tracks.length===0?<div className="p-8 text-center text-neutral-500">This playlist is empty.</div>:tracks.map((t,i)=>{
@@ -507,7 +824,7 @@ function PlaylistView({detail,onBack,onPlay,onOpenTrack,onSavePlaylist,onPlayAll
 				<div className="mt-3 grid grid-cols-1 gap-2 border-t border-neutral-900 pt-3 sm:grid-cols-2 lg:grid-cols-5">
 					<label className="text-[10px] text-neutral-500">Audio into this track<select value={assignment?.audioTransition||""} onChange={e=>patchTrackAssignment(t.id,{audioTransition:(e.target.value||undefined) as VisualBroadcastAssignment["audioTransition"]})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"><option value="">Program default</option><option value="regular">Regular</option><option value="gapless">Gapless</option><option value="crossfade">Crossfade</option></select></label>
 					<label className="text-[10px] text-neutral-500">Track crossfade<input type="number" min={0.5} max={20} step={0.5} value={assignment?.crossfadeSeconds??program.crossfadeSeconds} onChange={e=>patchTrackAssignment(t.id,{crossfadeSeconds:Math.max(.5,Math.min(20,Number(e.target.value)||program.crossfadeSeconds))})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"/></label>
-					<label className="text-[10px] text-neutral-500">Visual into this track<select value={assignment?.visualTransition||""} onChange={e=>patchTrackAssignment(t.id,{visualTransition:(e.target.value||undefined) as VisualBroadcastAssignment["visualTransition"]})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"><option value="">Program default</option><option value="cut">Cut</option><option value="fade">Dissolve</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
+					<label className="text-[10px] text-neutral-500">Visual into this track<select value={assignment?.visualTransition||""} onChange={e=>patchTrackAssignment(t.id,{visualTransition:(e.target.value||undefined) as VisualBroadcastAssignment["visualTransition"]})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"><option value="">Program default</option><option value="cut">Cut</option><option value="fade">Soft Fade</option><option value="black">Black Fade</option><option value="flash">Flash</option></select></label>
 					<label className="text-[10px] text-neutral-500">Visual seconds<input type="number" min={0.1} max={12} step={0.1} value={assignment?.visualTransitionSeconds??program.visualTransitionSeconds} onChange={e=>patchTrackAssignment(t.id,{visualTransitionSeconds:Math.max(.1,Math.min(12,Number(e.target.value)||program.visualTransitionSeconds))})} className="mt-1 w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-neutral-300"/></label>
 					<div className="flex items-end"><button onClick={()=>clearTrackOverrides(t.id)} className="w-full rounded border border-neutral-800 px-2 py-1.5 text-[10px] text-neutral-500 hover:border-red-400/30 hover:text-red-300">Clear song overrides</button></div>
 				</div>

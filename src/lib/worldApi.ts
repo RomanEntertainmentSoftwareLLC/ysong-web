@@ -213,9 +213,17 @@ export function toggleWorldArtistFollow(ownerUserId: string, artistName: string)
 }
 
 export async function countWorldPlay(trackId: string) {
-	const result = await apiPost<{ ok: true; playCount: number }>(`/api/world/tracks/${encodeURIComponent(trackId)}/play`, {});
+	const result = await apiPost<{ ok: true; playCount: number; playEventId?: string | null }>(`/api/world/tracks/${encodeURIComponent(trackId)}/play`, {});
 	window.dispatchEvent(new Event("ysong:achievements-changed"));
 	return result;
+}
+
+export function updateWorldPlayProgress(playEventId: string, listenSeconds: number, completed = false) {
+	if (!playEventId) return Promise.resolve({ ok: true, playEventId: "", listenSeconds: 0, completed: false });
+	return apiPost<{ ok: true; playEventId: string; listenSeconds: number; completed: boolean }>(
+		`/api/world/play-events/${encodeURIComponent(playEventId)}/progress`,
+		{ listenSeconds: Math.max(0, Number(listenSeconds) || 0), completed }
+	);
 }
 
 export function worldAudioUrl(trackId: string) {

@@ -9,7 +9,7 @@ export type Chat = {
   messages?: { role: "user" | "assistant"; text: string; ts?: number; attachments?: any; personaId?: string | null }[];
 };
 
-type ModuleType = "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "upload";
+type ModuleType = "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "flashback" | "tools" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "upload";
 
 type Props = {
   chats: Chat[];
@@ -38,6 +38,8 @@ const navItems: { label: string; type: ModuleType; icon: string }[] = [
   { label: "Band Creation", type: "band", icon: "users" },
   { label: "Singer Studio", type: "singers", icon: "mic" },
   { label: "Analytics", type: "analytics", icon: "chart" },
+  { label: "Flashback", type: "flashback", icon: "flashback" },
+  { label: "Tools", type: "tools", icon: "tools" },
   { label: "Artwork Studio", type: "artwork", icon: "image" },
   { label: "My Library", type: "library", icon: "library" },
   { label: "Achievements", type: "achievements", icon: "trophy" },
@@ -56,6 +58,8 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     users: <><circle cx="9" cy="8" r="3"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 5 5"/></>,
     mic: <><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></>,
     chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></>,
+    flashback: <><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/><path d="M12 7v5l3 2"/></>,
+    tools: <><path d="M4 6h16"/><path d="M8 3v6"/><path d="M4 12h16"/><path d="M15 9v6"/><path d="M4 18h16"/><path d="M10 15v6"/></>,
     image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 15-4-4L5 20"/></>,
     library: <><path d="M4 4h4v16H4zM10 4h4v16h-4zM16 6l3-1 3 14-3 1z"/></>,
     trophy: <><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M10 17h4"/></>,

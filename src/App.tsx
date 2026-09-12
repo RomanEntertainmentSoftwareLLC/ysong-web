@@ -20,6 +20,7 @@ import TosGate from "./components/ToSGate";
 import { apiGet, apiPost } from "./lib/authApi";
 import DevViewportBadge from "./components/DevViewportBadge";
 import VisualOutput from "./pages/VisualOutput";
+import PromotionLanding from "./pages/PromotionLanding";
 
 type CurrentUser = {
 	id: string;
@@ -72,12 +73,13 @@ function HomeResponsive() {
 function AppShell() {
 	const location = useLocation();
 	const inApp = location.pathname.startsWith("/app");
+	const inPromotion = location.pathname.startsWith("/p/");
 
 	return (
 		<>
-			{!inApp && <Navbar />}
+			{!inApp && !inPromotion && <Navbar />}
 			<UseGradientBackground />
-			<div className={inApp ? "" : "pt-16"}>
+			<div className={inApp || inPromotion ? "" : "pt-16"}>
 				<Outlet />
 			</div>
 		</>
@@ -150,6 +152,7 @@ function App() {
 				<Route path="/forgot-password" element={<ForgotPassword />} />
 				<Route path="/forgot-sent" element={<ForgotSent />} />
 				<Route path="/terms-of-service" element={<TermsOfService />} />
+				<Route path="/p/:slug" element={<PromotionLanding />} />
 
 				<Route
 					path="/app"

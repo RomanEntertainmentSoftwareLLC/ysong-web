@@ -1,0 +1,54 @@
+import { useEffect, useMemo, useState } from "react";
+import { promotionApi, type AdCampaign, type PromotionIntelligenceRecommendation, type PromotionIntelligenceResponse } from "./api";
+
+const panel="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800";
+const input="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-950";
+const kindClass:Record<string,string>={winner:"border-emerald-500/30 bg-emerald-500/5",warning:"border-red-500/30 bg-red-500/5",watch:"border-amber-500/30 bg-amber-500/5",opportunity:"border-violet-500/30 bg-violet-500/5",learning:"border-sky-500/30 bg-sky-500/5",insight:"border-blue-500/30 bg-blue-500/5"};
+const kindBadge:Record<string,string>={winner:"bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",warning:"bg-red-500/10 text-red-700 dark:text-red-300",watch:"bg-amber-500/10 text-amber-700 dark:text-amber-300",opportunity:"bg-violet-500/10 text-violet-700 dark:text-violet-300",learning:"bg-sky-500/10 text-sky-700 dark:text-sky-300",insight:"bg-blue-500/10 text-blue-700 dark:text-blue-300"};
+function n(v:unknown){const x=Number(v||0);return Number.isFinite(x)?x:0;}
+function num(v:unknown){return new Intl.NumberFormat().format(Math.round(n(v)));}
+function money(v:unknown,currency:string){try{return new Intl.NumberFormat(undefined,{style:"currency",currency:currency||"USD",maximumFractionDigits:4}).format(n(v));}catch{return `${currency||"USD"} ${n(v).toFixed(4)}`;}}
+function evidenceText(item:{label:string;value:number|string;unit?:string},currency:string){if(typeof item.value==="string")return `${item.label}: ${item.value}`;if(item.unit==="%")return `${item.label}: ${n(item.value).toFixed(1)}%`;if(item.unit&&item.unit===currency)return `${item.label}: ${money(item.value,currency)}`;return `${item.label}: ${Number.isInteger(item.value)?num(item.value):n(item.value).toFixed(3)}${item.unit?` ${item.unit}`:""}`;}
+function RecommendationCard({item,currency}:{item:PromotionIntelligenceRecommendation;currency:string}){
+  return <div className={`rounded-2xl border p-4 ${kindClass[item.kind]||"border-neutral-200 dark:border-neutral-800"}`}>
+    <div className="flex flex-wrap items-start justify-between gap-2"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wider ${kindBadge[item.kind]||"bg-neutral-500/10"}`}>{item.kind}</span><span className="text-[10px] uppercase tracking-wider text-neutral-500">{item.priority} priority · {item.confidence} confidence</span></div><h4 className="mt-2 font-semibold">{item.title}</h4></div><span className="rounded-full border border-neutral-300 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-700">{item.entityType}</span></div>
+    <p className="mt-2 text-sm text-neutral-700 dark:text-neutral-300">{item.summary}</p>
+    <div className="mt-3 rounded-xl bg-white/70 p-3 text-sm dark:bg-neutral-950/60"><div className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">Suggested next test</div><div className="mt-1">{item.action}</div></div>
+    {!!item.evidence.length&&<div className="mt-3 flex flex-wrap gap-2">{item.evidence.map((e,i)=><span key={`${e.label}-${i}`} className="rounded-full border border-neutral-300 bg-white/50 px-2.5 py-1 text-[11px] dark:border-neutral-700 dark:bg-neutral-950/40">{evidenceText(e,currency)}</span>)}</div>}
+    {item.why&&<p className="mt-3 text-[11px] text-neutral-500">Why YSong flagged it: {item.why}</p>}
+  </div>;
+}
+function rankingLabel(row:Record<string,unknown>){return String(row.label||row.id||"—");}
+function costValue(row:Record<string,unknown>){const v=row.costPerOutcome??row.costPerClick;return v==null?null:n(v);}
+
+export default function PromotionIntelligence({ad,onMessage}:{ad:AdCampaign;onMessage:(value:string)=>void}){
+  const [data,setData]=useState<PromotionIntelligenceResponse|null>(null); const [busy,setBusy]=useState(false);
+  const today=useMemo(()=>new Date().toISOString().slice(0,10),[]); const defaultSince=useMemo(()=>ad.metaPublishedAt?String(ad.metaPublishedAt).slice(0,10):new Date(Date.now()-29*86400000).toISOString().slice(0,10),[ad.metaPublishedAt]);
+  const [since,setSince]=useState(defaultSince); const [until,setUntil]=useState(today);
+  async function load(refresh=false){setBusy(true);try{const out=await promotionApi.promotionIntelligence(ad.id,{since,until,refresh});setData(out);if(refresh)onMessage("Promotion Intelligence refreshed from the latest available Meta + YSong evidence.");}catch(e){onMessage(e instanceof Error?e.message:"Could not build Promotion Intelligence.");}finally{setBusy(false);}}
+  useEffect(()=>{void load(false);},[ad.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const intel=data?.intelligence; const currency=intel?.evidenceState.currency||ad.currency||"USD";
+  const ranked=[...[...(intel?.recommendations||[]).filter(r=>r.priority==="high")],...[...(intel?.recommendations||[]).filter(r=>r.priority==="medium")],...[...(intel?.recommendations||[]).filter(r=>r.priority==="low")]];
+  const rankingGroups:[string,Array<Record<string,unknown>>][]=[
+    ["Audio snippets",intel?.rankings.snippets||[]],
+    ["Background videos",intel?.rankings.backgrounds||[]],
+    ["Placements",intel?.rankings.placements||[]],
+    ["Countries",intel?.rankings.countries||[]],
+  ];
+  return <div className="mt-5 space-y-5">
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-semibold">Promotion Intelligence</h3><span className="rounded-full bg-neutral-500/10 px-2 py-1 text-[10px] uppercase tracking-wider text-neutral-500">Advisory only</span></div><p className="mt-1 max-w-3xl text-xs text-neutral-500">Deterministic campaign guidance over Meta Insights + YSong attribution. It recommends controlled tests; it never pauses ads, changes targeting, or moves money by itself.</p></div><div className="flex flex-wrap items-end gap-2"><label className="text-[10px] uppercase tracking-widest text-neutral-500">From<input className={`${input} mt-1 block`} type="date" value={since} onChange={e=>setSince(e.target.value)}/></label><label className="text-[10px] uppercase tracking-widest text-neutral-500">To<input className={`${input} mt-1 block`} type="date" value={until} onChange={e=>setUntil(e.target.value)}/></label><button disabled={busy} onClick={()=>void load(false)} className="rounded-xl border border-neutral-300 px-3 py-2 text-sm disabled:opacity-40 dark:border-neutral-700">Analyze</button><button disabled={busy||!ad.metaCampaignId} onClick={()=>void load(true)} className="rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-40">{busy?"Refreshing…":"Refresh evidence"}</button></div></div>
+
+    {!intel&&<div className="rounded-2xl border border-dashed border-neutral-300 p-10 text-center text-sm text-neutral-500 dark:border-neutral-700">{busy?"Building campaign intelligence…":"No intelligence report loaded yet."}</div>}
+    {intel&&<>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Objective",intel.objective.label],["Evidence",intel.evidenceState.sufficientForStrongComparisons?"Enough for comparisons":"Still learning"],["Spend",money(intel.evidenceState.spend,currency)],["Strong signals",String(intel.evidenceState.strongRecommendationCount)]].map(([label,value])=><div key={label} className={panel}><div className="text-[10px] uppercase tracking-wider text-neutral-500">{label}</div><div className="mt-1 text-xl font-semibold">{value}</div></div>)}</div>
+
+      <div className={panel}><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-semibold">Evidence gate</div><div className="text-xs text-neutral-500">The engine refuses to call tiny samples winners.</div></div><span className="text-xs text-neutral-500">Engine {intel.engine.version} · learned model: {intel.engine.learnedModel?"yes":"no"}</span></div><div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">{[["Impressions",intel.evidenceState.impressions],["Meta outbound",intel.evidenceState.outboundClicks],["Smart visits",intel.evidenceState.smartLinkVisits],["Platform clicks",intel.evidenceState.platformClicks],["Emails",intel.evidenceState.emailCaptures],["Conversions",intel.evidenceState.conversions]].map(([label,value])=><div key={String(label)} className="rounded-xl bg-neutral-100 p-3 dark:bg-neutral-950"><div className="text-[10px] uppercase text-neutral-500">{label}</div><div className="mt-1 text-lg font-semibold">{num(value)}</div></div>)}</div></div>
+
+      <div><div className="mb-3 flex items-center justify-between"><div><div className="font-semibold">Recommendations</div><div className="text-xs text-neutral-500">Ordered by priority and confidence. Every card shows its evidence.</div></div><span className="text-xs text-neutral-500">{ranked.length} signal{ranked.length===1?"":"s"}</span></div><div className="grid gap-3 xl:grid-cols-2">{ranked.map(item=><RecommendationCard key={item.id} item={item} currency={currency}/>)}</div>{!ranked.length&&<div className="rounded-2xl border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-500 dark:border-neutral-700">No recommendation has enough evidence yet. That is a valid result.</div>}</div>
+
+      <div className="grid gap-5 xl:grid-cols-2">{rankingGroups.map(([title,rows])=><div key={title} className={panel}><div className="font-semibold">{title}</div><div className="mt-1 text-[11px] text-neutral-500">Qualified rows only; lower cost appears first.</div><div className="mt-3 max-h-72 overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 bg-white text-neutral-500 dark:bg-neutral-900"><tr><th className="py-2 text-left">Item</th><th className="text-right">Outcome/clicks</th><th className="text-right">Spend</th><th className="text-right">Cost</th></tr></thead><tbody>{rows.slice(0,20).map((r,i)=><tr key={`${rankingLabel(r)}-${i}`} className="border-t border-neutral-100 dark:border-neutral-800"><td className="py-2 pr-3">{rankingLabel(r)}</td><td className="text-right">{num(r.outcome??r.clicks)}</td><td className="text-right">{money(r.spend,currency)}</td><td className="text-right">{costValue(r)==null?"—":money(costValue(r),currency)}</td></tr>)}</tbody></table>{!rows.length&&<div className="py-6 text-center text-xs text-neutral-500">Not enough qualified evidence yet.</div>}</div></div>)}</div>
+
+      <div className="rounded-2xl border border-violet-500/25 bg-violet-500/5 p-4"><div className="font-semibold">Guardrails</div><div className="mt-2 grid gap-2 md:grid-cols-2">{intel.guardrails.map((g,i)=><div key={i} className="rounded-xl bg-white/60 p-3 text-xs dark:bg-neutral-950/50">{g}</div>)}</div></div>
+    </>}
+  </div>;
+}

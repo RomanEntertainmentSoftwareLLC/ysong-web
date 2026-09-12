@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TabRecord } from "./core";
 import Avatar from "../components/Avatar";
+import RoomVenuePanel from "../components/RoomVenuePanel";
+import RoomPrerollOverlay from "../components/RoomPrerollOverlay";
+import { bridgeApi, normalizeVisualAdvertisingSettings } from "../lib/bridgeApi";
+import { requestYSongRoomPrerollAd, type YSongVideoPrerollDecision } from "../lib/ysongAds";
 import {
   createRoom,
   deleteRoom,
   getRoom,
+  getRoomVenue,
   inviteRoomMember,
   joinRoom,
   leaveRoom,
@@ -91,6 +96,7 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
   const [input,setInput]=useState("");
   const [aiThinking,setAiThinking]=useState(false);
   const [createOpen,setCreateOpen]=useState(false);
+  const [preroll,setPreroll]=useState<{room:RoomSummary;decision:YSongVideoPrerollDecision;sessionKey:string}|null>(null);
   const [error,setError]=useState("");
   const [inviteName,setInviteName]=useState("");
   const [inviteBusy,setInviteBusy]=useState(false);
@@ -119,15 +125,19 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
     catch(e:any){setError(e?.message||"Could not load room.");}
   }
 
-  useEffect(()=>{void refreshRooms();},[]);
+  useEffect(()=>{
+    void refreshRooms();
+    const timer=window.setInterval(()=>void refreshRooms(),6000);
+    return()=>window.clearInterval(timer);
+  },[]);
   useEffect(()=>{
     if(!activeRoomId){
       setDetail(null);
-      try{localStorage.removeItem("ysong:activeRoomId");}catch{}
+      try{localStorage.removeItem("ysong:activeRoomId");}catch{/* local persistence unavailable */}
       window.dispatchEvent(new CustomEvent("ysong:active-room-changed",{detail:{roomId:""}}));
       return;
     }
-    try{localStorage.setItem("ysong:activeRoomId",activeRoomId);}catch{}
+    try{localStorage.setItem("ysong:activeRoomId",activeRoomId);}catch{/* local persistence unavailable */}
     window.dispatchEvent(new CustomEvent("ysong:active-room-changed",{detail:{roomId:activeRoomId}}));
     void refreshDetail(activeRoomId);
   },[activeRoomId]);
@@ -146,6 +156,23 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
       return !q||name.startsWith(q)||key.startsWith(q);
     }).slice(0,8);
   },[mention,detail]);
+
+  async function openRoom(room:RoomSummary){
+    if(!room.liveActive){setActiveRoomId(room.id);return;}
+    try{
+      const live=await getRoomVenue(room.id);
+      const videoLive=!!live.venue?.active&&live.venue.streamMode==="embed"&&!!live.venue.streamUrl?.trim();
+      if(!videoLive||live.venue.hostUserId===meUserId){setActiveRoomId(room.id);return;}
+      const stamp=live.venue.startedAt||live.venue.updatedAt||"live";
+      const sessionKey=`ysong:room-preroll:${room.id}:${stamp}`;
+      try{if(localStorage.getItem(sessionKey)==="1"){setActiveRoomId(room.id);return;}}catch{/* local persistence unavailable */}
+      const raw=await bridgeApi.getVisualAdvertisingSettings().catch(()=>null);
+      const settings=normalizeVisualAdvertisingSettings(raw);
+      const decision=await requestYSongRoomPrerollAd(settings,room.id,room.name);
+      if(!decision){setActiveRoomId(room.id);return;}
+      setPreroll({room,decision,sessionKey});
+    }catch{setActiveRoomId(room.id);}
+  }
 
   function openPersonaDrawer(){window.dispatchEvent(new CustomEvent("ysong:open-drawer",{detail:{id:"personas"}}));}
   function showRoomList(){setActiveRoomId("");setDetail(null);setInput("");setMention(null);}
@@ -193,15 +220,16 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
 
   return <div className="h-full min-h-0 flex bg-neutral-50/40 dark:bg-neutral-950/20">
     <aside className="w-[230px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 min-h-0 flex flex-col">
-      <div className="px-3 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between"><div><div className="text-sm font-semibold">Rooms</div><div className="text-[10px] opacity-50">Humans + AI personas</div></div><button onClick={()=>setCreateOpen(true)} className="h-8 w-8 rounded-lg grid place-items-center hover:bg-black/5 dark:hover:bg-white/10" title="Create room"><Icon name="plus"/></button></div>
-      <div className="flex-1 overflow-y-auto p-2 space-y-4"><div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Your rooms</div>{joinedRooms.length?joinedRooms.map(r=><button key={r.id} onClick={()=>setActiveRoomId(r.id)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12 text-violet-700 dark:text-violet-200":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><span className="opacity-55">{r.visibility==="private"?<Icon name="lock" size={13}/>:<Icon name="globe" size={13}/>}</span><span className="text-sm font-medium truncate">{r.name}</span></div><div className="text-[10px] opacity-45 mt-1 truncate">{r.description||r.role}</div></button>):<div className="px-2 py-3 text-xs opacity-45">No rooms yet.</div>}</div>
-        {publicRooms.length>0&&<div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Public rooms</div>{publicRooms.map(r=><button key={r.id} onClick={()=>setActiveRoomId(r.id)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><Icon name="globe" size={13}/><span className="text-sm truncate">{r.name}</span></div></button>)}</div>}
+      <div className="px-3 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between"><div><div className="text-sm font-semibold">Rooms</div><div className="text-[10px] opacity-50">Chat + live venues + AI</div></div><button onClick={()=>setCreateOpen(true)} className="h-8 w-8 rounded-lg grid place-items-center hover:bg-black/5 dark:hover:bg-white/10" title="Create room"><Icon name="plus"/></button></div>
+      <div className="flex-1 overflow-y-auto p-2 space-y-4"><div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Your rooms</div>{joinedRooms.length?joinedRooms.map(r=><button key={r.id} onClick={()=>void openRoom(r)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12 text-violet-700 dark:text-violet-200":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><span className="opacity-55">{r.visibility==="private"?<Icon name="lock" size={13}/>:<Icon name="globe" size={13}/>}</span><span className="text-sm font-medium truncate">{r.name}</span></div><div className="mt-1 flex items-center gap-2 text-[10px] opacity-45"><span className="truncate">{r.description||r.role}</span>{r.liveActive&&<span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-.5 text-[8px] font-bold text-red-400">LIVE</span>}</div></button>):<div className="px-2 py-3 text-xs opacity-45">No rooms yet.</div>}</div>
+        {publicRooms.length>0&&<div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Public rooms</div>{publicRooms.map(r=><button key={r.id} onClick={()=>void openRoom(r)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><Icon name="globe" size={13}/><span className="text-sm truncate">{r.name}</span>{r.liveActive&&<span className="ml-auto rounded-full bg-red-500/15 px-1.5 py-.5 text-[8px] font-bold text-red-400">LIVE</span>}</div></button>)}</div>}
       </div>
     </aside>
 
     <section className="flex-1 min-w-0 min-h-0 flex flex-col">
       {!detail?<div className="h-full grid place-items-center text-center p-8"><div className="max-w-xl"><div className="text-4xl mb-3">💬</div><h2 className="text-lg font-semibold">YSong Rooms</h2><p className="text-sm opacity-55 max-w-md mx-auto mt-1">Choose a room on the left, discover a public room, or create a new group chat with humans and AI personas.</p><div className="mt-5 flex justify-center gap-2"><button onClick={()=>setCreateOpen(true)} className="rounded-xl bg-violet-600 text-white px-4 py-2 text-sm">Create Room</button>{rooms.length>0&&<button onClick={()=>void refreshRooms()} className="rounded-xl border px-4 py-2 text-sm">Refresh rooms</button>}</div></div></div>:<>
         <header className="h-14 shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 flex items-center justify-between gap-3"><div className="min-w-0 flex items-center gap-2"><button onClick={showRoomList} className="h-8 w-8 shrink-0 rounded-lg border grid place-items-center hover:bg-black/5 dark:hover:bg-white/5" title="Back to rooms"><Icon name="back" size={14}/></button><div className="min-w-0"><div className="flex items-center gap-2"><span className="opacity-50">{detail.room.visibility==="private"?<Icon name="lock" size={15}/>:<Icon name="globe" size={15}/>}</span><h2 className="font-semibold truncate">{detail.room.name}</h2></div><div className="text-[11px] opacity-50 truncate">{detail.room.description||"YSong room"}</div></div></div><div className="flex gap-2"><button onClick={openPersonaDrawer} className="rounded-xl border px-3 py-1.5 text-xs flex items-center gap-1.5 hover:bg-black/5 dark:hover:bg-white/5"><Icon name="bot" size={14}/>Add AI</button><button onClick={()=>void refreshDetail()} className="h-8 w-8 rounded-lg border grid place-items-center" title="Refresh"><Icon name="refresh" size={14}/></button></div></header>
+        {detail.room.joined&&<RoomVenuePanel detail={detail} meUserId={meUserId}/>}
         {!detail.room.joined?<div className="flex-1 grid place-items-center"><div className="text-center max-w-md px-6"><h3 className="text-xl font-semibold">Public room</h3><p className="text-sm opacity-55 mt-2">Join to send messages and add AI personas.</p><button onClick={()=>void doJoin()} className="mt-4 bg-violet-600 text-white rounded-xl px-5 py-2">Join Room</button></div></div>:<>
           <div className="flex-1 min-h-0 overflow-y-auto"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-5 space-y-4">{detail.messages.map(m=>{const isMe=m.senderKind==="user"&&m.senderUserId===meUserId;const isAi=m.senderKind==="persona";const avatar=isAi?m.personaAvatarPath:(isMe?meAvatarUrl:"");return <div key={m.id} className={`flex items-end gap-2 ${isMe?"justify-end":"justify-start"}`}>{!isMe&&<Avatar src={avatar} name={m.senderName} size={34}/>}<div className={`max-w-[76%] min-w-0 ${isMe?"items-end":"items-start"} flex flex-col`}><div className="text-[10px] opacity-45 mb-1 px-1">{isMe?meDisplayName||"You":m.senderName}{isAi&&<span className="ml-1.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-wide">AI</span>}</div><div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${isMe?"bg-neutral-800 text-white dark:bg-neutral-700":"bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"}`}>{m.content}</div></div>{isMe&&<Avatar src={meAvatarUrl} name={meDisplayName||"You"} size={34}/>}</div>})}{aiThinking&&<div className="flex items-center gap-2 text-xs opacity-50"><span className="inline-flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:120ms]"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:240ms]"/></span>AI personas are deciding whether to jump in...</div>}<div ref={bottomRef}/></div></div>
           <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-3 pb-12"><div className="relative"><div className="rounded-2xl border border-neutral-300 dark:border-neutral-700 bg-white/70 dark:bg-neutral-900/70 px-2 py-1.5 flex items-end gap-2"><textarea ref={inputRef} rows={1} value={input} onChange={(e)=>{setInput(e.target.value);updateMention(e.target.value,e.target.selectionStart??e.target.value.length);}} onClick={(e)=>updateMention(input,e.currentTarget.selectionStart??input.length)} onKeyUp={(e)=>{if(!["ArrowDown","ArrowUp","Enter","Escape"].includes(e.key))updateMention(input,e.currentTarget.selectionStart??input.length);}} onKeyDown={(e)=>{if(mention&&mentionCandidates.length){if(e.key==="ArrowDown"){e.preventDefault();setMentionIndex(i=>(i+1)%mentionCandidates.length);return;}if(e.key==="ArrowUp"){e.preventDefault();setMentionIndex(i=>(i-1+mentionCandidates.length)%mentionCandidates.length);return;}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();insertMention(mentionCandidates[Math.min(mentionIndex,mentionCandidates.length-1)]);return;}if(e.key==="Escape"){e.preventDefault();setMention(null);return;}}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={`Message #${detail.room.name}... Type @ to mention an AI`} className="flex-1 min-h-9 max-h-32 resize-none bg-transparent border-0 px-2 py-2 text-sm focus:outline-none"/><button disabled={!input.trim()} onClick={()=>void send()} className="rounded-xl bg-violet-600 text-white px-4 h-9 text-sm disabled:opacity-35">Send</button></div>
@@ -214,5 +242,6 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
       {detail.room.role==="owner"&&<div className="mt-5 pt-4 border-t border-neutral-200 dark:border-neutral-800 space-y-2"><button onClick={async()=>{const next=detail.room.visibility==="public"?"private":"public";await updateRoom(detail.room.id,{visibility:next});await refreshDetail();await refreshRooms(detail.room.id);}} className="w-full rounded-lg border px-2 py-1.5 text-xs text-left">Make room {detail.room.visibility==="public"?"private":"public"}</button><button onClick={async()=>{if(confirm("Delete this room and its messages?")){await deleteRoom(detail.room.id);showRoomList();await refreshRooms();}}} className="w-full rounded-lg border border-red-500/30 text-red-500 px-2 py-1.5 text-xs flex items-center gap-2"><Icon name="trash" size={13}/>Delete room</button></div>}
       {detail.room.role!=="owner"&&detail.room.joined&&<button onClick={async()=>{await leaveRoom(detail.room.id);showRoomList();await refreshRooms();}} className="mt-5 w-full rounded-lg border px-2 py-1.5 text-xs">Leave room</button>}</div></aside>}
     {createOpen&&<RoomCreateModal onClose={()=>setCreateOpen(false)} onCreated={(r)=>{setCreateOpen(false);setRooms(prev=>[r,...prev]);setActiveRoomId(r.id);}}/>}
+    {preroll&&<RoomPrerollOverlay roomName={preroll.room.name} decision={preroll.decision} onCancel={()=>setPreroll(null)} onComplete={()=>{try{localStorage.setItem(preroll.sessionKey,"1")}catch{/* local persistence unavailable */}const id=preroll.room.id;setPreroll(null);setActiveRoomId(id);}}/>}
   </div>;
 }

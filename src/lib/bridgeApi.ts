@@ -20,6 +20,9 @@ export type BridgeHealth = {
 	enabledMidiInputCount?: number;
 	midiRouteTrackId?: string | null;
 	midiRouteInputName?: string | null;
+	instrumentCapabilityApi?: boolean;
+	instrumentCount?: number;
+	instrumentSnapshotCount?: number;
 };
 
 export type BridgePlugin = {
@@ -33,6 +36,68 @@ export type BridgePlugin = {
 	subCategories?: string | null;
 	loadable?: boolean;
 	error?: string | null;
+};
+
+export type InstrumentCatalogEntry = {
+	id: string;
+	name: string;
+	path: string;
+	format: string;
+	kind: string;
+	vendor?: string | null;
+	version?: string | null;
+	category?: string | null;
+	subCategories?: string | null;
+	tags: string[];
+	loadable: boolean;
+	error?: string | null;
+	savedPresetCount: number;
+	discoveredPresetCount: number;
+};
+
+export type InstrumentPresetEntry = {
+	id: string;
+	instrumentId: string;
+	name: string;
+	source: "ysong-snapshot" | "external-vstpreset" | string;
+	format: string;
+	path?: string | null;
+	loadable: boolean;
+	tags: string[];
+	detail?: string | null;
+	updatedAt?: string | null;
+};
+
+export type InstrumentParameterEntry = {
+	id: number;
+	name: string;
+	minValue: number;
+	maxValue: number;
+	defaultValue: number;
+	currentValue: number;
+	group: string;
+	tags: string[];
+};
+
+export type InstrumentSnapshotRecord = {
+	id: string;
+	name: string;
+	instrumentId: string;
+	pluginPath: string;
+	pluginName: string;
+	vendor?: string | null;
+	tags: string[];
+	createdAt: string;
+	updatedAt: string;
+	hasFullState: boolean;
+	parameterCount: number;
+};
+
+export type InstrumentMatchResult = {
+	instrument: InstrumentCatalogEntry;
+	score: number;
+	matchedTerms: string[];
+	bestPresets: InstrumentPresetEntry[];
 };
 
 export type Vst3MidiEvent = {
@@ -136,12 +201,20 @@ export type VisualTransportState = {
 	playing: boolean;
 	positionSeconds: number;
 	durationSeconds: number;
+	bpm?: number;
+	sigNum?: number;
+	sigDen?: number;
 	trackId?: string;
 	title?: string;
 	artist?: string;
 	album?: string;
 	playlistId?: string;
 	playlistName?: string;
+	broadcastProgramId?: string;
+	broadcastProgramName?: string;
+	broadcastKind?: "playlist" | "radio" | "ad-hoc";
+	broadcastBranding?: VisualBroadcastBranding;
+	broadcastTiming?: VisualBroadcastTiming;
 	transitionMode?: "regular" | "gapless" | "crossfade";
 	audioTransitionProgress?: number;
 	transitionProgress?: number;
@@ -154,8 +227,27 @@ export type VisualTransportState = {
 	nextTitle?: string;
 	nextArtist?: string;
 	nextAlbum?: string;
+	adBreakActive?: boolean;
+	adPresentationEnabled?: boolean;
+	adShowSponsor?: boolean;
+	adCreativeId?: string;
+	adProviderId?: string;
+	adTitle?: string;
+	adSponsor?: string;
+	adPositionSeconds?: number;
+	adDurationSeconds?: number;
 	updatedAt: number;
 };
+
+export type VisualRoomAudienceEffectId = "applause" | "hearts" | "confetti" | "lightning" | "fire" | "snow" | "camera-shake" | "strobe";
+export type VisualRoomAudienceEffect = {
+	roomId: string;
+	eventId: string;
+	effectId: VisualRoomAudienceEffectId;
+	actorName?: string;
+	timestampUnixMs: number;
+};
+
 
 export type VisualScenePreset<T = unknown> = {
 	id: string;
@@ -172,9 +264,29 @@ export type VisualBroadcastAssignment = {
 	crossfadeSeconds?: number;
 };
 
+export type VisualBroadcastBranding = {
+	enabled: boolean;
+	showStationBug: boolean;
+	stationLabel: string;
+	showNowPlaying: boolean;
+	showNextUp: boolean;
+	showQueueLabel: boolean;
+	bugPosition: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+};
+
+export type VisualBroadcastTiming = {
+	nowPlayingDelaySeconds: number;
+	nowPlayingHoldSeconds: number;
+	nextUpLeadSeconds: number;
+};
+
 export type VisualBroadcastProgram = {
-	version: 2;
+	version: 3;
+	programId: string;
 	playlistId: string;
+	stationId?: string;
+	kind: "playlist" | "radio" | "ad-hoc";
+	name: string;
 	defaultSceneIds: string[];
 	albumDefaults: Record<string, string[]>;
 	trackAssignments: Record<string, VisualBroadcastAssignment>;
@@ -186,10 +298,208 @@ export type VisualBroadcastProgram = {
 	avoidRecent: number;
 	visualAvoidRecent: number;
 	repeatMode: "off" | "all" | "one";
+	branding: VisualBroadcastBranding;
+	timing: VisualBroadcastTiming;
+};
+
+export type VisualBroadcastGlobals = {
+	version: 1;
+	defaultSceneIds: string[];
+	visualAvoidRecent: number;
+	branding: VisualBroadcastBranding;
+	timing: VisualBroadcastTiming;
+};
+
+export type VisualAdCreative = {
+	id: string;
+	title: string;
+	sponsor: string;
+	audioUrl: string;
+	audioFileName: string;
+	durationSeconds: number;
+	weight: number;
+	enabled: boolean;
+};
+
+export type VisualVideoPrerollCreative = {
+	id: string;
+	title: string;
+	sponsor: string;
+	videoUrl: string;
+	videoFileName: string;
+	durationSeconds: number;
+	weight: number;
+	enabled: boolean;
+	mutedByDefault: boolean;
+};
+
+export type VisualAdvertisingSchedule = {
+	initialGraceSongs: number;
+	initialGraceMinutes: number;
+	minSongsBetweenAds: number;
+	minMinutesBetweenAds: number;
+	maxAdsPerHour: number;
+	recentCreativeWindow: number;
+};
+
+export type VisualAdBreakPresentation = {
+	enabled: boolean;
+	sceneId: string;
+	label: string;
+	showSponsor: boolean;
+	visualTransition: "cut" | "fade" | "black" | "flash";
+	visualTransitionSeconds: number;
+};
+
+export type VisualAdvertisingProgramOverride = {
+	mode: "inherit" | "enabled" | "disabled";
+	minSongsBetweenAds?: number;
+	minMinutesBetweenAds?: number;
+	maxAdsPerHour?: number;
+};
+
+export type VisualAdvertisingPlacements = {
+	radio: boolean;
+	liveRoomPreroll: boolean;
+};
+
+export type VisualAdvertisingSettings = {
+	version: 2;
+	enabled: boolean;
+	placements: VisualAdvertisingPlacements;
+	providerId: string;
+	fallbackProviderId: string;
+	schedule: VisualAdvertisingSchedule;
+	presentation: VisualAdBreakPresentation;
+	houseCreatives: VisualAdCreative[];
+	liveRoomPrerollCreatives: VisualVideoPrerollCreative[];
+	programOverrides: Record<string, VisualAdvertisingProgramOverride>;
 };
 
 
-export function normalizeVisualBroadcastProgram(program: Partial<VisualBroadcastProgram> | null | undefined, playlistId: string): VisualBroadcastProgram {
+const DEFAULT_BROADCAST_BRANDING: VisualBroadcastBranding = {
+	enabled: true,
+	showStationBug: false,
+	stationLabel: "YSong Radio",
+	showNowPlaying: true,
+	showNextUp: true,
+	showQueueLabel: true,
+	bugPosition: "top-right",
+};
+
+const DEFAULT_BROADCAST_TIMING: VisualBroadcastTiming = {
+	nowPlayingDelaySeconds: 0,
+	nowPlayingHoldSeconds: 12,
+	nextUpLeadSeconds: 10,
+};
+
+function normalizeBroadcastBranding(raw?: Partial<VisualBroadcastBranding> | null, fallbackLabel = "YSong Radio"): VisualBroadcastBranding {
+	const position = raw?.bugPosition;
+	return {
+		enabled: raw?.enabled !== false,
+		showStationBug: !!raw?.showStationBug,
+		stationLabel: String(raw?.stationLabel || fallbackLabel || DEFAULT_BROADCAST_BRANDING.stationLabel).slice(0, 80),
+		showNowPlaying: raw?.showNowPlaying !== false,
+		showNextUp: raw?.showNextUp !== false,
+		showQueueLabel: raw?.showQueueLabel !== false,
+		bugPosition: position === "top-left" || position === "bottom-left" || position === "bottom-right" ? position : "top-right",
+	};
+}
+
+function normalizeBroadcastTiming(raw?: Partial<VisualBroadcastTiming> | null): VisualBroadcastTiming {
+	const delay = Number(raw?.nowPlayingDelaySeconds);
+	const hold = Number(raw?.nowPlayingHoldSeconds);
+	const nextLead = Number(raw?.nextUpLeadSeconds);
+	return {
+		nowPlayingDelaySeconds: Number.isFinite(delay) ? Math.max(0, Math.min(30, delay)) : 0,
+		// Zero is meaningful here: it means keep Now Playing visible for the song.
+		nowPlayingHoldSeconds: Number.isFinite(hold) ? Math.max(0, Math.min(120, hold)) : DEFAULT_BROADCAST_TIMING.nowPlayingHoldSeconds,
+		// Zero intentionally disables the Up Next overlay.
+		nextUpLeadSeconds: Number.isFinite(nextLead) ? Math.max(0, Math.min(60, nextLead)) : DEFAULT_BROADCAST_TIMING.nextUpLeadSeconds,
+	};
+}
+
+export function normalizeVisualBroadcastGlobals(globals?: Partial<VisualBroadcastGlobals> | null): VisualBroadcastGlobals {
+	return {
+		version: 1,
+		defaultSceneIds: Array.isArray(globals?.defaultSceneIds) ? globals!.defaultSceneIds!.filter(Boolean) : [],
+		visualAvoidRecent: Number.isFinite(Number(globals?.visualAvoidRecent)) ? Math.max(0, Math.min(50, Number(globals?.visualAvoidRecent))) : 3,
+		branding: normalizeBroadcastBranding(globals?.branding, "YSong Radio"),
+		timing: normalizeBroadcastTiming(globals?.timing),
+	};
+}
+
+export function normalizeVisualAdvertisingSettings(raw?: Partial<VisualAdvertisingSettings> | null): VisualAdvertisingSettings {
+	const schedule = raw?.schedule;
+	const presentation = raw?.presentation;
+	const creatives = Array.isArray(raw?.houseCreatives) ? raw!.houseCreatives! : [];
+	const roomPrerolls = Array.isArray(raw?.liveRoomPrerollCreatives) ? raw!.liveRoomPrerollCreatives! : [];
+	const programOverrides: Record<string, VisualAdvertisingProgramOverride> = {};
+	for (const [programId, override] of Object.entries(raw?.programOverrides || {})) {
+		if (!programId || !override) continue;
+		programOverrides[programId] = {
+			mode: override.mode === "enabled" || override.mode === "disabled" ? override.mode : "inherit",
+			...(Number.isFinite(Number(override.minSongsBetweenAds)) ? { minSongsBetweenAds: Math.max(0, Math.min(100, Number(override.minSongsBetweenAds))) } : {}),
+			...(Number.isFinite(Number(override.minMinutesBetweenAds)) ? { minMinutesBetweenAds: Math.max(0, Math.min(180, Number(override.minMinutesBetweenAds))) } : {}),
+			...(Number.isFinite(Number(override.maxAdsPerHour)) ? { maxAdsPerHour: Math.max(0, Math.min(60, Number(override.maxAdsPerHour))) } : {}),
+		};
+	}
+	return {
+		version: 2,
+		enabled: !!raw?.enabled,
+		placements: {
+			radio: raw?.placements?.radio !== false,
+			liveRoomPreroll: raw?.placements?.liveRoomPreroll !== false,
+		},
+		providerId: String(raw?.providerId || "house").slice(0, 80),
+		fallbackProviderId: String(raw?.fallbackProviderId || "house").slice(0, 80),
+		schedule: {
+			initialGraceSongs: Number.isFinite(Number(schedule?.initialGraceSongs)) ? Math.max(0, Math.min(100, Number(schedule?.initialGraceSongs))) : 3,
+			initialGraceMinutes: Number.isFinite(Number(schedule?.initialGraceMinutes)) ? Math.max(0, Math.min(180, Number(schedule?.initialGraceMinutes))) : 8,
+			minSongsBetweenAds: Number.isFinite(Number(schedule?.minSongsBetweenAds)) ? Math.max(0, Math.min(100, Number(schedule?.minSongsBetweenAds))) : 4,
+			minMinutesBetweenAds: Number.isFinite(Number(schedule?.minMinutesBetweenAds)) ? Math.max(0, Math.min(180, Number(schedule?.minMinutesBetweenAds))) : 10,
+			maxAdsPerHour: Number.isFinite(Number(schedule?.maxAdsPerHour)) ? Math.max(0, Math.min(60, Number(schedule?.maxAdsPerHour))) : 4,
+			recentCreativeWindow: Number.isFinite(Number(schedule?.recentCreativeWindow)) ? Math.max(0, Math.min(50, Number(schedule?.recentCreativeWindow))) : 4,
+		},
+		presentation: {
+			enabled: !!presentation?.enabled,
+			sceneId: String(presentation?.sceneId || ""),
+			label: String(presentation?.label || "Ad Break").slice(0, 80),
+			showSponsor: presentation?.showSponsor !== false,
+			visualTransition: presentation?.visualTransition === "cut" || presentation?.visualTransition === "black" || presentation?.visualTransition === "flash" ? presentation.visualTransition : "fade",
+			visualTransitionSeconds: Number.isFinite(Number(presentation?.visualTransitionSeconds)) ? Math.max(0.1, Math.min(12, Number(presentation?.visualTransitionSeconds))) : 0.8,
+		},
+		houseCreatives: creatives.map((creative, index) => ({
+			id: String(creative?.id || `house-ad-${index + 1}`).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 120),
+			title: String(creative?.title || "House Ad").slice(0, 120),
+			sponsor: String(creative?.sponsor || "YSong").slice(0, 120),
+			audioUrl: String(creative?.audioUrl || ""),
+			audioFileName: String(creative?.audioFileName || "").slice(0, 240),
+			durationSeconds: Number.isFinite(Number(creative?.durationSeconds)) ? Math.max(0, Math.min(600, Number(creative?.durationSeconds))) : 0,
+			weight: Number.isFinite(Number(creative?.weight)) ? Math.max(0.01, Math.min(100, Number(creative?.weight))) : 1,
+			enabled: creative?.enabled !== false,
+		})).filter((creative) => creative.id && creative.audioUrl),
+		liveRoomPrerollCreatives: roomPrerolls.map((creative, index) => ({
+			id: String(creative?.id || `room-preroll-${index + 1}`).replace(/[^a-z0-9_-]+/gi, "-").slice(0, 120),
+			title: String(creative?.title || "Live Room Sponsor").slice(0, 120),
+			sponsor: String(creative?.sponsor || "YSong").slice(0, 120),
+			videoUrl: String(creative?.videoUrl || ""),
+			videoFileName: String(creative?.videoFileName || "").slice(0, 240),
+			durationSeconds: Number.isFinite(Number(creative?.durationSeconds)) ? Math.max(0, Math.min(300, Number(creative?.durationSeconds))) : 0,
+			weight: Number.isFinite(Number(creative?.weight)) ? Math.max(0.01, Math.min(100, Number(creative?.weight))) : 1,
+			enabled: creative?.enabled !== false,
+			mutedByDefault: creative?.mutedByDefault === true,
+		})).filter((creative) => creative.id && creative.videoUrl),
+		programOverrides,
+	};
+}
+
+export function normalizeVisualBroadcastProgram(
+	program: Partial<VisualBroadcastProgram> | null | undefined,
+	programId: string,
+	identity?: { playlistId?: string; stationId?: string; kind?: VisualBroadcastProgram["kind"]; name?: string },
+): VisualBroadcastProgram {
+	const bridgeDefault = !!(program as (Partial<VisualBroadcastProgram> & { isDefault?: boolean }) | null | undefined)?.isDefault;
 	const assignments: Record<string, VisualBroadcastAssignment> = {};
 	for (const [trackId, raw] of Object.entries(program?.trackAssignments || {})) {
 		const assignment = raw as VisualBroadcastAssignment;
@@ -203,20 +513,34 @@ export function normalizeVisualBroadcastProgram(program: Partial<VisualBroadcast
 	}
 	const albumDefaults: Record<string, string[]> = {};
 	for (const [album, ids] of Object.entries(program?.albumDefaults || {})) albumDefaults[album] = Array.isArray(ids) ? ids.filter(Boolean) : [];
+	const legacyPlaylistId = String(program?.playlistId || identity?.playlistId || "");
+	const stationId = String(program?.stationId || identity?.stationId || "");
+	const inferredKind: VisualBroadcastProgram["kind"] = identity?.kind || program?.kind || (stationId || programId.startsWith("ysong-radio-" ) ? "radio" : legacyPlaylistId ? "playlist" : "ad-hoc");
+	const name = String((bridgeDefault ? identity?.name : program?.name) || program?.name || identity?.name || (inferredKind === "radio" ? "YSong Radio" : "Broadcast Program")).slice(0, 120);
+	const radioDefaults = inferredKind === "radio";
+	const brandingInput = bridgeDefault && identity?.name && program?.branding
+		? { ...program.branding, stationLabel: identity.name }
+		: program?.branding;
 	return {
-		version: 2,
-		playlistId,
+		version: 3,
+		programId: String(program?.programId || programId),
+		playlistId: legacyPlaylistId,
+		...(stationId ? { stationId } : {}),
+		kind: inferredKind,
+		name,
 		defaultSceneIds: Array.isArray(program?.defaultSceneIds) ? program!.defaultSceneIds!.filter(Boolean) : [],
 		albumDefaults,
 		trackAssignments: assignments,
-		audioTransition: program?.audioTransition || "regular",
+		audioTransition: program?.audioTransition || (radioDefaults ? "crossfade" : "regular"),
 		crossfadeSeconds: Math.max(0.5, Math.min(20, Number(program?.crossfadeSeconds) || 5)),
 		visualTransition: program?.visualTransition || "fade",
 		visualTransitionSeconds: Math.max(0.1, Math.min(12, Number(program?.visualTransitionSeconds) || 1.4)),
-		shuffle: !!program?.shuffle,
-		avoidRecent: Number.isFinite(Number(program?.avoidRecent)) ? Math.max(0, Math.min(100, Number(program?.avoidRecent))) : 12,
+		shuffle: program?.shuffle == null ? radioDefaults : !!program.shuffle,
+		avoidRecent: Number.isFinite(Number(program?.avoidRecent)) ? Math.max(0, Math.min(100, Number(program?.avoidRecent))) : (radioDefaults ? 18 : 12),
 		visualAvoidRecent: Number.isFinite(Number(program?.visualAvoidRecent)) ? Math.max(0, Math.min(50, Number(program?.visualAvoidRecent))) : 3,
 		repeatMode: program?.repeatMode === "one" || program?.repeatMode === "off" ? program.repeatMode : "all",
+		branding: normalizeBroadcastBranding(brandingInput, inferredKind === "radio" ? (name || "YSong Radio") : name),
+		timing: normalizeBroadcastTiming(program?.timing),
 	};
 }
 
@@ -385,11 +709,19 @@ export const bridgeApi = {
 	setVisualTransport: (state: VisualTransportState) => bridgeFetch<{ ok: true; sequence: number }>("/visuals/transport", { method: "POST", body: JSON.stringify(state) }, 5000),
 	subscribeVisualTransport: (onEvent: (state: VisualTransportState) => void, onConnection?: (connected: boolean) => void) =>
 		bridgeEventSource<VisualTransportState>("/visuals/transport/events", onEvent, onConnection),
+	pushVisualRoomEffect: (effect: VisualRoomAudienceEffect) =>
+		bridgeFetch<{ ok: true; sequence: number }>("/visuals/room-effect", { method: "POST", body: JSON.stringify(effect) }, 3000),
+	subscribeVisualRoomEffects: (onEvent: (payload: { sequence: number; effect: VisualRoomAudienceEffect }) => void, onConnection?: (connected: boolean) => void) =>
+		bridgeEventSource<{ sequence: number; effect: VisualRoomAudienceEffect }>("/visuals/room-effect/events", onEvent, onConnection),
 	getVisualLibrary: <T = unknown>() => bridgeFetch<{ presets: VisualScenePreset<T>[] }>("/visuals/library", undefined, 5000),
 	saveVisualPreset: <T = unknown>(name: string, scene: T, id?: string) => bridgeFetch<{ ok: true; preset: VisualScenePreset<T> }>("/visuals/library", { method: "POST", body: JSON.stringify({ id, name, scene }) }, 5000),
 	deleteVisualPreset: (id: string) => bridgeFetch<{ ok: true }>(`/visuals/library/${encodeURIComponent(id)}`, { method: "DELETE" }, 5000),
-	getVisualProgram: (playlistId: string) => bridgeFetch<VisualBroadcastProgram>(`/visuals/programs/${encodeURIComponent(playlistId)}`, undefined, 5000),
-	setVisualProgram: (playlistId: string, program: VisualBroadcastProgram) => bridgeFetch<{ ok: true }>(`/visuals/programs/${encodeURIComponent(playlistId)}`, { method: "POST", body: JSON.stringify(program) }, 5000),
+	getVisualProgram: (programId: string) => bridgeFetch<VisualBroadcastProgram>(`/visuals/programs/${encodeURIComponent(programId)}`, undefined, 5000),
+	setVisualProgram: (programId: string, program: VisualBroadcastProgram) => bridgeFetch<{ ok: true }>(`/visuals/programs/${encodeURIComponent(programId)}`, { method: "POST", body: JSON.stringify(program) }, 5000),
+	getVisualBroadcastGlobals: () => bridgeFetch<VisualBroadcastGlobals>("/visuals/broadcast/globals", undefined, 5000),
+	setVisualBroadcastGlobals: (globals: VisualBroadcastGlobals) => bridgeFetch<{ ok: true }>("/visuals/broadcast/globals", { method: "POST", body: JSON.stringify(globals) }, 5000),
+	getVisualAdvertisingSettings: () => bridgeFetch<VisualAdvertisingSettings>("/visuals/broadcast/advertising", undefined, 5000),
+	setVisualAdvertisingSettings: (settings: VisualAdvertisingSettings) => bridgeFetch<{ ok: true }>("/visuals/broadcast/advertising", { method: "POST", body: JSON.stringify(settings) }, 5000),
 	getPluginPaths: () => bridgeFetch<{ paths: string[] }>("/settings/plugin-paths"),
 	setPluginPaths: (paths: string[]) =>
 		bridgeFetch<{ ok: true; paths: string[] }>("/settings/plugin-paths", {
@@ -413,6 +745,18 @@ export const bridgeApi = {
 			300000
 		),
 	getPlugins: () => bridgeFetch<{ ok: true; plugins: BridgePlugin[] }>("/plugins", undefined, 10000),
+	getInstruments: () => bridgeFetch<{ ok: true; engine: string; instruments: InstrumentCatalogEntry[] }>("/instruments", undefined, 20000),
+	matchInstruments: (desired: string[], limit = 12) => bridgeFetch<{ ok: true; learnedModel: false; strategy: string; desired: string[]; matches: InstrumentMatchResult[] }>("/instruments/match", { method: "POST", body: JSON.stringify({ desired, limit }) }, 20000),
+	getInstrumentPresets: (instrumentId: string) => bridgeFetch<{ ok: true; instrument: InstrumentCatalogEntry; presets: InstrumentPresetEntry[] }>(`/instruments/${encodeURIComponent(instrumentId)}/presets`, undefined, 20000),
+	getInstrumentParameters: (instrumentId: string, trackId?: string | null) => bridgeFetch<{ ok: true; instrumentId: string; trackId: string; parameters: InstrumentParameterEntry[] }>(`/plugins/${encodeURIComponent(instrumentId)}/parameters${trackId ? `?trackId=${encodeURIComponent(trackId)}` : ""}`, undefined, 20000),
+	loadInstrumentCapability: (trackId: string, instrumentId: string) => bridgeFetch<{ ok: true; instrument: InstrumentCatalogEntry; loaded: unknown }>("/instrument/load", { method: "POST", body: JSON.stringify({ trackId, instrumentId }) }, 30000),
+	loadInstrumentPreset: (trackId: string, presetId: string) => bridgeFetch<{ ok: true; trackId: string; preset: InstrumentSnapshotRecord }>("/preset/load", { method: "POST", body: JSON.stringify({ trackId, presetId }) }, 20000),
+	setInstrumentParameter: (trackId: string, parameterId: number, value: number) => bridgeFetch<{ ok: true; trackId: string; parameterId: number; value: number }>("/parameter/set", { method: "POST", body: JSON.stringify({ trackId, parameterId, value }) }, 10000),
+	getInstrumentSnapshots: (trackId?: string | null) => bridgeFetch<{ ok: true; snapshots: InstrumentSnapshotRecord[] }>(`/snapshots${trackId ? `?trackId=${encodeURIComponent(trackId)}` : ""}`, undefined, 10000),
+	captureInstrumentSnapshot: (trackId: string, name: string, tags: string[] = []) => bridgeFetch<{ ok: true; snapshot: InstrumentSnapshotRecord }>("/snapshot", { method: "POST", body: JSON.stringify({ trackId, name, tags }) }, 30000),
+	restoreInstrumentSnapshot: (trackId: string, snapshotId: string) => bridgeFetch<{ ok: true; snapshot: InstrumentSnapshotRecord }>("/snapshot/restore", { method: "POST", body: JSON.stringify({ trackId, snapshotId }) }, 30000),
+	deleteInstrumentSnapshot: (snapshotId: string) => bridgeFetch<{ ok: true; removed: boolean }>(`/snapshots/${encodeURIComponent(snapshotId)}`, { method: "DELETE" }, 10000),
+	renderInstrumentAudition: (trackId: string, durationSeconds = 3, notes?: Array<{ note: number; velocity?: number; startSeconds?: number; durationSeconds?: number; channel?: number }>) => bridgeFetchArrayBuffer("/audition", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ trackId, durationSeconds, notes: notes ?? [] }) }, 120000),
 	loadVst3Instrument: (trackId: string, path: string) =>
 		bridgeFetch<{ ok: true; trackId: string; plugin: { name: string; path: string; vendor?: string | null; version?: string | null; hasEditor?: boolean }; sampleRate: number; blockSize: number }>(
 			"/vst3/load",

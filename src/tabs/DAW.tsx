@@ -9,7 +9,11 @@ import OnScreenKeyboard from "../components/OnScreenKeyboard";
 import FxChainPanel from "../components/FxChainPanel";
 import DynamicsC1Editor from "../components/DynamicsC1Editor";
 import DawAgentPanel from "../components/DawAgentPanel";
-import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type Vst3MidiEvent, type Vst3OfflineRenderTrack, type Vst3TrackEffect } from "../lib/bridgeApi";
+import AiComposerPanel from "../components/AiComposerPanel";
+import InstrumentCatalogPanel from "../components/InstrumentCatalogPanel";
+import AiSoundDesignerPanel from "../components/AiSoundDesignerPanel";
+import ProgressiveStemComposerPanel from "../components/ProgressiveStemComposerPanel";
+import { bridgeApi, type BridgeMidiEvent, type BridgeMidiInputDevice, type BridgePlugin, type InstrumentCatalogEntry, type Vst3MidiEvent, type Vst3OfflineRenderTrack, type Vst3TrackEffect } from "../lib/bridgeApi";
 import { clearGmSoundFontTrackDestination, gmSoundFontNoteOff, gmSoundFontNoteOn, prepareGmSoundFont, scheduleGmSoundFontNote, setGmSoundFontTrackDestination, stopGmSoundFontPlayback } from "../lib/gmSoundFont";
 import {
 	buildStandardMidiFile,
@@ -22,9 +26,14 @@ import {
 import { connectWebAudioEffects, createDynamicsC1Effect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type WebAudioEffectRuntime } from "../lib/dawEffects";
 import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
+import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest } from "../lib/generatedSession";
+import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
+import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
 import {
 	GM_PROGRAMS,
+	NOTE_NAMES,
+	SCALE_DEFINITIONS,
 	normalizeGmProgram,
 	type BuiltinInstrument,
 	type MidiAutomationPoint,
@@ -105,6 +114,13 @@ type Clip = {
 	midiBendRange?: number;
 	midiScales?: MidiScaleRule[];
 	midiScaleLock?: MidiScaleLock;
+	// Phase 25/28 structured provenance. These fields persist with the project and remain editable/non-destructive.
+	composerRole?: string;
+	composerChords?: Array<{ atBar: number; symbol: string; durationBars: number }>;
+	stemNodeId?: string;
+	stemVersion?: number;
+	stemUniverseHash?: string;
+	stemGenerationFamily?: string;
 };
 
 // Include all UI options (triplets + 1/128) so TS doesn't explode
@@ -541,6 +557,8 @@ export default function DAW(_props: TabRendererProps) {
 		trackHeights?: Record<string, number>;
 		zoomPct?: number;
 		masterLevel?: number;
+		approvedComposerArrangement?: ComposerArrangement | null;
+		progressiveStemState?: ProgressiveStemState;
 	};
 
 	function safeParse<T>(raw: string | null): T | null {
@@ -660,6 +678,12 @@ export default function DAW(_props: TabRendererProps) {
 	const [exporting, setExporting] = useState(false);
 	const [exportStatus, setExportStatus] = useState("");
 	const [dawAgentOpen, setDawAgentOpen] = useState(false);
+	const [aiComposerOpen, setAiComposerOpen] = useState(false);
+	const [instrumentCatalogOpen, setInstrumentCatalogOpen] = useState(false);
+	const [soundDesignerOpen, setSoundDesignerOpen] = useState(false);
+	const [progressiveStemOpen, setProgressiveStemOpen] = useState(false);
+	const [approvedComposerArrangement, setApprovedComposerArrangement] = useState<ComposerArrangement | null>(null);
+	const [progressiveStemState, setProgressiveStemState] = useState<ProgressiveStemState>({ universe: null, nodes: [], activeByRole: {} });
 	const generatedSessionPendingRef = useRef<GeneratedSessionManifest | null>(null);
 	const generatedSessionTargetProjectRef = useRef<string | null>(null);
 	const [generatedSessionRevision, setGeneratedSessionRevision] = useState(0);
@@ -756,6 +780,8 @@ export default function DAW(_props: TabRendererProps) {
 		setTracks([]);
 		setClips([]);
 		setProjectAssets([]);
+		setApprovedComposerArrangement(null);
+		setProgressiveStemState({ universe: null, nodes: [], activeByRole: {} });
 		setTrackHeights({});
 		setSelectedTrackId(null);
 		setSelectedClipId(null);
@@ -1111,7 +1137,7 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	};
 
-	const setTrackInstrumentSource = async (track: Track, value: string) => {
+	const setTrackInstrumentSource = async (track: Track, value: string): Promise<boolean> => {
 		if (value.startsWith("gm:")) {
 			const program = normalizeGmProgram(Number(value.slice(3)));
 			// Patch changes must hand the native audio device back immediately. ASIO4ALL
@@ -1126,10 +1152,10 @@ export default function DAW(_props: TabRendererProps) {
 				...t, gmProgram: program, vst3PluginPath: undefined, vst3PluginName: undefined, vst3PluginVendor: undefined,
 			} : t));
 			if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
-			return;
+			return true;
 		}
 
-		if (!value.startsWith("vst3:")) return;
+		if (!value.startsWith("vst3:")) return false;
 		const path = value.slice(5);
 		const catalog = vst3Plugins.find((plugin) => plugin.path === path);
 		const previousTrack = { ...track };
@@ -1146,6 +1172,7 @@ export default function DAW(_props: TabRendererProps) {
 			const currentList = tracks.map((t) => t.id === track.id ? nextTrack : t);
 			await bridgeApi.setVst3Mixer(track.id, computedTrackGain(nextTrack, currentList) <= 0, nextTrack.level ?? 100, nativeMixerForTrack(nextTrack));
 			if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
+			return true;
 		} catch (error) {
 			// A failed native load must not leave the project claiming that the broken
 			// plugin is assigned. Restore the exact previous GM/VST assignment.
@@ -1157,7 +1184,15 @@ export default function DAW(_props: TabRendererProps) {
 			} catch {}
 			const message = error instanceof Error ? error.message : "Could not load VST3 instrument.";
 			window.alert(`YSong Bridge could not load ${catalog?.name ?? "that VST3"}.\n\n${message}`);
+			return false;
 		}
+	};
+
+	const assignInstrumentFromCatalog = async (instrument: InstrumentCatalogEntry): Promise<string | null> => {
+		const target = selectedTrackId ? tracks.find((track) => track.id === selectedTrackId && track.type === "instrument") ?? null : null;
+		if (!target) return null;
+		const loaded = await setTrackInstrumentSource(target, `vst3:${instrument.path}`);
+		return loaded ? target.id : null;
 	};
 
 	const removeClipFromDaw = (clipId: string) => {
@@ -2613,6 +2648,8 @@ export default function DAW(_props: TabRendererProps) {
 			setTracks([]);
 			setClips([]);
 			setProjectAssets([]);
+			setApprovedComposerArrangement(null);
+			setProgressiveStemState({ universe: null, nodes: [], activeByRole: {} });
 			setSelectedTrackId(null);
 			setSelectedClipId(null);
 			setSnapEnabled(true);
@@ -2642,6 +2679,8 @@ export default function DAW(_props: TabRendererProps) {
 		setTracks(restoredTracks);
 		setClips(data.clips ?? []);
 		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
+		setApprovedComposerArrangement(data.approvedComposerArrangement ?? null);
+		setProgressiveStemState(data.progressiveStemState ?? { universe: null, nodes: [], activeByRole: {} });
 		const restoredHeights: Record<string, number> = {};
 		for (const t of restoredTracks) {
 			const saved = data.trackHeights?.[t.id];
@@ -2693,6 +2732,8 @@ export default function DAW(_props: TabRendererProps) {
 		sigDen,
 		trackHeights,
 		masterLevel,
+		approvedComposerArrangement,
+		progressiveStemState,
 	});
 
 	type YSongProjectFileV1 = {
@@ -2834,7 +2875,7 @@ export default function DAW(_props: TabRendererProps) {
 		return () => window.removeEventListener("keydown", onProjectShortcut);
 		// These are intentionally the same project-state inputs used by projectFileText().
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [projectName, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel]);
+	}, [projectName, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
 
 	useEffect(() => {
 		// Never autosave the component's empty pre-hydration render. On cold start,
@@ -2879,6 +2920,8 @@ export default function DAW(_props: TabRendererProps) {
 		sigNum,
 		sigDen,
 		masterLevel,
+		approvedComposerArrangement,
+		progressiveStemState,
 	]);
 
 
@@ -2903,6 +2946,8 @@ export default function DAW(_props: TabRendererProps) {
 		sigNum: number;
 		sigDen: number;
 		masterLevel: number;
+		approvedComposerArrangement: ComposerArrangement | null;
+		progressiveStemState: ProgressiveStemState;
 	};
 	type DawHistoryEntry = { hash: string; state: DawHistorySnapshot };
 	const historyRef = useRef<DawHistoryEntry[]>([]);
@@ -2933,6 +2978,8 @@ export default function DAW(_props: TabRendererProps) {
 		sigNum,
 		sigDen,
 		masterLevel,
+		approvedComposerArrangement,
+		progressiveStemState,
 	});
 
 	const historyHash = (state: DawHistorySnapshot) => JSON.stringify(state);
@@ -2984,7 +3031,7 @@ export default function DAW(_props: TabRendererProps) {
 		// Selection, zoom, scrolling, snap/grid choice and playhead movement are view/
 		// workflow state, not destructive musical edits, so they are not history steps.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel]);
+	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
 
 	const applyHistoryEntry = (entry: DawHistoryEntry) => {
 		stop();
@@ -3002,6 +3049,8 @@ export default function DAW(_props: TabRendererProps) {
 		setSigNum(state.sigNum);
 		setSigDen(state.sigDen);
 		setMasterLevel(state.masterLevel);
+		setApprovedComposerArrangement(state.approvedComposerArrangement);
+		setProgressiveStemState(state.progressiveStemState);
 		setSelectedTrackId((id) => id && state.tracks.some((t) => t.id === id) ? id : (state.tracks[0]?.id ?? null));
 		setSelectedClipId((id) => id && state.clips.some((c) => c.id === id) ? id : null);
 		setMidiEditorClipId((id) => id && state.clips.some((c) => c.id === id) ? id : null);
@@ -3697,6 +3746,10 @@ export default function DAW(_props: TabRendererProps) {
 		return () => window.removeEventListener("ysong:world-play-request", onWorldPlay);
 	}, [isPlaying]);
 
+	// Claim the shared transport only after the DAW really entered playback.
+	// Pausing/stopping keeps the last source selected so Visuals restores it on reopen.
+	useEffect(() => { if (isPlaying) claimPlaybackOwner("daw"); }, [isPlaying]);
+
 	// The Mixer is a second control surface for this exact DAW state, not a duplicate
 	// mixer engine. Commands from YC-9000 modify the same track objects used here.
 	useEffect(() => subscribeDawSessionCommands((command) => {
@@ -3773,13 +3826,13 @@ export default function DAW(_props: TabRendererProps) {
 			}),
 		});
 		const now = Date.now();
-		if (now - lastVisualTransportPushRef.current >= 100) {
+		if (getPlaybackOwner() === "daw" && now - lastVisualTransportPushRef.current >= 100) {
 			lastVisualTransportPushRef.current = now;
 			const beatSeconds = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
 			const barSeconds = beatSeconds * Math.max(1, sigNum);
 			void bridgeApi.setVisualTransport({
 				source: "daw", playing: isPlaying, positionSeconds: Math.max(0, playheadPosBars - 1) * barSeconds,
-				durationSeconds: Math.max(0, endBar - 1) * barSeconds, title: projectName, artist: "", album: "", updatedAt: now,
+				durationSeconds: Math.max(0, endBar - 1) * barSeconds, bpm, sigNum, sigDen, title: projectName, artist: "", album: "", updatedAt: now,
 			}).catch(() => {});
 		}
 	}, [dawHydrated, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, trackMeters]);
@@ -4274,6 +4327,141 @@ export default function DAW(_props: TabRendererProps) {
 		return compressor ? Math.max(0, -compressor.reduction) : 0;
 	})();
 
+	const composerProjectContext = useMemo<ComposerProjectContext>(() => {
+		const selectedMidi = selectedClipId ? clips.find((clip) => clip.id === selectedClipId && (clip.midiNotes?.length ?? 0) > 0) ?? null : null;
+		const sourceTrack = selectedMidi ? tracks.find((track) => track.id === selectedMidi.trackId) ?? null : null;
+		return {
+			projectName,
+			playheadBar: playheadPosBars,
+			tracks: tracks.map((track) => ({ name: track.name, type: track.type, clipCount: clips.filter((clip) => clip.trackId === track.id).length })),
+			source: selectedMidi ? {
+				trackId: sourceTrack?.id,
+				trackName: sourceTrack?.name ?? "Selected MIDI",
+				startBar: selectedMidi.startBar,
+				lengthBars: selectedMidi.lengthBars,
+				notes: (selectedMidi.midiNotes ?? []).map(({ pitch, startBars, lengthBars, velocity }) => ({ pitch, startBars, lengthBars, velocity })),
+			} : null,
+		};
+	}, [projectName, playheadPosBars, tracks, clips, selectedClipId]);
+
+	const soundDesignerKeyLabel = useMemo(() => {
+		const selected = selectedClipId ? clips.find((clip) => clip.id === selectedClipId) ?? null : null;
+		const rule = selected?.midiScales?.[0];
+		if (!rule) return "";
+		const scale = SCALE_DEFINITIONS.find((item) => item.id === rule.scaleId);
+		return `${NOTE_NAMES[((rule.root % 12) + 12) % 12]} ${scale?.friendlyLabel ?? scale?.label ?? rule.scaleId}`;
+	}, [clips, selectedClipId]);
+
+	const soundDesignerProjectSummary = useMemo(() => {
+		const parts = tracks.slice(0, 24).map((track) => {
+			const clipCount = clips.filter((clip) => clip.trackId === track.id).length;
+			return `${track.name} (${track.type}, ${clipCount} clip${clipCount === 1 ? "" : "s"})`;
+		});
+		return `${projectName || "Untitled project"} · ${bpm} BPM · ${sigNum}/${sigDen} · ${parts.join("; ")}`.slice(0, 1400);
+	}, [projectName, bpm, sigNum, sigDen, tracks, clips]);
+
+	const progressiveStemSeed = useMemo(() => {
+		const selected = selectedClipId ? clips.find((clip) => clip.id === selectedClipId) ?? null : null;
+		const selectedRule = selected?.midiScales?.[0];
+		const chordClips = clips.filter((clip) => (clip.composerChords?.length ?? 0) > 0);
+		const preferredChordClips = chordClips.filter((clip) => clip.composerRole === "chords");
+		const chordSource = preferredChordClips.length ? preferredChordClips : chordClips;
+		const chordMap = chordSource.flatMap((clip) => clip.composerChords ?? [])
+			.filter((chord, index, all) => all.findIndex((other) => other.atBar === chord.atBar && other.symbol === chord.symbol) === index)
+			.sort((a, b) => a.atBar - b.atBar);
+		return {
+			projectId: activeProjectId,
+			projectName,
+			bpm,
+			sigNum,
+			sigDen,
+			totalBars: Math.max(1, Math.round(endBar - 1)),
+			keyRoot: selectedRule?.root ?? 0,
+			scaleId: selectedRule?.scaleId ?? "natural-minor" as const,
+			sectionMap: (approvedComposerArrangement?.sections ?? []).map((section) => ({ name: section.name, startBar: section.startBar, endBar: section.endBar })),
+			chordMap,
+		};
+	}, [activeProjectId, projectName, bpm, sigNum, sigDen, endBar, clips, selectedClipId, approvedComposerArrangement]);
+
+	const progressiveDependencySources = useMemo<Record<string, Partial<StemDependency>>>(() => {
+		const out: Record<string, Partial<StemDependency>> = {};
+		for (const node of progressiveStemState.nodes) {
+			const clip = node.clipId ? clips.find((item) => item.id === node.clipId) ?? null : null;
+			out[node.nodeId] = {
+				assetId: node.assetId ?? clip?.assetId,
+				notes: (clip?.midiNotes ?? []).map(({ pitch, startBars, lengthBars, velocity }) => ({ pitch, startBars, lengthBars, velocity })),
+				summary: node.summary,
+			};
+		}
+		return out;
+	}, [progressiveStemState.nodes, clips]);
+
+	const acceptProgressiveStemProposal = async (proposal: StemProposal, previous: StemNode | null) => {
+		const expectedType: TrackType = proposal.mode === "midi" ? "instrument" : "audio";
+		const trackId = crypto.randomUUID();
+		const next = mkTrack(expectedType, tracks.filter((track) => track.type === expectedType).length + 1, trackId);
+		next.name = `${proposal.label || proposal.role} v${proposal.version}`;
+		if (proposal.mode === "midi") {
+			const roleProgram: Record<StemRole, number> = { drums: 118, bass: 38, piano: 0, strings: 48, lead: 81, vocals: 52, guitar: 29, choir: 52, atmosphere: 89, percussion: 115, fx: 103 };
+			next.gmProgram = roleProgram[proposal.role];
+		}
+		setTracks((prev) => [...prev.map((track) => previous?.trackId && track.id === previous.trackId ? { ...track, mute: true } : track), next]);
+		setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H }));
+		const clipId = crypto.randomUUID();
+		const stableNodeId = previous?.nodeId ?? crypto.randomUUID();
+		if (proposal.mode === "midi") {
+			const universe = progressiveStemState.universe;
+			if (!universe) throw new Error("stem_universe_missing");
+			const nextClip: Clip = {
+				id: clipId, trackId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: universe.totalBars,
+				midiNotes: proposal.notes.map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
+				midiPitchBend: [], midiModulation: [], midiBendRange: 12,
+				midiScales: ["drums", "percussion", "fx"].includes(proposal.role) ? [] : [{ id: crypto.randomUUID(), root: universe.keyRoot, scaleId: universe.scaleId }],
+				midiScaleLock: ["drums", "percussion", "fx"].includes(proposal.role) ? "off" : "strict",
+				composerRole: proposal.role, composerChords: proposal.chords,
+				stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily,
+			};
+			setClips((prev) => [...prev, nextClip]);
+		} else {
+			const assetId = proposal.assetId || proposal.objectKey;
+			setProjectAssets((prev) => prev.some((asset) => asset.id === assetId || asset.objectKey === proposal.objectKey) ? prev : [...prev, { id: assetId, kind: "audio", name: `${proposal.label} v${proposal.version}.wav`, objectKey: proposal.objectKey, durationSec: proposal.exactDurationSec, sizeMB: proposal.sizeBytes / (1024 * 1024) }]);
+			setClips((prev) => [...prev, { id: clipId, trackId, assetId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: proposal.lengthBars, sourceOffsetSec: 0, sourceDurationSec: proposal.exactDurationSec, fadeInBars: 0, fadeOutBars: 0, composerRole: proposal.role, stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily }]);
+		}
+		setBars((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(proposal.lengthBars + 8))));
+		setSelectedTrackId(trackId);
+		setSelectedClipId(clipId);
+		return { clipId, trackId, assetId: proposal.mode === "audio" ? proposal.assetId : undefined, stemNodeId: stableNodeId };
+	};
+
+	const acceptComposerProposal = (proposal: ComposerProposal, targetTrackId?: string | null) => {
+		const usableTarget = targetTrackId ? tracks.find((track) => track.id === targetTrackId && track.type === "instrument") ?? null : null;
+		const roleProgram: Record<ComposerProposal["role"], number> = {
+			melody: 81, chords: 0, bassline: 38, arpeggio: 81, countermelody: 80, drums: 118, strings: 48, piano: 0, atmosphere: 89, harmony: 52,
+		};
+		const trackId = usableTarget?.id ?? crypto.randomUUID();
+		if (!usableTarget) {
+			const next = mkTrack("instrument", tracks.filter((track) => track.type === "instrument").length + 1, trackId);
+			next.name = proposal.label || proposal.role;
+			next.gmProgram = roleProgram[proposal.role];
+			setTracks((prev) => [...prev, next]);
+			setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H }));
+		}
+		const clipId = crypto.randomUUID();
+		const nextClip: Clip = {
+			id: clipId, trackId, name: proposal.label || proposal.role, startBar: proposal.startBar, lengthBars: proposal.lengthBars,
+			midiNotes: proposal.notes.map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
+			midiPitchBend: [], midiModulation: [], midiBendRange: 12,
+			midiScales: proposal.role === "drums" ? [] : [{ id: crypto.randomUUID(), root: proposal.keyRoot, scaleId: proposal.scaleId }],
+			midiScaleLock: proposal.role === "drums" ? "off" : "strict",
+			composerRole: proposal.role,
+			composerChords: proposal.chords.map((chord) => ({ atBar: proposal.startBar + chord.atBars, symbol: chord.symbol, durationBars: chord.durationBars })),
+		};
+		setClips((prev) => [...prev, nextClip]);
+		setSelectedTrackId(trackId);
+		setSelectedClipId(clipId);
+		return trackId;
+	};
+
 	return (
 		<div className="h-full min-h-0 flex flex-col relative">
 			{/* App-style menu bar. Project file commands live here instead of consuming transport space. */}
@@ -4301,7 +4489,13 @@ export default function DAW(_props: TabRendererProps) {
 					)}
 				</div>
 				<div className="min-w-0 text-[10px] opacity-35 truncate px-1" title={projectName}>{projectName}</div>
-				<button type="button" onClick={() => setDawAgentOpen((open) => !open)} className={`ml-auto h-7 px-3 rounded-md text-[11px] border ${dawAgentOpen ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open YSong AI inside the DAW">YSong AI</button>
+				<div className="ml-auto flex items-center gap-1">
+					<button type="button" onClick={() => { setAiComposerOpen((open) => !open); setDawAgentOpen(false); setInstrumentCatalogOpen(false); setSoundDesignerOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${aiComposerOpen ? "border-fuchsia-400/40 bg-fuchsia-500/20 text-fuchsia-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open AI Composer — structured musical proposals">Composer</button>
+					<button type="button" onClick={() => { setInstrumentCatalogOpen((open) => !open); setAiComposerOpen(false); setDawAgentOpen(false); setSoundDesignerOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${instrumentCatalogOpen ? "border-cyan-400/40 bg-cyan-500/20 text-cyan-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open Bridge Instrument Catalog">Instruments</button>
+					<button type="button" onClick={() => { setSoundDesignerOpen((open) => !open); setInstrumentCatalogOpen(false); setAiComposerOpen(false); setDawAgentOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${soundDesignerOpen ? "border-violet-400/40 bg-violet-500/20 text-violet-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open AI Sound Designer — snapshot-first iterative VST parameter design">Sound Designer</button>
+					<button type="button" onClick={() => { setProgressiveStemOpen((open) => !open); setAiComposerOpen(false); setInstrumentCatalogOpen(false); setSoundDesignerOpen(false); setDawAgentOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${progressiveStemOpen ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open Progressive AI Stem Composer — one target stem at a time">Stem Composer</button>
+					<button type="button" onClick={() => { setDawAgentOpen((open) => !open); setAiComposerOpen(false); setInstrumentCatalogOpen(false); setSoundDesignerOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${dawAgentOpen ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open YSong AI inside the DAW">YSong AI</button>
+				</div>
 			</div>
 			{/* Main split */}
 			<div className="flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
@@ -5086,7 +5280,51 @@ export default function DAW(_props: TabRendererProps) {
 				</div>
 			</div>
 
+			<InstrumentCatalogPanel
+				open={instrumentCatalogOpen}
+				onClose={() => setInstrumentCatalogOpen(false)}
+				selectedTrack={selectedTrackId ? tracks.find((track) => track.id === selectedTrackId) ?? null : null}
+				transportPlaying={isPlaying}
+				onAssignInstrument={assignInstrumentFromCatalog}
+			/>
+
+			<AiSoundDesignerPanel
+				open={soundDesignerOpen}
+				onClose={() => setSoundDesignerOpen(false)}
+				selectedTrack={selectedTrackId ? tracks.find((track) => track.id === selectedTrackId) ?? null : null}
+				transportPlaying={isPlaying}
+				bpm={bpm}
+				sigNum={sigNum}
+				sigDen={sigDen}
+				projectSummary={soundDesignerProjectSummary}
+				initialKeyLabel={soundDesignerKeyLabel}
+				midiSource={composerProjectContext.source ?? null}
+				onAssignInstrument={assignInstrumentFromCatalog}
+			/>
+
+			<ProgressiveStemComposerPanel
+				open={progressiveStemOpen}
+				onClose={() => setProgressiveStemOpen(false)}
+				seed={progressiveStemSeed}
+				state={progressiveStemState}
+				onStateChange={setProgressiveStemState}
+				dependencySources={progressiveDependencySources}
+				onAccept={acceptProgressiveStemProposal}
+			/>
+
 			<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
+			<AiComposerPanel
+				open={aiComposerOpen}
+				onClose={() => setAiComposerOpen(false)}
+				project={composerProjectContext}
+				bpm={bpm}
+				sigNum={sigNum}
+				sigDen={sigDen}
+				totalBars={Math.max(4, Math.round(endBar - 1))}
+				playheadBar={playheadPosBars}
+				onAccept={acceptComposerProposal}
+				onArrangementApproved={setApprovedComposerArrangement}
+			/>
 
 			{/* Shared transport console. The MIDI editor reuses this exact component. */}
 			<div

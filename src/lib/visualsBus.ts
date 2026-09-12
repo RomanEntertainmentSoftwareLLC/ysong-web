@@ -7,10 +7,30 @@ export type VisualOutputStats = {
 	timestamp: number;
 	fps: number;
 	frameTimeMs: number;
+	/** Logical composition size before quality scaling. */
 	width: number;
 	height: number;
+	/** Actual internal 3D render target size after quality/adaptive scaling. */
+	internalWidth: number;
+	internalHeight: number;
 	webgl: "WebGL2";
 	renderer: string;
+	gpuClass: "software" | "integrated" | "entry" | "mid" | "high" | "unknown";
+	qualitySelection: "auto" | "performance" | "high" | "ultra" | "custom";
+	qualityTier: "performance" | "high" | "ultra" | "custom";
+	qualityLabel: string;
+	renderScale: number;
+	adaptiveScale: number;
+	antialiasMode: "off" | "fxaa" | "smaa" | "msaa2" | "msaa4" | "msaa8";
+	maxSamples: number;
+	maxTextureSize: number;
+	maxAnisotropy: number;
+	drawCalls: number;
+	triangles: number;
+	textures: number;
+	geometries: number;
+	recommendedTier: "performance" | "high" | "ultra";
+	rtxClassHint: boolean;
 };
 
 export type VisualOutputError = {
@@ -30,12 +50,29 @@ export type VisualPerformanceState = {
 	source: "manual" | "auto" | "timeline" | "idle";
 };
 
+
+export type VisualImportedAnimationTrack = {
+	name: string;
+	property: "position" | "quaternion" | "scale" | "other";
+	times: number[];
+	values: number[];
+	valueSize: number;
+};
+
+export type VisualImportedAnimationClip = {
+	name: string;
+	duration: number;
+	tracks: VisualImportedAnimationTrack[];
+};
+
 export type VisualModelInfo = {
 	type: "visual-model-info";
 	timestamp: number;
 	fileName: string;
 	bones: string[];
 	animations: string[];
+	animationClips: VisualImportedAnimationClip[];
+	morphTargets: string[];
 	meshes: number;
 };
 

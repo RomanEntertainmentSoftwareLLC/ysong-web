@@ -1,4 +1,5 @@
-import { bridgeApi } from "./bridgeApi";
+import { bridgeApi, type VisualAudioFrame } from "./bridgeApi";
+import { publishLocalVisualAudio } from "./visualsRealtime";
 
 type AudioTap = {
 	context: AudioContext;
@@ -22,6 +23,7 @@ const taps = new WeakMap<HTMLMediaElement, AudioTap>();
 const latestFrames = new Map<HTMLMediaElement, BrowserVisualFrame>();
 let publishTimer = 0;
 let lastPublishAt = 0;
+let localSequence = 0;
 
 function clamp01(value: number) {
 	return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -78,6 +80,8 @@ function publishMergedFrames() {
 		for (let i = 0; i < merged.spectrum.length; i++) merged.spectrum[i] = Math.max(merged.spectrum[i], frame.spectrum[i] ?? 0);
 	}
 	lastPublishAt = performance.now();
+	const localFrame: VisualAudioFrame = { sequence: ++localSequence, source: "browser", ...merged };
+	publishLocalVisualAudio(localFrame);
 	void bridgeApi.pushVisualBrowserAudio(merged).catch(() => {});
 }
 

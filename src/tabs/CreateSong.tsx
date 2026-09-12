@@ -182,6 +182,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
   const [plugins, setPlugins] = useState<BridgePlugin[]>([]);
   const [engine, setEngine] = useState<MusicEngineStatus | null>(null);
   const [plan, setPlan] = useState<PlanDraft | null>(null);
+  const [planApproved, setPlanApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState("");
@@ -199,7 +200,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
     void refreshEngine();
   }, []);
 
-  const patch = (next: Partial<Draft>) => { setDraft((d) => ({ ...d, ...next })); setPlan(null); };
+  const patch = (next: Partial<Draft>) => { setDraft((d) => ({ ...d, ...next })); setPlan(null); setPlanApproved(false); };
   const selectedBand = useMemo(() => bands.find((b) => b.id === draft.bandId) ?? null, [bands, draft.bandId]);
   const usableVsts = useMemo(() => plugins.filter((p) => p.kind === "instrument" && p.loadable !== false), [plugins]);
 
@@ -217,6 +218,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
       ]);
       const normalized = normalizePlan(parseJsonReply(reply), draft, plugins);
       setPlan(normalized);
+      setPlanApproved(false);
       setProgress(`Planned ${normalized.tracks.length} tracks: ${normalized.tracks.filter((t) => t.mode === "midi").length} editable MIDI/VST, ${normalized.tracks.filter((t) => t.mode === "audio").length} generated audio.`);
       return normalized;
     } catch (e) {
@@ -230,8 +232,11 @@ export default function CreateSongPane(_props: TabRendererProps) {
     if (generating) return;
     setGenerating(true); setError("");
     try {
-      const activePlan = plan ?? await planSession();
-      if (!activePlan) return;
+      if (!plan || !planApproved) {
+        setError("Review and approve the session blueprint before generation. YSong will not create a pile of tracks from an unapproved plan.");
+        return;
+      }
+      const activePlan = plan;
       const audioTracks = activePlan.tracks.filter((t) => t.mode === "audio");
       if (audioTracks.length) {
         const status = await getMusicEngineStatus();
@@ -303,13 +308,14 @@ export default function CreateSongPane(_props: TabRendererProps) {
         <Field label="Style"><textarea value={draft.style} onChange={(e) => patch({ style: e.target.value })} placeholder="Genre, instruments, mood, vocal style, production direction…" className="input min-h-[120px] resize-y" /></Field>
         <div className="grid grid-cols-3 gap-2"><Field label="BPM"><input value={draft.bpm} onChange={(e) => patch({ bpm: e.target.value })} placeholder="Auto" className="input" /></Field><Field label="Key / mode"><input value={draft.key} onChange={(e) => patch({ key: e.target.value })} placeholder="E Phrygian" className="input" /></Field><Field label="Length"><input value={draft.duration} onChange={(e) => patch({ duration: e.target.value })} placeholder="Auto" className="input" /></Field></div>
         <div className="text-[11px] text-neutral-500">Installed VST3 instruments visible to the producer: {usableVsts.length}. If none fits a part, YSong asks MiniMax for a separate audio track instead of silently substituting General MIDI.</div>
-        <div className="flex flex-wrap gap-2"><button onClick={() => void planSession()} disabled={busy || generating || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-indigo-500/25 border border-indigo-400/30 disabled:opacity-35">{busy ? "Planning…" : "Plan editable session"}</button><button onClick={() => void generateSession()} disabled={busy || generating || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-35">{generating ? "Generating…" : "Generate Session"}</button></div>
+        <div className="flex flex-wrap gap-2"><button onClick={() => void planSession()} disabled={busy || generating || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-indigo-500/25 border border-indigo-400/30 disabled:opacity-35">{busy ? "Planning…" : "Plan editable session"}</button>{plan && !planApproved && <button onClick={() => { setPlanApproved(true); setProgress("Session blueprint approved. Generation is now unlocked, but nothing has been created yet."); }} disabled={busy || generating} className="rounded-xl px-4 py-2 bg-emerald-500/15 border border-emerald-400/30 disabled:opacity-35">Approve blueprint</button>}<button onClick={() => void generateSession()} disabled={busy || generating || !plan || !planApproved || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-35">{generating ? "Generating…" : "Generate Session"}</button></div>
         {(progress || error) && <div className={`rounded-xl border px-3 py-2 text-xs ${error ? "border-red-400/25 bg-red-400/[.06] text-red-200" : "border-white/10 bg-white/[.03] text-neutral-300"}`}>{error || progress}</div>}
       </section>
       <section className="rounded-2xl border border-white/10 bg-white/[0.035] min-h-[560px] p-5">
         <div className="flex items-center justify-between gap-3"><div><div className="text-xs uppercase tracking-widest text-neutral-500">Session blueprint</div><h2 className="text-xl font-semibold mt-1">What YSong will build</h2></div><button onClick={sendToAgent} className="rounded-xl px-3 py-2 text-sm border border-white/10 hover:bg-white/5">Open in DAW AI</button></div>
         {!plan ? <div className="mt-5 text-sm leading-6 text-neutral-400">Plan the song first. The surfer dude will turn your brief into hard musical constraints, a MiniMax structured caption, separate audio parts, and editable MIDI/VST parts chosen from the instruments Bridge can actually see.</div> : <div className="mt-5 space-y-5">
           <div className="grid sm:grid-cols-4 gap-2"><Stat label="Tempo" value={`${plan.bpm} BPM`} /><Stat label="Key / mode" value={plan.keyLabel} /><Stat label="Meter" value={`${plan.sigNum}/${plan.sigDen}`} /><Stat label="Tracks" value={String(plan.tracks.length)} /></div>
+          <div className={`rounded-xl border px-3 py-2 text-xs ${planApproved ? "border-emerald-400/25 bg-emerald-400/[.06] text-emerald-100" : "border-amber-400/25 bg-amber-400/[.06] text-amber-100"}`}>{planApproved ? "✓ Blueprint approved. Generate Session is unlocked." : "Blueprint is proposal-only. Review it and press Approve blueprint before YSong may create tracks."}</div>
           <div><SectionTitle>Hard constraints</SectionTitle><div className="mt-2 flex flex-wrap gap-2">{plan.hardConstraints.length ? plan.hardConstraints.map((x, i) => <span key={i} className="rounded-full border border-amber-300/20 bg-amber-300/[.06] px-2.5 py-1 text-xs text-amber-100">{x}</span>) : <span className="text-xs text-neutral-500">No explicit hard constraints beyond the session specification.</span>}</div></div>
           <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}</div>)}</div></div>
           <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">MiniMax structured caption</summary><pre className="mt-3 whitespace-pre-wrap text-xs leading-5 text-neutral-400 font-sans">{plan.structuredCaption}</pre></details>
