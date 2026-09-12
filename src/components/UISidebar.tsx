@@ -9,7 +9,7 @@ export type Chat = {
   messages?: { role: "user" | "assistant"; text: string; ts?: number; attachments?: any; personaId?: string | null }[];
 };
 
-type ModuleType = "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "flashback" | "tools" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "upload";
+type ModuleType = "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "flashback" | "tools" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "radio" | "bridge" | "upload";
 
 type Props = {
   chats: Chat[];
@@ -45,6 +45,8 @@ const navItems: { label: string; type: ModuleType; icon: string }[] = [
   { label: "Achievements", type: "achievements", icon: "trophy" },
   { label: "Marketplace", type: "market", icon: "store" },
   { label: "YSong World", type: "world", icon: "globe" },
+  { label: "YSong Radio", type: "radio", icon: "radio" },
+  { label: "YSong Bridge", type: "bridge", icon: "bridge" },
   { label: "Upload Music", type: "upload", icon: "upload" },
 ];
 
@@ -65,6 +67,8 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     trophy: <><path d="M8 4h8v4a4 4 0 0 1-8 0V4Z"/><path d="M8 6H4v2a4 4 0 0 0 4 4M16 6h4v2a4 4 0 0 1-4 4M12 12v5M8 21h8M10 17h4"/></>,
     store: <><path d="M4 10v10h16V10M3 10l2-6h14l2 6"/><path d="M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/></>,
     globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></>,
+    radio: <><path d="M5 10h14v10H5z"/><path d="m8 10 8-5"/><circle cx="10" cy="15" r="2.2"/><path d="M15 14h2M15 17h2"/></>,
+    bridge: <><path d="M4 18h16M6 18V8m12 10V8"/><path d="M8 8a4 4 0 0 1 8 0"/><path d="M10 12h4"/></>,
     upload: <><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 20h16"/></>,
     rooms: <><path d="M4 5h12a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H9l-5 4v-4a3 3 0 0 1-2-3V8a3 3 0 0 1 2-3Z"/><path d="M7 9h8M7 13h5"/></>,
     gear: <><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9A1.7 1.7 0 0 0 21 10h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></>,

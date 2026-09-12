@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  VOCAL_API_BASE,
   checkVocalHealth,
   getSpectralBalance,
   rawStemUrl,
@@ -77,7 +76,7 @@ export default function StemRestoreApp({ onBack, initialUpload = null, onOpenHum
       setHealthMessage(h.stage || h.service || "Ready");
     } catch (e: any) {
       setHealth("offline");
-      setHealthMessage(e?.message || "Local Vocal API is not reachable.");
+      setHealthMessage(e?.message || "YSong Audio Engine is not reachable.");
     }
   }
 
@@ -169,14 +168,14 @@ export default function StemRestoreApp({ onBack, initialUpload = null, onOpenHum
             <p className="mt-2 max-w-3xl text-sm text-neutral-500 dark:text-neutral-400">Separate first, then repair cross-stem spectral holes without duplicating energy. Raw separator stems remain untouched.</p>
           </div>
           <div className={`rounded-full border px-3 py-1.5 text-xs ${health === "online" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500" : health === "checking" ? "border-amber-500/30 bg-amber-500/10 text-amber-500" : "border-rose-500/30 bg-rose-500/10 text-rose-500"}`}>
-            {health === "online" ? "Local engine online" : health === "checking" ? "Checking local engine…" : "Local engine offline"}
+            {health === "online" ? "Audio Engine online" : health === "checking" ? "Checking Audio Engine…" : "Audio Engine offline"}
           </div>
         </div>
 
         {health !== "online" && (
           <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm">
-            <div className="font-medium text-amber-500">YSong Vocal API is required for local stem processing.</div>
-            <div className="mt-1 text-neutral-500 dark:text-neutral-400">{healthMessage || `Start the Vocal API at ${VOCAL_API_BASE}.`}</div>
+            <div className="font-medium text-amber-500">YSong Audio Engine is required for local stem processing.</div>
+            <div className="mt-1 text-neutral-500 dark:text-neutral-400">{healthMessage || `YSong Audio Engine is starting. If this persists, restart YSong.`}</div>
             <button type="button" onClick={refreshHealth} className="mt-3 rounded-lg border border-amber-500/30 px-3 py-1.5 text-xs text-amber-500">Check again</button>
           </div>
         )}
@@ -236,7 +235,7 @@ export default function StemRestoreApp({ onBack, initialUpload = null, onOpenHum
         )}
 
         <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-800 p-4 text-xs text-neutral-500">
-          Phase 18 truth: Stem Restore v0.1 is deterministic multi-band DSP plus mixture-consistency projection. The cleanser is intentionally not advertised as ML yet; the file/report contract is designed so a learned local inpainting model can replace or augment it later.
+          Technical note: Stem Restore v0.1 is deterministic multi-band DSP plus mixture-consistency projection. The cleanser is intentionally not advertised as ML yet; the file/report contract is designed so a learned local inpainting model can replace or augment it later.
         </div>
       </div>
     </div>

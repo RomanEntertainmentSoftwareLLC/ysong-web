@@ -95,7 +95,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
   const createPlan=async()=>{
     if(!target){setNotice('Select an instrument track first.');return;}
     if(!context.desired){setNotice('Describe the sound you want first.');return;}
-    if(!status?.configured){setNotice('Server AI is not configured yet. Phase 27 is wired, but it will not fake a sound-design model.');return;}
+    if(!status?.configured){setNotice('Server AI is not configured yet. YSong will not fake a sound-design model.');return;}
     setBusy('plan'); setNotice('Matching installed instruments…');
     try{
       const result=await bridgeApi.matchInstruments(desiredTerms(context.desired),10);
@@ -120,7 +120,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
       const paramResponse=await bridgeApi.getInstrumentParameters(instrument.id,target.id);
       if(!paramResponse.parameters.length)throw new Error('This instrument exposed no automatable parameter surface to Bridge.');
       setParameters(paramResponse.parameters);
-      const snapshotResponse=await bridgeApi.captureInstrumentSnapshot(target.id,`Phase 27 Baseline · ${instrument.name}`,["phase27","baseline",...plan.targetTraits.slice(0,6)]);
+      const snapshotResponse=await bridgeApi.captureInstrumentSnapshot(target.id,`Sound Designer Baseline · ${instrument.name}`,["phase27","baseline",...plan.targetTraits.slice(0,6)]);
       setBaselineSnapshot(snapshotResponse.snapshot);
       const audition=await renderAndAnalyze(midiAudition??plan.audition);
       metricsRef.current=audition.metrics; setLatestMetrics(audition.metrics);
@@ -145,7 +145,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
     }
     const audition=await renderAndAnalyze(midiAudition??step.nextAudition);
     if(cancelRef.current){URL.revokeObjectURL(audition.blobUrl);return false;}
-    const snapshot=step.changes.length?await bridgeApi.captureInstrumentSnapshot(target.id,`Phase 27 Iteration ${iterationNumber} · ${instrument.name}`,["phase27",`iteration-${iterationNumber}`]):null;
+    const snapshot=step.changes.length?await bridgeApi.captureInstrumentSnapshot(target.id,`Sound Designer Iteration ${iterationNumber} · ${instrument.name}`,["phase27",`iteration-${iterationNumber}`]):null;
     const record:SoundDesignerIteration={iteration:iterationNumber,score:step.score,evaluation:step.evaluation,changes:step.changes,audition:audition.metrics,snapshotId:snapshot?.snapshot.id??null,createdAt:Date.now()};
     const nextIterations=[...iterationsRef.current,record]; iterationsRef.current=nextIterations; setIterations(nextIterations);
     metricsRef.current=audition.metrics; setLatestMetrics(audition.metrics);
@@ -188,7 +188,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
       const p=await bridgeApi.getInstrumentParameters(instrument.id,target.id);setParameters(p.parameters);
       const truncated=iterationsRef.current.filter((x)=>x.iteration<=item.iteration); iterationsRef.current=truncated; setIterations(truncated);
       metricsRef.current=item.audition; setLatestMetrics(item.audition);
-      setNotice(`Restored Phase 27 iteration ${item.iteration}. Render a new audition before asking for another iteration if needed.`);
+      setNotice(`Restored Sound Designer iteration ${item.iteration}. Render a new audition before asking for another iteration if needed.`);
     }catch(error){setNotice(messageOf(error,'Could not restore that iteration.'));}finally{setBusy('');}
   };
 
@@ -197,7 +197,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
   return <div className="absolute inset-0 z-[88] bg-black/50 backdrop-blur-[2px] flex justify-end" onPointerDown={(event)=>{if(event.target===event.currentTarget)onClose();}}>
     <section className="h-full w-full max-w-[1220px] bg-neutral-950 border-l border-white/10 shadow-2xl flex flex-col text-neutral-100">
       <header className="shrink-0 px-4 py-3 border-b border-white/10 flex items-start gap-3">
-        <div className="min-w-0 flex-1"><div className="text-base font-semibold">AI Sound Designer</div><div className="text-[11px] text-neutral-400">Phase 27 · AI brain outside Bridge · snapshot-first knob control · iterative audition loop</div></div>
+        <div className="min-w-0 flex-1"><div className="text-base font-semibold">AI Sound Designer</div><div className="text-[11px] text-neutral-400">AI brain outside Bridge · snapshot-first knob control · iterative audition loop</div></div>
         <div className="text-[10px] text-neutral-500 text-right">{status?.configured?`${status.provider} · ${status.model}`:'AI provider not configured'}<br/>{target?`Target: ${target.name}`:'Select an instrument track'}</div>
         <YSButton className="h-8 px-3 rounded-lg" onClick={onClose}>Close</YSButton>
       </header>
@@ -217,7 +217,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
           <input value={arrangement} onChange={(e)=>setArrangement(e.target.value)} className="mt-2 w-full h-8 rounded border border-white/10 bg-black/25 px-2 text-xs" placeholder="Arrangement context, e.g. dense female-vocal chorus"/>
           <input value={notes} onChange={(e)=>setNotes(e.target.value)} className="mt-2 w-full h-8 rounded border border-white/10 bg-black/25 px-2 text-xs" placeholder="Additional constraints"/>
           <div className="mt-2 text-[10px] text-neutral-500">Context: {projectSummary || 'current DAW project'}{midiSource ? ` · selected MIDI ${midiSource.trackName} (${midiSource.notes.length} notes)` : ' · no selected MIDI clip'}{initialKeyLabel ? ` · scale ${initialKeyLabel}` : ''}. Selected MIDI is used as the audition phrase when available.</div>
-          {!status?.configured&&<div className="mt-2 text-[10px] text-amber-300">No fake fallback: configure the server AI provider after Phase 28 to activate autonomous design. Manual Bridge instrument controls remain available in Instruments.</div>}
+          {!status?.configured&&<div className="mt-2 text-[10px] text-amber-300">No fake fallback: configure the server AI provider to activate autonomous design. Manual Bridge instrument controls remain available in Instruments.</div>}
         </section>
 
         {plan&&instrument&&<section className="rounded-xl border border-cyan-300/20 bg-cyan-500/[0.04] p-3">
@@ -247,7 +247,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
             {item.changes.length>0&&<div className="mt-1 text-[9px] text-neutral-500">{item.changes.map((c)=>`${c.parameterName}: ${fmt(c.fromValue,3)} → ${fmt(c.targetValue,3)}`).join(' · ')}</div>}
           </div>)}</div>
 
-          <div className="mt-3 rounded-lg border border-white/8 bg-black/15 p-2 text-[10px] text-neutral-400">The numeric score is the server model’s heuristic judgment from deterministic audition measurements and parameter context. It is <b>not</b> an objective audio-quality score and the model is not directly hearing the WAV in Phase 27.</div>
+          <div className="mt-3 rounded-lg border border-white/8 bg-black/15 p-2 text-[10px] text-neutral-400">The numeric score is the server model’s heuristic judgment from deterministic audition measurements and parameter context. It is <b>not</b> an objective audio-quality score and the model is not directly hearing the WAV.</div>
         </section>}
 
         <section className="rounded-xl border border-white/10 bg-white/[0.02] p-3"><div className="text-sm font-medium">Live parameter surface</div><div className="mt-2 max-h-56 overflow-y-auto grid md:grid-cols-2 gap-1.5">{parameters.slice(0,120).map((p)=><div key={p.id} className="rounded border border-white/8 bg-black/15 px-2 py-1 text-[9px] flex gap-2"><span className="min-w-0 flex-1 truncate">{p.name}</span><span className="text-neutral-500">{p.group}</span><span className="font-mono text-cyan-200">{fmt(p.currentValue,3)}</span></div>)}{parameters.length===0&&<div className="text-xs text-neutral-500">Load the planned instrument to expose parameters.</div>}</div></section>

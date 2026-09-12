@@ -63,7 +63,7 @@ export default function ToolsPane() {
 
 
           <button type="button" onClick={() => { setHandoffAsset(null); setActiveTool("audio-intelligence"); }} className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/55 p-5 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition">
-            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">◇</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Phase 22</span></div>
+            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">◇</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Available</span></div>
             <div className="mt-5 text-base font-semibold">Audio Intelligence</div>
             <div className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">CLAP genre/subgenre, mood, energy, sonic fingerprint cues, vocal/instrument presence, BPM/key cross-check, metadata helpers, and uncertainty-aware AI-likelihood.</div>
             <div className="mt-5 text-xs text-violet-500 group-hover:text-violet-400">Analyze once →</div>
@@ -93,14 +93,14 @@ export default function ToolsPane() {
 
 
           <button type="button" onClick={() => setActiveTool("promotion")} className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/55 p-5 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition">
-            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">↗</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Phase 23</span></div>
+            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">↗</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Available</span></div>
             <div className="mt-5 text-base font-semibold">Promotion Center</div>
             <div className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Smart Links, pre-save/release pages, fan capture, QR codes, funnels, SEO Intelligence, and Meta Business publishing.</div>
             <div className="mt-5 text-xs text-violet-500 group-hover:text-violet-400">Build campaign →</div>
           </button>
 
           <button type="button" onClick={() => { setCuratorIntelligence(null); setActiveTool("curators"); }} className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/55 p-5 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition">
-            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">◎</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Phase 24</span></div>
+            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">◎</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Available</span></div>
             <div className="mt-5 text-base font-semibold">Curator Marketplace</div>
             <div className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Find independent playlists, blogs, radio, YouTube, influencers and music media by Audio Intelligence + SEO fit. Credits buy review consideration, never guaranteed placement.</div>
             <div className="mt-5 text-xs text-violet-500 group-hover:text-violet-400">Find curators →</div>

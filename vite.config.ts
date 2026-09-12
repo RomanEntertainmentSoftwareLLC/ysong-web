@@ -28,6 +28,13 @@ export default defineConfig({
       "/api": { target: "http://127.0.0.1:8081", changeOrigin: false },
       "/auth": { target: "http://127.0.0.1:8081", changeOrigin: false },
       "/chat": { target: "http://127.0.0.1:8081", changeOrigin: false },
+      // Local YSong Audio Engine. START-YSONG launches it automatically, so the
+      // browser sees this as an internal YSong service rather than a separate app.
+      "/audio-engine": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: false,
+        rewrite: (path) => path.replace(/^\/audio-engine/, ""),
+      },
       // Browser -> Vite -> native YSong Bridge. This avoids cross-origin local
       // network restrictions and lets LAN test devices reach the desktop Bridge.
       "/bridge": {

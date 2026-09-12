@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { checkVocalHealth, VOCAL_API_BASE, type LocalJob, type UploadResult } from "../stemrestore/api";
+import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import {
   critiqueReportUrl,
   sourceAudioUrl,
@@ -149,7 +149,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
           <div className={`rounded-full border px-3 py-1.5 text-xs ${health === "online" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500" : health === "checking" ? "border-amber-500/30 bg-amber-500/10 text-amber-500" : "border-rose-500/30 bg-rose-500/10 text-rose-500"}`}>{health === "online" ? "Ears online" : health === "checking" ? "Checking ears…" : "Ears offline"}</div>
         </div>
 
-        {health !== "online" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm"><div className="font-medium text-amber-500">The local YSong Vocal/Audio API powers Critique.</div><div className="mt-1 text-neutral-500">{healthMessage || `Start it at ${VOCAL_API_BASE}.`}</div><button type="button" onClick={refreshHealth} className="mt-3 rounded-lg border border-amber-500/30 px-3 py-1.5 text-xs text-amber-500">Check again</button></div>}
+        {health !== "online" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm"><div className="font-medium text-amber-500">The integrated YSong Audio Engine powers Critique.</div><div className="mt-1 text-neutral-500">{healthMessage || `YSong should launch it automatically. Restart YSong if it remains offline.`}</div><button type="button" onClick={refreshHealth} className="mt-3 rounded-lg border border-amber-500/30 px-3 py-1.5 text-xs text-amber-500">Check again</button></div>}
 
         <div className="mt-7 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
           <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
@@ -192,7 +192,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
             </div>
           </section>
 
-          <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-800 p-4 text-xs text-neutral-500">Phase 19 truth: Critique v0.2 is a deterministic local technical analyzer. The uploaded prototype's CLAP genre detector is useful and preserved as a future Audio Intelligence direction, but it does not secretly influence this score. We would rather say “candidate, listen here” than invent certainty.</div>
+          <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-800 p-4 text-xs text-neutral-500">Technical note: Critique v0.2 is a deterministic local technical analyzer. The uploaded prototype's CLAP genre detector is useful and preserved as a future Audio Intelligence direction, but it does not secretly influence this score. We would rather say “candidate, listen here” than invent certainty.</div>
         </>}
       </div>
     </div>

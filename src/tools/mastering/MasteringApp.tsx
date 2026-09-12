@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { checkVocalHealth, VOCAL_API_BASE, type LocalJob, type UploadResult } from "../stemrestore/api";
+import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import {
   masteringAnalysisUrl,
   masteringFileUrl,
@@ -193,7 +193,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   return <div className="h-full min-h-0 overflow-y-auto bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100"><div className="mx-auto max-w-6xl px-5 py-7 md:px-8 md:py-9">
     <div className="flex flex-wrap items-start justify-between gap-4"><div><button type="button" onClick={onBack} className="mb-4 text-xs text-violet-500 hover:text-violet-400">← YSong Tools</button><div className="text-[11px] uppercase tracking-[.24em] text-violet-500">Audio Lab</div><h1 className="mt-1 !text-3xl md:!text-4xl !font-semibold !leading-tight tracking-tight">Master / Remaster</h1><p className="mt-2 max-w-3xl text-sm text-neutral-500 dark:text-neutral-400">Measure first, then create a non-destructive master candidate. Critique findings can become localized corrections, Reference Match describes differences before touching anything, and every render includes before/after/difference A/B.</p></div><div className={`rounded-full border px-3 py-1.5 text-xs ${health === "online" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500" : "border-amber-500/30 bg-amber-500/10 text-amber-500"}`}>{health === "online" ? "Audio Lab online" : health === "checking" ? "Checking…" : "Audio Lab offline"}</div></div>
 
-    {health === "offline" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm text-neutral-500">Start the local YSong Vocal/Audio API at <span className="font-mono">{VOCAL_API_BASE}</span>.</div>}
+    {health === "offline" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm text-neutral-500">YSong Audio Engine is offline. Restart YSong to relaunch the integrated local engine.</div>}
 
     <div className="mt-7 grid gap-5 lg:grid-cols-2">
       <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5"><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">1 · Source</div><h2 className="mt-1 text-lg font-semibold">Master this track</h2><label className="mt-4 block cursor-pointer rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 p-5 hover:border-violet-500/60"><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" disabled={busy} onChange={e => { resetSource(e.target.files?.[0] || null); e.currentTarget.value = ""; }}/><div className="font-medium">{sourceFile?.name || source?.original_filename || "Drop/select audio"}</div><div className="mt-1 text-xs text-neutral-500">WAV/FLAC preferred. Critique can hand the same prepared asset here without re-uploading.</div></label>{sourceFile && !source && <button type="button" onClick={prepareSource} disabled={busy || health !== "online"} className="mt-3 min-h-10 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white disabled:opacity-40">Prepare source</button>}{source && <div className="mt-3 text-xs text-neutral-500">Asset <span className="font-mono">{source.asset_id}</span></div>}</section>
@@ -223,6 +223,6 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
       <ABMonitor assetId={source.asset_id} runId={report.run_id}/>
     </>}
 
-    <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-800 p-4 text-xs text-neutral-500">Phase 21 truth: Master / Remaster is deterministic DSP plus measurement and heuristics, not a learned mastering model. LUFS/true peak use FFmpeg measurement when available; fallbacks are explicitly labeled. Reference Match never promises to reproduce another master, and “presence band” is not mislabeled as vocal presence without vocal-aware analysis.</div>
+    <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 dark:border-neutral-800 p-4 text-xs text-neutral-500">Technical note: Master / Remaster is deterministic DSP plus measurement and heuristics, not a learned mastering model. LUFS/true peak use FFmpeg measurement when available; fallbacks are explicitly labeled. Reference Match never promises to reproduce another master, and “presence band” is not mislabeled as vocal presence without vocal-aware analysis.</div>
   </div></div>;
 }

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { apiPost } from "../lib/authApi";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { apiGet, apiPost } from "../lib/authApi";
 import { clearToken } from "../lib/authApi";
 import { YSButton } from "../components/YSButton";
 import SocialAuthButtons from "../components/SocialAuthButtons";
@@ -8,9 +8,21 @@ import SocialAuthButtons from "../components/SocialAuthButtons";
 type ApiUser = { id: string; email: string };
 
 export default function Login() {
+	const navigate = useNavigate();
+	const location = useLocation();
 	const [show, setShow] = useState(false);
 	const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+	useEffect(() => {
+		let alive = true;
+		const token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token");
+		if (!token) return;
+		apiGet("/auth/me")
+			.then(() => { if (alive) navigate("/app", { replace: true }); })
+			.catch(() => {});
+		return () => { alive = false; };
+	}, [navigate]);
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -53,11 +65,12 @@ export default function Login() {
 				console.log("Login payload uid:", payload?.uid, "email:", resp.user.email);
 			} catch {}
 
-			// Hard redirect avoids any race with state that might still hold the old user
+			// Keep login out of browser history so Back returns to the previous YSong surface, not the credential form.
 			const devDevice = new URLSearchParams(window.location.search).get("devDevice");
-			window.location.replace(devDevice ? `/app?devDevice=${encodeURIComponent(devDevice)}` : "/app");
-			// If you prefer SPA navigation, you can keep:
-			// navigate("/app", { replace: true });
+			const routeState = location.state as { from?: unknown } | null;
+			const from = routeState?.from;
+			const target = typeof from === "string" && from.startsWith("/app") ? from : (devDevice ? `/app?devDevice=${encodeURIComponent(devDevice)}` : "/app");
+			navigate(target, { replace: true });
 		} catch (err: any) {
 			setStatus("error");
 			const code = String(err?.message ?? "request_failed");

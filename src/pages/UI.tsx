@@ -26,6 +26,8 @@ import CreateSongPane from "../tabs/CreateSong";
 import BandCreationPane from "../tabs/BandCreation";
 import ArtworkStudioPane from "../tabs/ArtworkStudio";
 import WorldPane from "../tabs/World";
+import RadioPane from "../tabs/Radio";
+import BridgePane from "../tabs/Bridge";
 import UploadMusicPane from "../tabs/UploadMusic";
 import LibraryPane from "../tabs/Library";
 import AchievementsPane from "../tabs/Achievements";
@@ -123,6 +125,8 @@ function BootTabs({
 						rooms: "Rooms",
 						market: "Marketplace",
 						world: "YSong World",
+						radio: "YSong Radio",
+						bridge: "YSong Bridge",
 						upload: "Upload Music",
 					};
 
@@ -140,13 +144,13 @@ function BootTabs({
 					const normalizedTabs = filteredTabs.map(normalizeRestoredTab);
 
 					if (normalizedTabs.length > 0) {
-						normalizedTabs.forEach((t) => openTab(t as any));
+						normalizedTabs.forEach((t) => openTab(t as any, "silent"));
 
 						let activeId = data.activeId;
 						if (!activeId || !normalizedTabs.some((t) => t.id === activeId)) {
 							activeId = normalizedTabs[0].id;
 						}
-						if (activeId) activateTab(activeId);
+						if (activeId) activateTab(activeId, "silent");
 						restored = true;
 					}
 				}
@@ -489,6 +493,22 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 		};
 	}, []);
 
+	function SeedWorkspaceHistory({ ready }: { ready: boolean }) {
+		const { tabs, activeId, activateTab } = useTabManager();
+		const seeded = useRef(false);
+		useEffect(() => {
+			if (!ready || seeded.current) return;
+			seeded.current = true;
+			if (activeId && tabs.some((tab) => tab.id === activeId)) activateTab(activeId, "replace");
+			else if (window.location.pathname.startsWith("/app")) {
+				const url = new URL(window.location.href);
+				url.searchParams.delete("view"); url.searchParams.delete("chat");
+				window.history.replaceState({ ysongWorkspace: true, tabId: null, tabType: "home" }, "", `${url.pathname}${url.search}`);
+			}
+		}, [ready, tabs, activeId, activateTab]);
+		return null;
+	}
+
 	function PersistLayout({ ready }: { ready: boolean }) {
 		const { tabs, activeId } = useTabManager();
 
@@ -542,6 +562,8 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 		rooms: RoomsPane,
 		market: MarketplacePane,
 		world: WorldPane,
+		radio: RadioPane,
+		bridge: BridgePane,
 		upload: UploadMusicPane,
 	} as const;
 
@@ -621,6 +643,8 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 				rooms: "Rooms",
 				market: "Marketplace",
 				world: "YSong World",
+				radio: "YSong Radio",
+				bridge: "YSong Bridge",
 				upload: "Upload Music",
 			} as const;
 			const existing = tabs.find((t) => t.type === type);
@@ -799,6 +823,7 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 				chatsHydrated={chatsHydrated}
 				onLayoutHydrated={() => setLayoutHydrated(true)}
 			/>
+			<SeedWorkspaceHistory ready={layoutHydrated} />
 			<PersistLayout ready={layoutHydrated} />
 			</WorldPlayerProvider>
 		</TabManagerProvider>

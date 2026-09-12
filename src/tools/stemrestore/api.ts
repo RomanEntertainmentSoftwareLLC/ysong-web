@@ -1,5 +1,5 @@
 const env = (import.meta as any).env || {};
-export const VOCAL_API_BASE = String(env.VITE_VOCAL_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+export const VOCAL_API_BASE = String(env.VITE_VOCAL_API_URL || "/audio-engine").replace(/\/+$/, "");
 
 export type VocalHealth = { status: string; service: string; stage?: string };
 export type UploadResult = {

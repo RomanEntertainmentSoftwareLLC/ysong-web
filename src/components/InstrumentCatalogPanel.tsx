@@ -216,7 +216,7 @@ export default function InstrumentCatalogPanel({ open, onClose, selectedTrack, t
 				<header className="shrink-0 px-4 py-3 border-b border-white/10 flex items-start gap-3">
 					<div className="min-w-0 flex-1">
 						<div className="text-base font-semibold">Instrument Catalog</div>
-						<div className="text-[11px] text-neutral-400">Phase 26 · deterministic Bridge capabilities · no AI model runs inside Bridge</div>
+						<div className="text-[11px] text-neutral-400">Deterministic Bridge capabilities · no AI model runs inside Bridge</div>
 					</div>
 					<div className="text-[10px] text-neutral-500 text-right">{catalogEngine || "Bridge catalog"}<br />{targetTrack ? `Target: ${targetTrack.name}` : "Select an instrument track"}</div>
 					<YSButton className="h-8 px-3 rounded-lg" onClick={onClose}>Close</YSButton>
@@ -289,8 +289,8 @@ export default function InstrumentCatalogPanel({ open, onClose, selectedTrack, t
 				</div>
 
 				<footer className="shrink-0 min-h-10 border-t border-white/10 px-4 py-2 text-[10px] text-neutral-400 flex items-center gap-3">
-					<span className="min-w-0 flex-1 truncate">{status || "Bridge owns deterministic plug-in capabilities. Phase 27 will use this API as hands/ears, never as the AI brain."}</span>
-					<span className="text-neutral-600">Snapshots before autonomous knob control are mandatory in Phase 27.</span>
+					<span className="min-w-0 flex-1 truncate">{status || "Bridge owns deterministic plug-in capabilities. AI Sound Designer uses this API as hands/ears, never as the AI brain."}</span>
+					<span className="text-neutral-600">Snapshots before autonomous knob control are mandatory.</span>
 				</footer>
 			</section>
 		</div>

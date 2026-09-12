@@ -132,7 +132,7 @@ function MlLabPage() {
 					<article className="dashboard-panel">
 						<span className="dashboard-micro-label">Model training</span>
 						<h2>The learning loop is ready before the trained model is.</h2>
-						<p className="panel-note">Phase 17 preserves the original outcome-tracking and transparent prediction logic without making users launch a second service.</p>
+						<p className="panel-note">YSong preserves the original outcome-tracking and transparent prediction logic without making users launch a second service.</p>
 						<div className="ml-command-box">
 							Collect real release outcomes → build a usable dataset → train and validate a model → enable it behind the same YSong API.
 						</div>

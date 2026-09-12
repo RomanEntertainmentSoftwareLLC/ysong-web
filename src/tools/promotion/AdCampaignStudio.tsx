@@ -13,7 +13,7 @@ type Step="music"|"audio"|"videos"|"generate"|"setup"|"analytics"|"intelligence"
 function fmtSecs(v:number|null|undefined){if(!v&&v!==0)return "";const n=Math.max(0,Number(v)||0);return `${Math.floor(n/60)}:${String(Math.floor(n%60)).padStart(2,"0")}`;}
 function trackOf(releases:PromotionRelease[],id:string|null|undefined){for(const release of releases){const track=release.tracks.find(t=>t.id===id);if(track)return {release,track};}return null;}
 
-export default function AdCampaignStudio({campaigns,releases,health,onMessage}:{campaigns:PromotionCampaign[];releases:PromotionRelease[];health:PromotionHealth|null;onMessage:(value:string)=>void}){
+export default function AdCampaignStudio({campaigns,releases,health,onMessage,startNewToken=0}:{campaigns:PromotionCampaign[];releases:PromotionRelease[];health:PromotionHealth|null;onMessage:(value:string)=>void;startNewToken?:number}){
   const [ads,setAds]=useState<AdCampaign[]>([]); const [selected,setSelected]=useState<AdCampaign|null>(null); const [snippets,setSnippets]=useState<AudioSnippet[]>([]); const [backgrounds,setBackgrounds]=useState<BackgroundVideo[]>([]); const [creatives,setCreatives]=useState<AdCreative[]>([]); const [libraries,setLibraries]=useState<CreativeLibrary[]>([]);
   const [step,setStep]=useState<Step>("music"); const [busy,setBusy]=useState(false); const [newMode,setNewMode]=useState(false);
   const [smartId,setSmartId]=useState(""); const [releaseId,setReleaseId]=useState(""); const [trackId,setTrackId]=useState(""); const [name,setName]=useState(""); const [genre,setGenre]=useState(""); const [genreSource,setGenreSource]=useState<"ysong"|"user">("ysong");
@@ -56,6 +56,7 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage}:{
   },[creatives]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function beginNew(){const smart=campaigns.find(c=>c.status==="active")||campaigns[0];setSmartId(smart?.id||"");const r=releases.find(x=>x.id===smart?.sourceReleaseId)||releases[0];setReleaseId(r?.id||"");const t=r?.tracks[0];setTrackId(t?.id||"");setGenre(t?.genre||r?.genre||smart?.genre||"");setGenreSource("ysong");setName(`${t?.title||smart?.title||"New release"} · Meta campaign`);setNewMode(true);setSelected(null);setStep("music");}
+  useEffect(()=>{if(startNewToken>0)beginNew();},[startNewToken]); // eslint-disable-line react-hooks/exhaustive-deps
   function pickRelease(id:string){setReleaseId(id);const r=releases.find(x=>x.id===id);const t=r?.tracks[0];setTrackId(t?.id||"");setGenre(t?.genre||r?.genre||"");setGenreSource("ysong");if(t)setName(`${t.title} · Meta campaign`);}
   function pickTrack(id:string){setTrackId(id);const found=trackOf(releases,id);if(found){setGenre(found.track.genre||found.release.genre||genre);setGenreSource("ysong");setName(`${found.track.title} · Meta campaign`);}}
 
@@ -77,7 +78,7 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage}:{
   const navSteps:[Step,string][]=[["music","1 · Music"],["audio","2 · Audio clips"],["videos","3 · Backgrounds"],["generate","4 · Generate"],["setup","5 · Audience & Campaign"],["analytics","6 · Analytics"],["intelligence","7 · Intelligence"]];
 
   return <div className="mt-6 grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-    <aside className={panel}><div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Paid campaigns</div><h2 className="mt-1 text-lg font-semibold">Ad Campaigns</h2></div><button onClick={beginNew} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white">+ New</button></div>
+    <aside className={panel}><div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Paid campaigns</div><h2 className="mt-1 text-lg font-semibold">Ad Campaigns</h2></div><button onClick={beginNew} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white">+ New Ad Campaign</button></div>
       <div className="mt-4 space-y-2">{ads.length?ads.map(a=><button key={a.id} onClick={()=>void openAd(a.id)} className={`w-full rounded-xl border p-3 text-left ${selected?.id===a.id?"border-violet-500/60 bg-violet-500/5":"border-neutral-200 dark:border-neutral-800"}`}><div className="font-medium">{a.name}</div><div className="mt-1 flex items-center justify-between text-[11px] text-neutral-500"><span>{a.genre||"Genre not set"}</span><span>{a.status}</span></div></button>):<div className="rounded-xl border border-dashed border-neutral-300 p-5 text-center text-xs text-neutral-500 dark:border-neutral-700">No paid-ad drafts yet.</div>}</div>
       <div className="mt-5 rounded-xl border border-neutral-200 p-3 text-xs dark:border-neutral-800"><div className="font-semibold">Render engine</div><div className={`mt-1 ${renderReady?"text-emerald-500":"text-amber-500"}`}>{renderReady?"FFmpeg ready":"FFmpeg unavailable"}</div><div className="mt-1 break-words text-[10px] text-neutral-500">{health?.render.version||health?.render.error||"Checking runtime…"}</div></div>
     </aside>

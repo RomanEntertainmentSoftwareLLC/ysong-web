@@ -4,12 +4,23 @@ import { useNavigate } from "react-router-dom";
 import ysongTitleWithLogo from "/ysong-logo-with-title.png";
 import ysongTitleWithLogoDark from "/ysong-logo-with-title-darkmode.png";
 import { YSButton } from "./YSButton";
+import { apiGet } from "../lib/authApi";
 
 export default function Navbar() {
 	const { dark } = useTheme();
 	const [open, setOpen] = useState(false);
 	const btnRef = useRef<HTMLButtonElement>(null);
 	const navigate = useNavigate();
+	const [signedIn, setSignedIn] = useState(false);
+
+
+	useEffect(() => {
+		let alive = true;
+		const token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token");
+		if (!token) return;
+		apiGet("/auth/me").then(() => { if (alive) setSignedIn(true); }).catch(() => { if (alive) setSignedIn(false); });
+		return () => { alive = false; };
+	}, []);
 
 	// Keep axe happy: update aria-expanded after render with a string token
 	useEffect(() => {
@@ -28,7 +39,7 @@ export default function Navbar() {
 		>
 			<nav className="mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
 				{/* Left: Logo */}
-				<a href="/" aria-label="{import.meta.env.VITE_APP_NAME} Home">
+				<a href="/" aria-label={`${import.meta.env.VITE_APP_NAME} Home`}>
 					<img
 						src={dark ? ysongTitleWithLogoDark : ysongTitleWithLogo}
 						alt={import.meta.env.VITE_APP_NAME}
@@ -39,22 +50,14 @@ export default function Navbar() {
 
 				{/* Right (desktop) */}
 				<div className="hidden sm:flex items-center gap-2">
-					{/* Login Button */}
-					<YSButton
-						type="button"
-						onClick={() => navigate("/login")}
-						className="px-3 py-2 text-sm font-medium rounded-lg border"
-					>
-						Log in
-					</YSButton>
-					{/* Create Account Button*/}
-					<YSButton
-						type="button"
-						onClick={() => navigate("/signup")}
-						className="px-3.5 py-2 text-sm font-medium rounded-lg border"
-					>
-						Create account
-					</YSButton>
+					{signedIn ? (
+						<YSButton type="button" onClick={() => navigate("/app")} className="px-3.5 py-2 text-sm font-medium rounded-lg border">Open YSong</YSButton>
+					) : (
+						<>
+							<YSButton type="button" onClick={() => navigate("/login")} className="px-3 py-2 text-sm font-medium rounded-lg border">Log in</YSButton>
+							<YSButton type="button" onClick={() => navigate("/signup")} className="px-3.5 py-2 text-sm font-medium rounded-lg border">Create account</YSButton>
+						</>
+					)}
 
 					{/* Theme toggle 
                     <YSButton
@@ -119,22 +122,14 @@ export default function Navbar() {
 				className="sm:hidden px-4 pb-3"
 			>
 				<div className="mt-2 flex flex-col items-stretch gap-2">
-					{/* Mobile Login Button*/}
-					<YSButton
-						type="button"
-						onClick={() => navigate("/login")}
-						className="px-3 py-2 text-sm font-medium rounded-lg border"
-					>
-						Log in
-					</YSButton>
-					{/* Mobile Create Account Button*/}
-					<YSButton
-						type="button"
-						onClick={() => navigate("/signup")}
-						className="px-3.5 py-2 text-sm font-medium rounded-lg border"
-					>
-						Create account
-					</YSButton>
+					{signedIn ? (
+						<YSButton type="button" onClick={() => { setOpen(false); navigate("/app"); }} className="px-3 py-2 text-sm font-medium rounded-lg border">Open YSong</YSButton>
+					) : (
+						<>
+							<YSButton type="button" onClick={() => navigate("/login")} className="px-3 py-2 text-sm font-medium rounded-lg border">Log in</YSButton>
+							<YSButton type="button" onClick={() => navigate("/signup")} className="px-3.5 py-2 text-sm font-medium rounded-lg border">Create account</YSButton>
+						</>
+					)}
 
 					{/*<YSButton
                         type="button"
