@@ -14,7 +14,7 @@ import {
 import { listBandProfiles, setActiveBandId, type BandProfile } from "../lib/bandLibrary";
 
 const EMPTY: WorldLibrary = { tracks: [], releases: [], artists: [], playlists: [], savedPlaylists: [], uploads: [] };
-type Section = "songs" | "albums" | "artists" | "bands" | "playlists" | "uploads";
+type Section = "all" | "saved" | "albums" | "artists" | "bands" | "playlists" | "uploads";
 
 export default function LibraryPane() {
   const { tabs, openTab, activateTab } = useTabManager();
@@ -22,7 +22,7 @@ export default function LibraryPane() {
   const [bands, setBands] = useState<BandProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [section, setSection] = useState<Section>("songs");
+  const [section, setSection] = useState<Section>("all");
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -77,14 +77,22 @@ export default function LibraryPane() {
     await removeWorldTrack(track.id); await loadWorld();
   };
 
+  const allMusic = useMemo(() => {
+    const byId = new Map<string, WorldLibrary["tracks"][number]>();
+    for (const track of data.uploads) byId.set(track.id, track);
+    for (const track of data.tracks) byId.set(track.id, track);
+    return [...byId.values()];
+  }, [data.tracks, data.uploads]);
+
   const counts = useMemo(() => ({
-    songs: data.tracks.length,
+    all: allMusic.length,
+    saved: data.tracks.length,
     albums: data.releases.length,
     artists: data.artists.length,
     bands: bands.length,
     playlists: data.playlists.length + data.savedPlaylists.length,
     uploads: data.uploads.length,
-  }), [data, bands]);
+  }), [allMusic.length, data, bands]);
 
   return <div className="h-full min-h-0 overflow-y-auto bg-neutral-950 text-neutral-100">
     <div className="p-4 md:p-6 pb-28 max-w-6xl mx-auto">
@@ -92,11 +100,12 @@ export default function LibraryPane() {
 
       {creating && <div className="mb-6 rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 grid gap-3"><div className="font-semibold">Create playlist</div><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Playlist title" className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-indigo-400" /><textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" rows={2} className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-indigo-400 resize-y" /><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} /> Public playlist</label><div className="flex gap-2"><YSButton onClick={createPlaylist} className="rounded-lg bg-indigo-600 px-4 py-2">Create</YSButton><YSButton onClick={() => setCreating(false)} className="rounded-lg border border-neutral-700 px-4 py-2">Cancel</YSButton></div></div>}
 
-      <div className="flex gap-2 overflow-x-auto pb-2 mb-5 no-scrollbar">{(["songs","albums","artists","bands","playlists","uploads"] as Section[]).map((key) => <button key={key} onClick={() => setSection(key)} className={`shrink-0 rounded-full px-4 py-2 text-sm border ${section === key ? "bg-white text-black border-white" : "border-neutral-700 hover:bg-neutral-900"}`}>{label(key)} <span className="opacity-60">{counts[key]}</span></button>)}</div>
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-5 no-scrollbar">{(["all","saved","uploads","albums","artists","bands","playlists"] as Section[]).map((key) => <button key={key} onClick={() => setSection(key)} className={`shrink-0 rounded-full px-4 py-2 text-sm border ${section === key ? "bg-white text-black border-white" : "border-neutral-700 hover:bg-neutral-900"}`}>{label(key)} <span className="opacity-60">{counts[key]}</span></button>)}</div>
 
       {error && <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div>}
       {section === "bands" ? <BandsSection bands={bands} onOpen={openBand} onNew={newBand} /> : loading ? <div className="text-neutral-400">Loading your library…</div> : <>
-        {section === "songs" && <TrackListEmptyAware tracks={data.tracks} empty="Songs you save in YSong World will appear here." onOpen={(id) => openWorld("track", id)} />}
+        {section === "all" && <TrackListEmptyAware tracks={allMusic} empty="Your saved songs and YSong uploads will appear here." onOpen={(id) => openWorld("track", id)} />}
+        {section === "saved" && <TrackListEmptyAware tracks={data.tracks} empty="Songs you save in YSong World will appear here." onOpen={(id) => openWorld("track", id)} />}
         {section === "albums" && (data.releases.length ? <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{data.releases.map((r) => <button key={r.id} onClick={() => openWorld("release", r.id)} className="text-left min-w-0"><Cover trackId={r.coverTrackId} /><div className="font-medium text-sm mt-2 truncate">{r.title}</div><div className="text-xs text-neutral-400 truncate">{r.artistName}</div></button>)}</div> : <Empty text="Albums and releases you save will appear here." />)}
         {section === "artists" && (data.artists.length ? <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{data.artists.map((a) => <div key={`${a.ownerUserId}:${a.artistName}`} className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 flex items-center gap-3"><div className="h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500/40 to-fuchsia-500/20 grid place-items-center text-xl font-bold">{a.artistName.slice(0,1).toUpperCase()}</div><div className="min-w-0 flex-1"><div className="font-semibold truncate">{a.artistName}</div><div className="text-xs text-neutral-500">Following</div></div><button onClick={() => void unfollowArtist(a.ownerUserId, a.artistName)} className="rounded-lg border border-neutral-700 px-2.5 py-1.5 text-xs text-neutral-300 hover:border-red-400/40 hover:text-red-300">Unfollow</button></div>)}</div> : <Empty text="Artists you follow will appear here." />)}
         {section === "playlists" && <PlaylistSection own={data.playlists} saved={data.savedPlaylists} onOpen={(id) => openWorld("playlist", id)} onDelete={removePlaylist} />}
@@ -106,7 +115,7 @@ export default function LibraryPane() {
   </div>;
 }
 
-function label(section: Section) { return ({ songs:"Songs", albums:"Albums", artists:"Artists", bands:"Bands", playlists:"Playlists", uploads:"Your Uploads" } as const)[section]; }
+function label(section: Section) { return ({ all:"All Music", saved:"Saved Songs", albums:"Albums", artists:"Artists", bands:"Bands", playlists:"Playlists", uploads:"Your Uploads" } as const)[section]; }
 function Cover({ trackId }: { trackId?: string | null }) { return trackId ? <img src={worldArtworkUrl(trackId)} alt="" className="w-full aspect-square rounded-xl object-cover bg-neutral-900" /> : <div className="w-full aspect-square rounded-xl bg-gradient-to-br from-neutral-800 to-neutral-950 grid place-items-center text-neutral-600 text-3xl">♪</div>; }
 function Empty({ text }: { text: string }) { return <div className="rounded-2xl border border-dashed border-neutral-700 p-10 text-center text-neutral-400">{text}</div>; }
 

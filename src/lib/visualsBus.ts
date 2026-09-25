@@ -74,6 +74,9 @@ export type VisualModelInfo = {
 	animationClips: VisualImportedAnimationClip[];
 	morphTargets: string[];
 	meshes: number;
+	materials: number;
+	suggestedRole: "environment" | "prop" | "performer";
+	missingFiles: string[];
 };
 
 export type VisualOutputMessage = VisualOutputStats | VisualOutputError | VisualModelInfo | VisualPerformanceState;

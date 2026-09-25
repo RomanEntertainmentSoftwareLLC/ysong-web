@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TabRendererProps } from "./core";
 import { getActiveBandProfile, getBandProfile, setActiveBandId } from "../lib/bandLibrary";
 import { localAiChat } from "../lib/localAiApi";
+import { generateArtworkImage } from "../lib/artworkAiApi";
 
 type ArtFormat = "square" | "landscape" | "portrait" | "custom";
 type Tool = "select" | "brush" | "pencil" | "eraser" | "text" | "rect" | "ellipse" | "line" | "crop" | "eyedropper";
 type BlendMode = "source-over" | "multiply" | "screen" | "overlay" | "darken" | "lighten";
+type ResampleMode = "automatic" | "bicubic-smoother" | "preserve-details" | "bicubic-sharper" | "bicubic" | "bilinear" | "nearest";
 
 type LayerBase = {
   id: string;
@@ -58,6 +60,7 @@ type PaintLayer = LayerBase & { kind: "paint"; strokes: PaintStroke[] };
 type ArtLayer = ImageLayer | TextLayer | ShapeLayer | PaintLayer;
 
 type ArtworkProject = {
+  projectId: string;
   version: 2;
   title: string;
   artist: string;
@@ -67,6 +70,7 @@ type ArtworkProject = {
   width: number;
   height: number;
   background: string;
+  resampleMode?: ResampleMode;
   layers: ArtLayer[];
   updatedAt: number;
 };
@@ -81,8 +85,11 @@ const DB = "ysong-artwork-studio";
 const PROJECT_STORE = "projects";
 const LEGACY_STORE = "files";
 const PROJECT_KEY = "active-project-v2";
+const PROJECT_PREFIX = "project-v2:";
+const ACTIVE_PROJECT_ID_KEY = "ysong.artwork.activeProjectId.v1";
 const LEGACY_REF_KEY = "reference-image";
 const DEFAULT_PROJECT: ArtworkProject = {
+  projectId: "",
   version: 2,
   title: "",
   artist: "",
@@ -92,6 +99,7 @@ const DEFAULT_PROJECT: ArtworkProject = {
   width: 1000,
   height: 1000,
   background: "#111111",
+  resampleMode: "automatic",
   layers: [],
   updatedAt: Date.now(),
 };
@@ -113,30 +121,49 @@ function openArtworkDb(): Promise<IDBDatabase> {
   });
 }
 
+function ensureProjectId(project: ArtworkProject): ArtworkProject { return project.projectId ? project : { ...project, projectId: crypto.randomUUID() }; }
+function projectStorageKey(id: string) { return `${PROJECT_PREFIX}${id}`; }
+
+async function loadArtworkProjectById(projectId: string): Promise<ArtworkProject | null> {
+  if (!("indexedDB" in window) || !projectId) return null;
+  const db = await openArtworkDb();
+  try { return await new Promise<ArtworkProject | null>((resolve, reject) => { const tx=db.transaction(PROJECT_STORE,"readonly"); const req=tx.objectStore(PROJECT_STORE).get(projectStorageKey(projectId)); req.onsuccess=()=>resolve(req.result?.version===2?ensureProjectId(req.result as ArtworkProject):null); req.onerror=()=>reject(req.error); }); }
+  finally { db.close(); }
+}
+
 async function loadArtworkProject(): Promise<ArtworkProject | null> {
   if (!("indexedDB" in window)) return null;
+  const activeId=window.localStorage.getItem(ACTIVE_PROJECT_ID_KEY)||"";
+  if(activeId){const active=await loadArtworkProjectById(activeId);if(active)return active;}
   const db = await openArtworkDb();
   try {
     return await new Promise<ArtworkProject | null>((resolve, reject) => {
       const tx = db.transaction(PROJECT_STORE, "readonly");
       const req = tx.objectStore(PROJECT_STORE).get(PROJECT_KEY);
-      req.onsuccess = () => resolve(req.result && req.result.version === 2 ? req.result as ArtworkProject : null);
+      req.onsuccess = () => resolve(req.result && req.result.version === 2 ? ensureProjectId(req.result as ArtworkProject) : null);
       req.onerror = () => reject(req.error);
     });
   } finally { db.close(); }
 }
 
-async function saveArtworkProject(project: ArtworkProject) {
+async function saveArtworkProject(input: ArtworkProject) {
   if (!("indexedDB" in window)) return;
+  const project=ensureProjectId(input); window.localStorage.setItem(ACTIVE_PROJECT_ID_KEY,project.projectId);
   const db = await openArtworkDb();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(PROJECT_STORE, "readwrite");
-      tx.objectStore(PROJECT_STORE).put(project, PROJECT_KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      const store=tx.objectStore(PROJECT_STORE); store.put(project, projectStorageKey(project.projectId)); store.put(project, PROJECT_KEY);
+      tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error);
     });
   } finally { db.close(); }
+}
+
+type ArtworkProjectMeta={projectId:string;title:string;artist:string;width:number;height:number;updatedAt:number};
+async function listArtworkProjects():Promise<ArtworkProjectMeta[]>{
+  if (!("indexedDB" in window)) return [];
+  const db=await openArtworkDb();
+  try{return await new Promise<ArtworkProjectMeta[]>((resolve,reject)=>{const tx=db.transaction(PROJECT_STORE,"readonly");const store=tx.objectStore(PROJECT_STORE);const keysReq=store.getAllKeys();const valuesReq=store.getAll();tx.oncomplete=()=>{const keys=keysReq.result;const values=valuesReq.result as ArtworkProject[];const rows:ArtworkProjectMeta[]=[];for(let i=0;i<keys.length;i++){const key=String(keys[i]);const project=values[i];if(!key.startsWith(PROJECT_PREFIX)||!project||project.version!==2)continue;const normalized=ensureProjectId(project);rows.push({projectId:normalized.projectId,title:normalized.title||"Untitled Artwork",artist:normalized.artist||"",width:normalized.width,height:normalized.height,updatedAt:normalized.updatedAt||0});}resolve(rows.sort((a,b)=>b.updatedAt-a.updatedAt));};tx.onerror=()=>reject(tx.error);});}finally{db.close();}
 }
 
 async function loadLegacyReference(): Promise<Blob | null> {
@@ -181,7 +208,7 @@ type ImageCache = Map<string, { blob: Blob; bitmap: ImageBitmap }>;
 async function bitmapFor(layer: ImageLayer, cache: ImageCache) {
   const current = cache.get(layer.id);
   if (current?.blob === layer.blob) return current.bitmap;
-  if (current) { try { current.bitmap.close(); } catch {} }
+  if (current) { try { current.bitmap.close(); } catch { /* already released */ } }
   const bitmap = await createImageBitmap(layer.blob);
   cache.set(layer.id, { blob: layer.blob, bitmap });
   return bitmap;
@@ -213,10 +240,13 @@ async function renderArtwork(canvas: HTMLCanvasElement, project: ArtworkProject,
     if (layer.kind === "image") {
       try {
         const bmp = await bitmapFor(layer, cache);
+        const resample = project.resampleMode || "automatic";
+        ctx.imageSmoothingEnabled = resample !== "nearest";
+        ctx.imageSmoothingQuality = resample === "bilinear" ? "medium" : resample === "nearest" ? "low" : "high";
         ctx.filter = `brightness(${layer.brightness}%) contrast(${layer.contrast}%) saturate(${layer.saturation}%) hue-rotate(${layer.hue}deg) blur(${layer.blur}px)`;
         ctx.drawImage(bmp, 0, 0, layer.width, layer.height);
         ctx.filter = "none";
-      } catch {}
+      } catch { /* skip an unreadable raster layer without taking down the canvas */ }
     } else if (layer.kind === "text") {
       ctx.fillStyle = layer.color;
       ctx.font = `${layer.fontWeight} ${layer.fontSize}px ${layer.fontFamily}`;
@@ -267,8 +297,10 @@ async function renderArtwork(canvas: HTMLCanvasElement, project: ArtworkProject,
 }
 
 export default function ArtworkStudioPane(_props: TabRendererProps) {
+  void _props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const cacheRef = useRef<ImageCache>(new Map());
   const renderVersionRef = useRef(0);
   const [project, setProject] = useState<ArtworkProject>(DEFAULT_PROJECT);
@@ -282,17 +314,27 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
   const [zoom, setZoom] = useState(70);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [cropRect, setCropRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState<"refine" | "generate" | null>(null);
   const [status, setStatus] = useState("");
   const [rightTab, setRightTab] = useState<"layers" | "properties" | "ai">("layers");
   const [canvasDragActive, setCanvasDragActive] = useState(false);
   const [exportType, setExportType] = useState<"png" | "jpeg" | "webp">("png");
   const [canvasSizeDraft, setCanvasSizeDraft] = useState({ width: 1000, height: 1000 });
+  const [imageSizeOpen, setImageSizeOpen] = useState(false);
+  const [imageSizeDraft, setImageSizeDraft] = useState({ width: 1000, height: 1000, linked: true, resampleMode: "automatic" as ResampleMode });
+  const [menuOpen,setMenuOpen]=useState<"file"|"edit"|"image"|"layer"|"project"|"view"|null>(null);
+  const [newProjectOpen,setNewProjectOpen]=useState(false);
+  const [newProjectDraft,setNewProjectDraft]=useState({title:"Untitled Artwork",artist:"",width:3000,height:3000,background:"#111111",format:"square" as ArtFormat});
+  const [recentProjects,setRecentProjects]=useState<ArtworkProjectMeta[]>([]);
   const historyRef = useRef<ArtworkProject[]>([]);
   const historyIndexRef = useRef(-1);
   const [, setHistoryTick] = useState(0);
   const beforeGestureRef = useRef<ArtworkProject | null>(null);
   const internalClipboardRef = useRef<ArtLayer | null>(null);
+  const projectRef = useRef<ArtworkProject>(DEFAULT_PROJECT);
+  const generationInFlightRef = useRef(false);
+
+  useEffect(() => { projectRef.current = project; }, [project]);
 
   const selected = useMemo(() => project.layers.find((l) => l.id === selectedLayerId) ?? null, [project.layers, selectedLayerId]);
   const canUndo = historyIndexRef.current > 0;
@@ -327,9 +369,9 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
       const stored = await loadArtworkProject().catch(() => null);
       if (!alive) return;
       if (stored) {
-        setProject(stored); setCanvasSizeDraft({ width: stored.width, height: stored.height }); resetHistory(stored); setLoaded(true); return;
+        setProject(stored); setCanvasSizeDraft({ width: stored.width, height: stored.height }); resetHistory(stored); setLoaded(true); void listArtworkProjects().then(setRecentProjects).catch(()=>{}); return;
       }
-      let next = { ...DEFAULT_PROJECT, updatedAt: Date.now() };
+      let next = { ...DEFAULT_PROJECT, projectId:crypto.randomUUID(), updatedAt: Date.now() };
       const legacy = await loadLegacyReference().catch(() => null);
       if (legacy) {
         const size = await imageSize(legacy).catch(() => ({ width: 1000, height: 1000 }));
@@ -337,14 +379,14 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
         next = { ...next, layers: [layer] };
         setSelectedLayerId(layer.id);
       }
-      setProject(next); setCanvasSizeDraft({ width: next.width, height: next.height }); resetHistory(next); setLoaded(true);
+      setProject(next); setCanvasSizeDraft({ width: next.width, height: next.height }); resetHistory(next); setLoaded(true); void listArtworkProjects().then(setRecentProjects).catch(()=>{});
     })();
     return () => { alive = false; };
   }, [resetHistory]);
 
   useEffect(() => {
     if (!loaded) return;
-    const timer = window.setTimeout(() => void saveArtworkProject(project).catch(() => {}), 700);
+    const timer = window.setTimeout(() => void saveArtworkProject(project).then(()=>listArtworkProjects()).then(setRecentProjects).catch(() => {}), 700);
     return () => window.clearTimeout(timer);
   }, [project, loaded]);
 
@@ -354,7 +396,7 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
     void renderArtwork(canvasRef.current, project, cacheRef.current).then(() => { if (version !== renderVersionRef.current) return; });
   }, [project, loaded]);
 
-  useEffect(() => () => { for (const entry of cacheRef.current.values()) { try { entry.bitmap.close(); } catch {} } cacheRef.current.clear(); }, []);
+  useEffect(() => () => { for (const entry of cacheRef.current.values()) { try { entry.bitmap.close(); } catch { /* already released */ } } cacheRef.current.clear(); }, []);
 
   const addImage = async (file: File | Blob, sourceName = "Image") => {
     if (!file.type.startsWith("image/")) { setStatus("That file is not an image."); return; }
@@ -477,6 +519,34 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
     commit({ ...project, format: "custom", width, height }); setCanvasSizeDraft({ width, height });
   };
 
+  const openImageSize = () => {
+    setImageSizeDraft({ width: Math.round(project.width), height: Math.round(project.height), linked: true, resampleMode: project.resampleMode || "automatic" });
+    setImageSizeOpen(true);
+  };
+  const applyImageSize = () => {
+    const width = Math.round(clamp(imageSizeDraft.width, 64, 8192));
+    const height = Math.round(clamp(imageSizeDraft.height, 64, 8192));
+    const sx = width / Math.max(1, project.width), sy = height / Math.max(1, project.height), scalar = Math.sqrt(Math.abs(sx * sy));
+    const layers = project.layers.map((layer) => {
+      const next: ArtLayer = { ...layer, x: layer.x * sx, y: layer.y * sy, width: Math.max(1, layer.width * sx), height: Math.max(1, layer.height * sy) } as ArtLayer;
+      if (next.kind === "text") next.fontSize = Math.max(1, next.fontSize * scalar);
+      else if (next.kind === "shape") next.strokeWidth = Math.max(0, next.strokeWidth * scalar);
+      else if (next.kind === "paint") next.strokes = next.strokes.map((stroke) => ({ ...stroke, size: Math.max(.25, stroke.size * scalar), points: stroke.points.map((point) => ({ x: point.x * sx, y: point.y * sy })) }));
+      return next;
+    });
+    commit({ ...project, format: "custom", width, height, resampleMode: imageSizeDraft.resampleMode, layers });
+    setCanvasSizeDraft({ width, height }); setImageSizeOpen(false); setStatus(`Image resized to ${width}×${height} using ${imageSizeDraft.resampleMode.replace(/-/g, " ")}.`);
+  };
+
+  const placeSelectedImage = (mode: "fit" | "fill" | "stretch") => {
+    if (!selected || selected.kind !== "image") return;
+    if (mode === "stretch") { patchLayer(selected.id, { x: 0, y: 0, width: project.width, height: project.height } as Partial<ArtLayer>); return; }
+    const aspect = Math.max(.0001, selected.width / Math.max(1, selected.height));
+    const scale = mode === "fill" ? Math.max(project.width / Math.max(1, selected.width), project.height / Math.max(1, selected.height)) : Math.min(project.width / Math.max(1, selected.width), project.height / Math.max(1, selected.height));
+    const width = selected.width * scale, height = width / aspect;
+    patchLayer(selected.id, { width, height, x: (project.width - width) / 2, y: (project.height - height) / 2 } as Partial<ArtLayer>);
+  };
+
   const removeSelected = () => {
     if (!selected || selected.locked) return;
     commit({ ...project, layers: project.layers.filter((l) => l.id !== selected.id) }); setSelectedLayerId(null);
@@ -523,7 +593,7 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [project, selected, canUndo, canRedo]);
 
-  const useBand = async (explicitId?: string) => {
+  const applyBandIdentity = async (explicitId?: string) => {
     const band = explicitId ? await getBandProfile(explicitId).catch(() => null) : await getActiveBandProfile().catch(() => null);
     if (!band) { setStatus("No saved band is selected yet. Create one in Band Creation first."); return; }
     setActiveBandId(band.id);
@@ -538,22 +608,63 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
   };
 
   useEffect(() => {
-    const onUseBand = (event: Event) => void useBand(String((event as CustomEvent<any>).detail?.id || "") || undefined);
+    const onUseBand = (event: Event) => void applyBandIdentity(String((event as CustomEvent<{ id?: string }>).detail?.id || "") || undefined);
     window.addEventListener("ysong:artwork-use-band", onUseBand as EventListener);
     return () => window.removeEventListener("ysong:artwork-use-band", onUseBand as EventListener);
+    // Project changes intentionally refresh the event closure so imported identity lands in the current document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
   const refine = async () => {
-    setBusy(true); setStatus("");
+    if (aiBusy) return;
+    const source = projectRef.current;
+    setAiBusy("refine"); setStatus("");
     try {
       const reply = await localAiChat([
         { role: "system", content: "You are YSong Artwork Studio. Turn the user's album/single art direction into one concise production-ready image prompt. Preserve requested subjects, composition, mood, palette, typography constraints, and aspect ratio. Do not claim an image was generated." },
-        { role: "user", content: `Title: ${project.title}\nArtist: ${project.artist}\nCanvas: ${project.width}x${project.height}\nDirection: ${project.direction}\nCurrent prompt: ${project.prompt}\nExisting editor layers: ${project.layers.map((l) => `${l.name} (${l.kind})`).join(", ") || "none"}. The chat bridge does not visually inspect raster layers, so do not claim that it did.` },
+        { role: "user", content: `Title: ${source.title}\nArtist: ${source.artist}\nCanvas: ${source.width}x${source.height}\nDirection: ${source.direction}\nCurrent prompt: ${source.prompt}\nExisting editor layers: ${source.layers.map((l) => `${l.name} (${l.kind})`).join(", ") || "none"}. The chat bridge does not visually inspect raster layers, so do not claim that it did.` },
       ]);
-      commit({ ...project, prompt: reply }); setRightTab("ai");
+      const current = projectRef.current;
+      commit({ ...current, prompt: reply }); setRightTab("ai");
     } catch (e) { setStatus(`YSong AI could not refine the concept. ${e instanceof Error ? e.message : ""}`.trim()); }
-    finally { setBusy(false); }
+    finally { setAiBusy(null); }
   };
+
+  const generateArtwork = async () => {
+    if (generationInFlightRef.current || aiBusy) { setStatus("Artwork generation is already running. Your current art is safe."); return; }
+    const source = projectRef.current;
+    const prompt = (source.prompt.trim() || source.direction.trim());
+    if (!prompt) { setStatus("Add an art direction or generation prompt first."); return; }
+    generationInFlightRef.current = true;
+    setAiBusy("generate"); setStatus("Generating artwork… Keep editing if you want; existing layers will not be replaced.");
+    try {
+      const composed = [
+        source.title ? `Release title: ${source.title}.` : "",
+        source.artist ? `Artist/band: ${source.artist}.` : "",
+        prompt,
+        source.direction.trim() && source.prompt.trim() ? `Art direction: ${source.direction.trim()}` : "",
+      ].filter(Boolean).join("\n");
+      const blob = await generateArtworkImage(composed, source.width, source.height);
+      const current = projectRef.current;
+      const size = await imageSize(blob).catch(() => ({ width: current.width, height: current.height }));
+      const layer = fitImageLayer(current, blob, "AI Generated Artwork", size);
+      const next = { ...current, layers: [...current.layers, layer] };
+      projectRef.current = next;
+      commit(next);
+      setSelectedLayerId(layer.id); setRightTab("layers"); setTool("select");
+      setStatus("Generated artwork added as a NEW layer. Your previous artwork is still underneath it; Undo removes only this generated layer.");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Image generation failed.";
+      setStatus(message === "artwork_generation_not_configured" ? "Artwork generation is not configured. YSong can reuse the existing server-side OPENAI_API_KEY; restart the Auth API after configuring it." : `Artwork generation failed. ${message}`);
+    } finally {
+      generationInFlightRef.current = false;
+      setAiBusy(null);
+    }
+  };
+
+  const createNewProject=()=>{const width=Math.round(clamp(newProjectDraft.width,64,8192)),height=Math.round(clamp(newProjectDraft.height,64,8192));const next:ArtworkProject={...DEFAULT_PROJECT,projectId:crypto.randomUUID(),title:newProjectDraft.title.trim()==="Untitled Artwork"?"":newProjectDraft.title.trim(),artist:newProjectDraft.artist.trim(),format:newProjectDraft.format,width,height,background:newProjectDraft.background,layers:[],updatedAt:Date.now()};setProject(next);projectRef.current=next;setSelectedLayerId(null);setCanvasSizeDraft({width,height});setImageSizeDraft({width,height,linked:true,resampleMode:"automatic"});resetHistory(next);window.localStorage.setItem(ACTIVE_PROJECT_ID_KEY,next.projectId);setNewProjectOpen(false);setMenuOpen(null);setStatus(`Created ${width}×${height} artwork project.`);};
+  const openRecentProject=async(projectId:string)=>{if(projectId===project.projectId){setMenuOpen(null);return;}await saveArtworkProject(project).catch(()=>{});const next=await loadArtworkProjectById(projectId).catch(()=>null);if(!next){setStatus("Could not open that local artwork project.");return;}setProject(next);projectRef.current=next;setSelectedLayerId(null);setCanvasSizeDraft({width:next.width,height:next.height});setImageSizeDraft({width:next.width,height:next.height,linked:true,resampleMode:next.resampleMode||"automatic"});resetHistory(next);window.localStorage.setItem(ACTIVE_PROJECT_ID_KEY,next.projectId);setMenuOpen(null);setStatus(`Opened ${next.title||"Untitled Artwork"}.`);};
+  const saveAsProject=async()=>{const title=window.prompt("Save artwork project as",project.title||"Untitled Artwork")?.trim();if(!title)return;const next={...cloneProject(project),projectId:crypto.randomUUID(),title,updatedAt:Date.now()};setProject(next);projectRef.current=next;resetHistory(next);await saveArtworkProject(next).catch(()=>{});void listArtworkProjects().then(setRecentProjects).catch(()=>{});setMenuOpen(null);setStatus(`Saved a new local project copy: ${title}.`);};
 
   const exportArtwork = async () => {
     setStatus("Rendering…");
@@ -571,17 +682,23 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
   if (!loaded) return <div className="h-full bg-neutral-950 text-neutral-400 grid place-items-center">Opening Artwork Studio…</div>;
 
   return <div className="h-full min-h-0 bg-[#0d0f11] text-white flex flex-col overflow-hidden">
-    <div className="h-12 shrink-0 border-b border-white/10 px-3 flex items-center gap-2 overflow-x-auto">
-      <div className="font-semibold whitespace-nowrap mr-2">Artwork Studio</div>
-      <button className="topbtn" onClick={undo} disabled={!canUndo}>Undo</button><button className="topbtn" onClick={redo} disabled={!canRedo}>Redo</button>
-      <span className="divider" />
-      <label className="topbtn cursor-pointer">Import Image<input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void addImage(f, f.name); e.currentTarget.value = ""; }} /></label>
-      <button className="topbtn" onClick={() => addText(project.title || "TITLE", Math.max(52, project.width * 0.07))}>Add Title</button>
-      <button className="topbtn" onClick={() => addText(project.artist || "ARTIST", Math.max(28, project.width * 0.035))}>Add Artist</button>
-      <button className="topbtn" onClick={() => void useBand()}>Use Band</button>
-      <span className="divider" />
-      <label className="text-[11px] text-neutral-400 flex items-center gap-1">Zoom <input type="range" min="15" max="200" value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-24" /><span className="w-10">{zoom}%</span></label>
-      <div className="ml-auto flex items-center gap-2"><select value={exportType} onChange={(e) => setExportType(e.target.value as any)} className="topselect"><option value="png">PNG</option><option value="jpeg">JPG</option><option value="webp">WEBP</option></select><button className="rounded-lg px-3 py-1.5 text-xs bg-cyan-500/20 border border-cyan-400/30" onClick={() => void exportArtwork()}>Export</button></div>
+    <input ref={importInputRef} type="file" accept="image/*" className="hidden" onChange={(e)=>{const f=e.target.files?.[0];if(f)void addImage(f,f.name);e.currentTarget.value=""}}/>
+    <div className="h-8 shrink-0 border-b border-white/10 bg-[#101214] px-2 flex items-center text-[11px]">
+      <div className="mr-3 px-2 font-semibold">Artwork Studio</div>
+      {(["file","edit","image","layer","project","view"] as const).map(menu=><div key={menu} className="relative"><button onClick={()=>setMenuOpen(v=>v===menu?null:menu)} className={`px-2 py-1 rounded capitalize ${menuOpen===menu?"bg-white/10":"hover:bg-white/6"}`}>{menu}</button>{menuOpen===menu?<div className="absolute left-0 top-full z-[90] mt-1 min-w-52 rounded-lg border border-white/10 bg-[#15181b] p-1 shadow-2xl" onMouseLeave={()=>{}}>
+        {menu==="file"?<><MenuItem label="New Project…" shortcut="Ctrl+N" onClick={()=>{setNewProjectDraft({title:"Untitled Artwork",artist:"",width:3000,height:3000,background:"#111111",format:"square"});setNewProjectOpen(true);setMenuOpen(null)}}/><MenuItem label="Save As…" onClick={()=>void saveAsProject()}/><MenuItem label="Import Image…" onClick={()=>{setMenuOpen(null);importInputRef.current?.click()}}/><div className="my-1 border-t border-white/10"/><div className="px-2 py-1 text-[9px] uppercase tracking-wider text-neutral-600">Open Recent</div>{recentProjects.slice(0,7).map(item=><MenuItem key={item.projectId} label={`${item.projectId===project.projectId?"✓ ":""}${item.title}`} meta={`${item.width}×${item.height}`} onClick={()=>void openRecentProject(item.projectId)}/>)}{!recentProjects.length?<div className="px-2 py-1.5 text-[10px] text-neutral-600">No saved projects yet</div>:null}<div className="my-1 border-t border-white/10"/><MenuItem label="Export Artwork…" onClick={()=>{setMenuOpen(null);void exportArtwork()}}/></>:null}
+        {menu==="edit"?<><MenuItem label="Undo" shortcut="Ctrl+Z" disabled={!canUndo} onClick={()=>{undo();setMenuOpen(null)}}/><MenuItem label="Redo" shortcut="Ctrl+Y" disabled={!canRedo} onClick={()=>{redo();setMenuOpen(null)}}/></>:null}
+        {menu==="image"?<><MenuItem label="Image Size…" onClick={()=>{openImageSize();setMenuOpen(null)}}/><MenuItem label="Canvas Size" meta="Properties panel" onClick={()=>{setRightTab("properties");setMenuOpen(null)}}/>{selected?.kind==="image"?<><div className="my-1 border-t border-white/10"/><MenuItem label="Fit Layer to Canvas" onClick={()=>{placeSelectedImage("fit");setMenuOpen(null)}}/><MenuItem label="Fill Canvas / Crop" onClick={()=>{placeSelectedImage("fill");setMenuOpen(null)}}/><MenuItem label="Stretch to Canvas" onClick={()=>{placeSelectedImage("stretch");setMenuOpen(null)}}/></>:null}</>:null}
+        {menu==="layer"?<><MenuItem label="Add Title Text" onClick={()=>{addText(project.title||"TITLE",Math.max(52,project.width*.07));setMenuOpen(null)}}/><MenuItem label="Add Artist Text" onClick={()=>{addText(project.artist||"ARTIST",Math.max(28,project.width*.035));setMenuOpen(null)}}/><div className="my-1 border-t border-white/10"/><MenuItem label="Duplicate Layer" disabled={!selected} onClick={()=>{duplicateSelected();setMenuOpen(null)}}/><MenuItem label="Delete Layer" disabled={!selected} onClick={()=>{removeSelected();setMenuOpen(null)}}/></>:null}
+        {menu==="project"?<><MenuItem label="Use Saved Artist / Band Profile" onClick={()=>{void applyBandIdentity();setMenuOpen(null)}}/><div className="px-2 py-1.5 text-[9px] leading-relaxed text-neutral-600">Artist identity is project metadata, not a global YSong default.</div></>:null}
+        {menu==="view"?<><MenuItem label="25%" onClick={()=>{setZoom(25);setMenuOpen(null)}}/><MenuItem label="50%" onClick={()=>{setZoom(50);setMenuOpen(null)}}/><MenuItem label="100%" shortcut="Ctrl+1" onClick={()=>{setZoom(100);setMenuOpen(null)}}/><MenuItem label="150%" onClick={()=>{setZoom(150);setMenuOpen(null)}}/></>:null}
+      </div>:null}</div>)}
+      <div className="ml-auto truncate px-2 text-[10px] text-neutral-500">{project.title||"Untitled Artwork"}{project.artist?` · ${project.artist}`:""} · {project.width}×{project.height}</div>
+    </div>
+    <div className="h-10 shrink-0 border-b border-white/10 bg-[#0d0f11] px-3 flex items-center gap-2 overflow-x-auto">
+      <div className="text-[10px] uppercase tracking-wider text-neutral-600">{tool}</div><span className="divider"/>
+      {tool==="select"&&selected?<><span className="text-[10px] text-neutral-400 truncate max-w-48">{selected.name}</span>{selected.kind==="image"?<><button className="topbtn" onClick={()=>placeSelectedImage("fit")}>Fit</button><button className="topbtn" onClick={()=>placeSelectedImage("fill")}>Fill</button><button className="topbtn" onClick={()=>placeSelectedImage("stretch")}>Stretch</button></>:null}</>:<span className="text-[10px] text-neutral-600">Choose a tool or select a layer</span>}
+      <div className="ml-auto flex items-center gap-2"><label className="text-[11px] text-neutral-400 flex items-center gap-1">Zoom <input type="range" min="15" max="200" value={zoom} onChange={(e)=>setZoom(Number(e.target.value))} className="w-24"/><span className="w-10">{zoom}%</span></label><select value={exportType} onChange={(e)=>setExportType(e.target.value as "png"|"jpeg"|"webp")} className="topselect"><option value="png">PNG</option><option value="jpeg">JPG</option><option value="webp">WEBP</option></select><button className="rounded-lg px-3 py-1.5 text-xs bg-cyan-500/20 border border-cyan-400/30" onClick={()=>void exportArtwork()}>Export</button></div>
     </div>
 
     <div className="flex-1 min-h-0 grid grid-cols-[58px_minmax(0,1fr)_330px]">
@@ -618,14 +735,18 @@ export default function ArtworkStudioPane(_props: TabRendererProps) {
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
           {rightTab === "layers" && <LayersPanel project={project} selectedLayerId={selectedLayerId} setSelectedLayerId={setSelectedLayerId} patchLayer={patchLayer} moveLayer={moveLayer} reorderLayers={reorderLayers} duplicateSelected={duplicateSelected} removeSelected={removeSelected} />}
           {rightTab === "properties" && <PropertiesPanel project={project} selected={selected} patchProject={patchProject} patchLayer={patchLayer} format={project.format} setFormat={setFormat} canvasSizeDraft={canvasSizeDraft} setCanvasSizeDraft={setCanvasSizeDraft} resizeCanvas={resizeCanvas} />}
-          {rightTab === "ai" && <AiPanel project={project} patchProject={patchProject} busy={busy} refine={refine} />}
+          {rightTab === "ai" && <AiPanel project={project} patchProject={patchProject} busy={aiBusy} refine={refine} generate={generateArtwork} />}
         </div>
         <div className="shrink-0 border-t border-white/10 p-2 text-[10px] text-neutral-500 min-h-8">{status || "Drag images onto the canvas to add them as layers. Ctrl+C/V copies layers. Delete removes the selected layer."}</div>
       </aside>
     </div>
+    {newProjectOpen && <div className="absolute inset-0 z-[95] grid place-items-center bg-black/65 p-4" onMouseDown={e=>{if(e.target===e.currentTarget)setNewProjectOpen(false)}}><div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#151719] p-5 shadow-2xl"><div className="flex items-center justify-between"><div><div className="text-lg font-semibold">New Artwork Project</div><div className="mt-1 text-[10px] text-neutral-500">Creates a separate local project. Your current artwork remains in Open Recent.</div></div><button className="topbtn" onClick={()=>setNewProjectOpen(false)}>×</button></div><label className="lbl mt-4">Project Name<input className="prop" value={newProjectDraft.title} onChange={e=>setNewProjectDraft(d=>({...d,title:e.target.value}))}/></label><label className="lbl mt-3">Artist / Client<input className="prop" value={newProjectDraft.artist} onChange={e=>setNewProjectDraft(d=>({...d,artist:e.target.value}))} placeholder="Optional"/></label><div className="mt-4 grid grid-cols-3 gap-2">{[["square",3000,3000],["landscape",3840,2160],["portrait",2160,3840]].map(([format,w,h])=><button key={String(format)} onClick={()=>setNewProjectDraft(d=>({...d,format:format as ArtFormat,width:Number(w),height:Number(h)}))} className={`rounded-lg border p-2 text-left ${newProjectDraft.format===format?"border-cyan-400/40 bg-cyan-500/10":"border-white/10 bg-white/[.02]"}`}><div className="text-xs font-semibold capitalize">{String(format)}</div><div className="mt-1 text-[9px] text-neutral-500">{w}×{h}</div></button>)}</div><div className="mt-4 grid grid-cols-2 gap-2"><label className="lbl">Width<input className="prop" type="number" min="64" max="8192" value={newProjectDraft.width} onChange={e=>setNewProjectDraft(d=>({...d,format:"custom",width:Number(e.target.value)||64}))}/></label><label className="lbl">Height<input className="prop" type="number" min="64" max="8192" value={newProjectDraft.height} onChange={e=>setNewProjectDraft(d=>({...d,format:"custom",height:Number(e.target.value)||64}))}/></label></div><label className="lbl mt-3">Background<input type="color" className="ml-2 h-8 w-12 align-middle bg-transparent" value={newProjectDraft.background} onChange={e=>setNewProjectDraft(d=>({...d,background:e.target.value}))}/></label><div className="mt-5 flex justify-end gap-2"><button className="topbtn" onClick={()=>setNewProjectOpen(false)}>Cancel</button><button className="rounded-lg border border-cyan-400/30 bg-cyan-500/20 px-4 py-2 text-xs" onClick={createNewProject}>Create Project</button></div></div></div>}
+    {imageSizeOpen && <div className="absolute inset-0 z-[80] grid place-items-center bg-black/60 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setImageSizeOpen(false); }}><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#151719] p-5 shadow-2xl"><div className="flex items-center justify-between"><div><div className="text-lg font-semibold">Image Size</div><div className="mt-1 text-[10px] text-neutral-500">Resize the whole artwork and scale every layer with it.</div></div><button className="topbtn" onClick={() => setImageSizeOpen(false)}>×</button></div><div className="mt-5 grid grid-cols-[1fr_44px_1fr] items-end gap-2"><label className="lbl">Width<input className="prop" type="number" min="64" max="8192" value={imageSizeDraft.width} onChange={(e) => { const width=Math.round(clamp(Number(e.target.value)||64,64,8192)); setImageSizeDraft((d)=>({ ...d,width,height:d.linked?Math.max(64,Math.round(width*project.height/Math.max(1,project.width))):d.height })); }} /></label><button className={`mb-1 h-9 rounded-lg border text-sm ${imageSizeDraft.linked?"border-cyan-400/40 bg-cyan-500/10 text-cyan-300":"border-white/10 text-neutral-500"}`} onClick={() => setImageSizeDraft((d)=>({...d,linked:!d.linked}))} title="Constrain proportions">🔗</button><label className="lbl">Height<input className="prop" type="number" min="64" max="8192" value={imageSizeDraft.height} onChange={(e) => { const height=Math.round(clamp(Number(e.target.value)||64,64,8192)); setImageSizeDraft((d)=>({ ...d,height,width:d.linked?Math.max(64,Math.round(height*project.width/Math.max(1,project.height))):d.width })); }} /></label></div><label className="lbl mt-4">Resample<select className="prop" value={imageSizeDraft.resampleMode} onChange={(e)=>setImageSizeDraft((d)=>({...d,resampleMode:e.target.value as ResampleMode}))}><option value="automatic">Automatic</option><option value="preserve-details">Preserve Details</option><option value="bicubic-smoother">Bicubic Smoother (enlargement)</option><option value="bicubic-sharper">Bicubic Sharper (reduction)</option><option value="bicubic">Bicubic</option><option value="bilinear">Bilinear</option><option value="nearest">Nearest Neighbor</option></select></label><div className="mt-2 text-[10px] leading-relaxed text-neutral-500">High-quality modes use the browser's best available image interpolation while YSong keeps the original source blob intact, so Undo and later resizing remain non-destructive.</div><div className="mt-5 flex justify-end gap-2"><button className="topbtn" onClick={() => setImageSizeOpen(false)}>Cancel</button><button className="rounded-lg border border-cyan-400/30 bg-cyan-500/20 px-4 py-2 text-xs" onClick={applyImageSize}>Resize</button></div></div></div>}
     <style>{`.topbtn{border:1px solid rgba(255,255,255,.1);border-radius:.5rem;padding:.35rem .55rem;font-size:11px;white-space:nowrap}.topbtn:hover{background:rgba(255,255,255,.06)}.topbtn:disabled{opacity:.3}.topselect{background:#111418;border:1px solid rgba(255,255,255,.1);border-radius:.5rem;padding:.35rem .45rem;font-size:11px}.divider{height:22px;width:1px;background:rgba(255,255,255,.1);margin:0 4px}.prop{width:100%;background:#090b0d;border:1px solid rgba(255,255,255,.1);border-radius:.5rem;padding:.4rem .5rem;outline:none;font-size:12px}.prop:focus{border-color:rgba(103,232,249,.45)}`}</style>
   </div>;
 }
+
+function MenuItem({label,shortcut,meta,disabled=false,onClick}:{label:string;shortcut?:string;meta?:string;disabled?:boolean;onClick:()=>void}){return <button disabled={disabled} onClick={onClick} className="flex w-full items-center gap-3 rounded px-2 py-1.5 text-left text-[11px] hover:bg-white/[.07] disabled:opacity-30"><span className="min-w-0 flex-1 truncate">{label}</span>{meta?<span className="text-[9px] text-neutral-600">{meta}</span>:null}{shortcut?<span className="text-[9px] text-neutral-600">{shortcut}</span>:null}</button>}
 
 function ToolGlyph({ tool }: { tool: Tool }) {
   const common = { width: 19, height: 19, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
@@ -730,6 +851,7 @@ function PropertiesPanel({ project, selected, patchProject, patchLayer, format, 
 
 function Adj({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) { return <label className="lbl">{label}<input className="prop" type="number" min="0" max="300" value={Math.round(value)} onChange={(e) => onChange(clamp(Number(e.target.value || value), 0, 300))} /></label>; }
 
-function AiPanel({ project, patchProject, busy, refine }: { project: ArtworkProject; patchProject: (p: Partial<ArtworkProject>) => void; busy: boolean; refine: () => void }) {
-  return <div className="space-y-3"><div><div className="text-xs font-semibold">Release brief + AI</div><div className="text-[10px] text-neutral-500 mt-1">AI assists the editor. It is not the editor.</div></div><label className="lbl">Release title<input className="prop" value={project.title} onChange={(e) => patchProject({ title: e.target.value })} /></label><label className="lbl">Artist / band<input className="prop" value={project.artist} onChange={(e) => patchProject({ artist: e.target.value })} /></label><label className="lbl">Art direction<textarea className="prop min-h-28" value={project.direction} onChange={(e) => patchProject({ direction: e.target.value })} placeholder="Scene, symbolism, palette, mood, typography…" /></label><label className="lbl">Generation prompt<textarea className="prop min-h-36" value={project.prompt} onChange={(e) => patchProject({ prompt: e.target.value })} /></label><button className="rounded-xl px-3 py-2 text-xs bg-cyan-500/20 border border-cyan-400/30 disabled:opacity-30" disabled={busy || (!project.direction.trim() && !project.prompt.trim())} onClick={refine}>{busy ? "Refining…" : "Refine with YSong AI"}</button><button disabled title="Image generation provider is not connected yet" className="rounded-xl px-3 py-2 text-xs border border-white/10 opacity-35 ml-2">Generate Artwork</button></div>;
+function AiPanel({ project, patchProject, busy, refine, generate }: { project: ArtworkProject; patchProject: (p: Partial<ArtworkProject>) => void; busy: "refine" | "generate" | null; refine: () => void; generate: () => void }) {
+  const hasBrief = !!(project.direction.trim() || project.prompt.trim());
+  return <div className="space-y-3"><div><div className="text-xs font-semibold">Release brief + AI</div><div className="text-[10px] text-neutral-500 mt-1">Refine a prompt, generate an image, then keep editing it with the normal layer tools.</div></div>{busy === "generate" ? <div className="rounded-xl border border-fuchsia-400/30 bg-fuchsia-500/10 p-3 text-[10px] text-fuchsia-100"><div className="flex items-center gap-2 font-semibold"><span className="h-2 w-2 animate-pulse rounded-full bg-fuchsia-300"/>Generating artwork…</div><div className="mt-1 text-fuchsia-100/60">Only one generation can run at a time. Existing layers are preserved.</div></div> : null}<label className="lbl">Release title<input className="prop" value={project.title} onChange={(e) => patchProject({ title: e.target.value })} /></label><label className="lbl">Artist / band<input className="prop" value={project.artist} onChange={(e) => patchProject({ artist: e.target.value })} /></label><label className="lbl">Art direction<textarea className="prop min-h-28" value={project.direction} onChange={(e) => patchProject({ direction: e.target.value })} placeholder="Scene, symbolism, palette, mood, typography…" /></label><label className="lbl">Generation prompt<textarea className="prop min-h-36" value={project.prompt} onChange={(e) => patchProject({ prompt: e.target.value })} /></label><div className="flex flex-wrap gap-2"><button className="rounded-xl px-3 py-2 text-xs bg-cyan-500/20 border border-cyan-400/30 disabled:opacity-30" disabled={!!busy || !hasBrief} onClick={refine}>{busy === "refine" ? "Refining…" : "Refine with YSong AI"}</button><button disabled={!!busy || !hasBrief} onClick={generate} className="rounded-xl px-3 py-2 text-xs border border-fuchsia-400/30 bg-fuchsia-500/15 hover:bg-fuchsia-500/25 disabled:cursor-not-allowed disabled:opacity-30">{busy === "generate" ? "Generating…" : "Generate Artwork"}</button></div><div className="text-[9px] leading-relaxed text-neutral-600">Artwork generation runs server-side and reuses YSong's configured OpenAI key by default. Generated art is added as a new editable layer instead of replacing the current project.</div></div>;
 }

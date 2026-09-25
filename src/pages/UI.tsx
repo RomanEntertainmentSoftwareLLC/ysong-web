@@ -494,18 +494,26 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 	}, []);
 
 	function SeedWorkspaceHistory({ ready }: { ready: boolean }) {
-		const { tabs, activeId, activateTab } = useTabManager();
+		const { tabs, activeId, activateTab, openTab } = useTabManager();
 		const seeded = useRef(false);
 		useEffect(() => {
 			if (!ready || seeded.current) return;
 			seeded.current = true;
-			if (activeId && tabs.some((tab) => tab.id === activeId)) activateTab(activeId, "replace");
-			else if (window.location.pathname.startsWith("/app")) {
-				const url = new URL(window.location.href);
-				url.searchParams.delete("view"); url.searchParams.delete("chat");
-				window.history.replaceState({ ysongWorkspace: true, tabId: null, tabType: "home" }, "", `${url.pathname}${url.search}`);
+			if (!window.location.pathname.startsWith("/app")) return;
+			const url = new URL(window.location.href);
+			const requested = url.searchParams.get("view") as TabType | null;
+			const valid: TabType[] = ["chat","profile","settings","daw","mixer","visuals","createSong","band","singers","analytics","flashback","tools","artwork","library","achievements","rooms","market","world","radio","bridge","upload"];
+			if (requested && valid.includes(requested)) {
+				const chatId = requested === "chat" ? (url.searchParams.get("chat") || "") : "";
+				const existing = tabs.find(tab => tab.type === requested && (requested !== "chat" || String(tab.payload?.chatId || "") === chatId));
+				if (existing) { activateTab(existing.id, "replace"); return; }
+				const titles: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"Visuals", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
+				openTab({ type:requested, title:titles[requested], ...(requested === "chat" && chatId ? {payload:{chatId}} : {}) }, "replace");
+				return;
 			}
-		}, [ready, tabs, activeId, activateTab]);
+			if (activeId && tabs.some(tab => tab.id === activeId)) activateTab(activeId, "replace");
+			else window.history.replaceState({ ysongWorkspace:true, tabId:null, tabType:"home" }, "", `${url.pathname}${url.search}`);
+		}, [ready, tabs, activeId, activateTab, openTab]);
 		return null;
 	}
 

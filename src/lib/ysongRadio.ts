@@ -121,6 +121,30 @@ export function ysongRadioStationsForCatalog(tracks: WorldTrack[], maxGenreStati
 	return [...YSONG_RADIO_STATIONS, ...catalogGenreRadioStations(tracks, maxGenreStations)];
 }
 
+export function radioStationArtworkUrl(station: YSongRadioStation) {
+	const palettes: Record<string,[string,string,string]> = {
+		"world-mix":["#6d28d9","#0f172a","#22d3ee"],
+		"fresh-releases":["#0891b2","#082f49","#67e8f9"],
+		"trending":["#ea580c","#431407","#fbbf24"],
+		"deep-discovery":["#1d4ed8","#0f172a","#a78bfa"],
+	};
+	let hash=0; for(const ch of station.id) hash=(hash*31+ch.charCodeAt(0))>>>0;
+	const hue=hash%360;
+	const [a,b,c]=palettes[station.id] || [`hsl(${hue} 72% 44%)`,`hsl(${(hue+42)%360} 58% 13%)`,`hsl(${(hue+118)%360} 82% 68%)`];
+	const safe=(station.name||"YSong Radio").replace(/[<&>]/g,"");
+	const motif=station.id==="world-mix"
+		? '<circle cx="400" cy="350" r="170" fill="none" stroke="white" stroke-width="11" opacity=".32"/><path d="M230 350h340M400 180c-72 76-72 264 0 340M400 180c72 76 72 264 0 340" fill="none" stroke="white" stroke-width="9" opacity=".32"/>'
+		: station.id==="fresh-releases"
+		? '<path d="M400 175l30 112 110-44-65 98 103 52-121 6 20 117-77-91-77 91 20-117-121-6 103-52-65-98 110 44z" fill="white" opacity=".18"/><path d="M260 430h280" stroke="white" stroke-width="24" stroke-linecap="round" opacity=".8"/>'
+		: station.id==="trending"
+		? '<path d="M205 520l115-135 85 70 165-210" fill="none" stroke="white" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity=".88"/><path d="M510 245h60v60" fill="none" stroke="white" stroke-width="28" opacity=".88"/>'
+		: station.id==="deep-discovery"
+		? '<circle cx="400" cy="360" r="62" fill="none" stroke="white" stroke-width="16" opacity=".85"/><circle cx="400" cy="360" r="138" fill="none" stroke="white" stroke-width="9" opacity=".34"/><circle cx="400" cy="360" r="215" fill="none" stroke="white" stroke-width="6" opacity=".18"/><path d="M400 145v430M185 360h430" stroke="white" stroke-width="5" opacity=".16"/>'
+		: '<path d="M175 390h40l30-105 48 210 55-280 55 260 55-180 48 125 45-80 74 50" fill="none" stroke="white" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity=".86"/>';
+	const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset=".65" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient><radialGradient id="r"><stop stop-color="white" stop-opacity=".14"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient></defs><rect width="800" height="800" fill="url(#g)"/><circle cx="625" cy="150" r="270" fill="url(#r)"/>${motif}<text x="55" y="78" fill="white" font-family="Arial,sans-serif" font-size="28" font-weight="700" letter-spacing="8" opacity=".9">YSONG RADIO</text><text x="55" y="690" fill="white" font-family="Arial,sans-serif" font-size="48" font-weight="800">${safe}</text><text x="55" y="735" fill="white" font-family="Arial,sans-serif" font-size="19" font-weight="600" letter-spacing="5" opacity=".58">STATION · LIVE CATALOG</text></svg>`;
+	return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 export function radioProgramId(stationId: string) {
 	return `ysong-radio-${stationId.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}`;
 }

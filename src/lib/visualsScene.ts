@@ -14,10 +14,12 @@ export type VisualAudioBinding = {
 	invert: boolean;
 	curve: VisualAudioCurve;
 };
-export type VisualLayerType = "media" | "particles" | "spectrum" | "object" | "primitive" | "shape2d" | "secondary" | "nowPlaying" | "stage" | "sky" | "clouds" | "weather";
+export type VisualLayerType = "media" | "particles" | "spectrum" | "object" | "primitive" | "shape2d" | "secondary" | "nowPlaying" | "stage" | "lighting" | "fog" | "sky" | "clouds" | "weather";
 export type VisualMediaKind = "image" | "video" | "model";
 export type VisualObjectModel = "mannequin" | "crystal" | "glb" | "asset";
 export type VisualModelFormat = "glb" | "gltf" | "fbx" | "obj";
+export type VisualModelRole = "auto" | "environment" | "prop" | "performer";
+export type VisualModelAssetFile = { path: string; fileName: string; url: string; };
 export type VisualProjectMode = "2d" | "3d" | "hybrid";
 export type VisualAntialiasMode = "off" | "fxaa" | "smaa" | "msaa2" | "msaa4" | "msaa8";
 export type VisualQualityTier = "performance" | "high" | "ultra";
@@ -450,7 +452,7 @@ export type VisualLayer = {
 };
 
 export type VisualSceneState = {
-	version: 21;
+	version: 26;
 	project: {
 		id: string;
 		name: string;
@@ -551,6 +553,8 @@ export type VisualSceneState = {
 		modelUrl: string;
 		modelFileName: string;
 		modelFormat: VisualModelFormat;
+		role: VisualModelRole;
+		assetFiles: VisualModelAssetFile[];
 		materialId: string;
 		humanoidMap: Partial<Record<VisualHumanoidSlot, string>>;
 		morphTargets: Record<string, number>;
@@ -768,11 +772,29 @@ export type VisualSceneState = {
 		preset: VisualWeatherPreset;
 		intensity: number;
 		rain: number;
+		rainColor: string;
+		rainOpacity: number;
+		rainVelocity: number;
 		snow: number;
+		snowColor: string;
+		snowOpacity: number;
+		snowVelocity: number;
 		ash: number;
+		ashColor: string;
+		ashOpacity: number;
+		ashVelocity: number;
 		dust: number;
+		dustColor: string;
+		dustOpacity: number;
+		dustVelocity: number;
 		sand: number;
+		sandColor: string;
+		sandOpacity: number;
+		sandVelocity: number;
 		magic: number;
+		magicColor: string;
+		magicOpacity: number;
+		magicVelocity: number;
 		fog: number;
 		fogColor: string;
 		heatHaze: number;
@@ -913,7 +935,7 @@ export const HUMANOID_SLOTS: VisualHumanoidSlot[] = [
 ];
 
 export const DEFAULT_VISUAL_MATERIAL: VisualMaterialAsset = {
-	id: "material-default", name: "Default PBR", baseColor: "#b9c2ff", metalness: 0.15, roughness: 0.55,
+	id: "material-default", name: "Default PBR", baseColor: "#ffffff", metalness: 0.15, roughness: 0.55,
 	emissiveColor: "#000000", emissiveIntensity: 0, opacity: 1, transparent: false, doubleSided: false,
 	normalScale: 1, bumpScale: 0.2, displacementScale: 0, envMapIntensity: 1, clearcoat: 0, clearcoatRoughness: 0.1, transmission: 0, ior: 1.5,
 	baseColorMap: {url:"",fileName:""}, normalMap: {url:"",fileName:""}, bumpMap: {url:"",fileName:""}, roughnessMap: {url:"",fileName:""},
@@ -956,7 +978,7 @@ export function makeVisualSecondary(kind: VisualSecondaryKind, name?: string): V
 }
 
 export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
-	version: 21,
+	version: 26,
 	project: { id: "visual-project-default", name: "Untitled Visual", mode: "hybrid" },
 	renderer: {
 		editorQuality: "performance",
@@ -998,15 +1020,17 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		ambientOcclusionIntensity:1, ambientOcclusionRadius:4, lightShaftsIntensity:0, lightShaftsSource:"sun", lightShaftsDecay:.94, lightShaftsDensity:.88, lightShaftsWeight:.22,
 		chromaticAberration:0, lensDistortion:0, lensZoom:1, halation:0, filmGrain:0, vignette:0, vignetteSoftness:.45
 	},
-	audioModulation: { enabled: true, masterAmount: 1, testSignal: 0, bindings: [] },
+	audioModulation: { enabled: false, masterAmount: 1, testSignal: 0, bindings: [] },
 	director: { style:"cinematic", scope:"full", intensity:.8, preserveManual:true, replacePreviousDirectorPlan:true, seed:7, prompt:"", lastPlanId:"", lastPlanSummary:"", lastPlanSource:"", lastAppliedAt:0 },
 	layers: [
-		{ id: "stage", type: "stage", name: "Stage Lighting & Fog", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
+		{ id: "stage", type: "stage", name: "Stage", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
+		{ id: "lighting", type: "lighting", name: "Lighting", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
+		{ id: "fog", type: "fog", name: "Fog", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "sky", type: "sky", name: "Sky Environment", visible: false, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "clouds", type: "clouds", name: "Volumetric Clouds", visible: false, opacity: 0.78, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "weather", type: "weather", name: "Weather & Atmosphere", visible: false, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "particles", type: "particles", name: "3D Cosmic Dust", visible: false, opacity: 0.72, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
-		{ id: "object", type: "object", name: "3D Performer", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
+		{ id: "object", type: "object", name: "3D Object", visible: false, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "spectrum", type: "spectrum", name: "Spectrum", visible: true, opacity: 0.66, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 		{ id: "now-playing", type: "nowPlaying", name: "Now Playing", visible: true, opacity: 0.92, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
 	],
@@ -1015,6 +1039,8 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		modelUrl: "",
 		modelFileName: "",
 		modelFormat: "glb",
+		role: "auto",
+		assetFiles: [],
 		materialId: "",
 		humanoidMap: {},
 		morphTargets: {},
@@ -1032,15 +1058,15 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		idleAmount: 0.08,
 		testSignal: 0,
 		pulseSource: "bass",
-		pulseAmount: 0.22,
+		pulseAmount: 0,
 		glowSource: "energy",
-		glowAmount: 1.15,
+		glowAmount: 0,
 		emissiveColor: "#6d36ff",
 		bodySource: "bass",
-		bodyAmount: 1.0,
+		bodyAmount: 0,
 		armSource: "highs",
-		armAmount: 1.0,
-		springAmount: 0.22,
+		armAmount: 0,
+		springAmount: 0,
 		sensitivity: 1.65,
 		deadZone: 0.05,
 		attack: 0.42,
@@ -1109,7 +1135,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		size: 14,
 		intensity: 0.32,
 		source: "energy",
-		amount: 0.8,
+		amount: 0,
 	},
 	stage: {
 		floorVisible: false,
@@ -1121,7 +1147,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		fogNear: 7,
 		fogFar: 26,
 		fogSource: "energy",
-		fogAmount: 0.35,
+		fogAmount: 0,
 		ambientIntensity: 0.85,
 		ambientSkyColor: "#8d9dff",
 		ambientGroundColor: "#190d2a",
@@ -1131,7 +1157,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		sunY: 7.0,
 		sunZ: 4.0,
 		sunSource: "energy",
-		sunAmount: 0.55,
+		sunAmount: 0,
 		moonEnabled: false,
 		moonColor: "#b9ccff",
 		moonIntensity: 0.35,
@@ -1139,7 +1165,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		moonY: 6.0,
 		moonZ: -5.0,
 		moonSource: "highs",
-		moonAmount: 0.25,
+		moonAmount: 0,
 		keyColor: "#fff4e8",
 		keyIntensity: 2.4,
 		keyX: -4.0,
@@ -1149,21 +1175,21 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		keyPenumbra: 0.38,
 		keyDistance: 38,
 		keySource: "kick",
-		keyAmount: 1.9,
+		keyAmount: 0,
 		rimColor: "#9b54ff",
 		rimIntensity: 3.2,
 		rimX: 4.0,
 		rimY: 3.0,
 		rimZ: 2.0,
 		rimSource: "highs",
-		rimAmount: 1.6,
+		rimAmount: 0,
 		fillColor: "#2e75ff",
 		fillIntensity: 1.8,
 		fillX: -3.0,
 		fillY: -1.0,
 		fillZ: 2.0,
 		fillSource: "energy",
-		fillAmount: 1.1,
+		fillAmount: 0,
 		shadows: true,
 		sunShadows: true,
 		moonShadows: false,
@@ -1195,7 +1221,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		count: 1400,
 		size: 5,
 		source: "highs",
-		amount: 1.35,
+		amount: 0,
 		depth: 12,
 		spread: 8,
 		speed: 0.42,
@@ -1226,7 +1252,14 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		affectsClouds: true, affectsParticles: true, affectsWeather: true, affectsPhysics: true, physicsForce: 1.2,
 	},
 	weather: {
-		preset: "clear", intensity: 1, rain: 0, snow: 0, ash: 0, dust: 0, sand: 0, magic: 0, fog: 0, fogColor: "#aab6c8", heatHaze: 0, heatHazeSpeed: 0.8, lightning: 0, lightningRate: 8, lightningColor: "#dcecff", precipitationSize: 1, fallSpeed: 1, area: 24, height: 18,
+		preset: "clear", intensity: 1,
+		rain: 0, rainColor: "#b9d9f7", rainOpacity: .68, rainVelocity: 1,
+		snow: 0, snowColor: "#f4f7ff", snowOpacity: .9, snowVelocity: .72,
+		ash: 0, ashColor: "#77767b", ashOpacity: .72, ashVelocity: .16,
+		dust: 0, dustColor: "#b8a486", dustOpacity: .58, dustVelocity: .24,
+		sand: 0, sandColor: "#d29b56", sandOpacity: .72, sandVelocity: .32,
+		magic: 0, magicColor: "#9d72ff", magicOpacity: .85, magicVelocity: -.32,
+		fog: 0, fogColor: "#aab6c8", heatHaze: 0, heatHazeSpeed: 0.8, lightning: 0, lightningRate: 8, lightningColor: "#dcecff", precipitationSize: 1, fallSpeed: 1, area: 24, height: 18,
 	},
 	spectrum: {
 		mode: "bars",
@@ -1333,7 +1366,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 	const normalized: VisualSceneState = {
 		...structuredClone(DEFAULT_VISUAL_SCENE),
 		...raw,
-		version: 21,
+		version: 26,
 		project: { ...DEFAULT_VISUAL_SCENE.project, ...(raw.project ?? {}), id: typeof raw.project?.id === "string" && raw.project.id ? raw.project.id : DEFAULT_VISUAL_SCENE.project.id, name: typeof raw.project?.name === "string" && raw.project.name.trim() ? raw.project.name : DEFAULT_VISUAL_SCENE.project.name, mode: raw.project?.mode === "2d" || raw.project?.mode === "3d" ? raw.project.mode : "hybrid" },
 		renderer: {
 			...DEFAULT_VISUAL_SCENE.renderer,
@@ -1429,7 +1462,16 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 			lastPlanSource: raw.director?.lastPlanSource === "ai" || raw.director?.lastPlanSource === "fallback" ? raw.director.lastPlanSource : "",
 			lastAppliedAt: Math.max(0, numberOr(raw.director?.lastAppliedAt, 0)),
 		},
-		object: { ...DEFAULT_VISUAL_SCENE.object, ...(raw.object ?? {}), modelFormat: raw.object?.modelFormat === "fbx" || raw.object?.modelFormat === "obj" || raw.object?.modelFormat === "gltf" ? raw.object.modelFormat : "glb", materialId: typeof raw.object?.materialId === "string" ? raw.object.materialId : "", humanoidMap: raw.object?.humanoidMap && typeof raw.object.humanoidMap === "object" ? raw.object.humanoidMap : {}, morphTargets: raw.object?.morphTargets && typeof raw.object.morphTargets === "object" ? raw.object.morphTargets : {} },
+		object: {
+			...DEFAULT_VISUAL_SCENE.object,
+			...(raw.object ?? {}),
+			modelFormat: raw.object?.modelFormat === "fbx" || raw.object?.modelFormat === "obj" || raw.object?.modelFormat === "gltf" ? raw.object.modelFormat : "glb",
+			role: (["auto","environment","prop","performer"] as string[]).includes(String((raw.object as {role?:unknown}|undefined)?.role)) ? (raw.object as {role:VisualModelRole}).role : "auto",
+			assetFiles: Array.isArray((raw.object as {assetFiles?:unknown}|undefined)?.assetFiles) ? ((raw.object as {assetFiles:unknown[]}).assetFiles.filter((entry): entry is VisualModelAssetFile => !!entry && typeof entry === "object" && typeof (entry as VisualModelAssetFile).url === "string").map(entry=>({path:typeof entry.path === "string"?entry.path:entry.fileName||"",fileName:typeof entry.fileName === "string"?entry.fileName:(entry.path||"").split(/[\\/]/).pop()||"",url:entry.url}))) : [],
+			materialId: typeof raw.object?.materialId === "string" ? raw.object.materialId : "",
+			humanoidMap: raw.object?.humanoidMap && typeof raw.object.humanoidMap === "object" ? raw.object.humanoidMap : {},
+			morphTargets: raw.object?.morphTargets && typeof raw.object.morphTargets === "object" ? raw.object.morphTargets : {}
+		},
 		camera: {
 			...DEFAULT_VISUAL_SCENE.camera,
 			...((raw as Partial<VisualSceneState>).camera ?? {}),
@@ -1467,7 +1509,14 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 		particles: { ...DEFAULT_VISUAL_SCENE.particles, ...(raw.particles ?? {}) },
 		clouds: { ...DEFAULT_VISUAL_SCENE.clouds, ...(raw.clouds ?? {}), lightAbsorption:Math.max(0,Math.min(1,numberOr(raw.clouds?.lightAbsorption,DEFAULT_VISUAL_SCENE.clouds.lightAbsorption))) },
 		wind: { ...DEFAULT_VISUAL_SCENE.wind, ...(raw.wind ?? {}), directionX:numberOr(raw.wind?.directionX,DEFAULT_VISUAL_SCENE.wind.directionX), directionZ:numberOr(raw.wind?.directionZ,DEFAULT_VISUAL_SCENE.wind.directionZ), strength:Math.max(0,Math.min(20,numberOr(raw.wind?.strength,DEFAULT_VISUAL_SCENE.wind.strength))), gustiness:Math.max(0,Math.min(2,numberOr(raw.wind?.gustiness,DEFAULT_VISUAL_SCENE.wind.gustiness))), turbulence:Math.max(0,Math.min(4,numberOr(raw.wind?.turbulence,DEFAULT_VISUAL_SCENE.wind.turbulence))), physicsForce:Math.max(0,Math.min(100,numberOr(raw.wind?.physicsForce,DEFAULT_VISUAL_SCENE.wind.physicsForce))) },
-		weather: { ...DEFAULT_VISUAL_SCENE.weather, ...(raw.weather ?? {}), preset:(["clear","rain","snow","storm","ash","dust","sandstorm","magic"] as string[]).includes(String(raw.weather?.preset))?raw.weather!.preset as VisualWeatherPreset:"clear", intensity:Math.max(0,Math.min(3,numberOr(raw.weather?.intensity,1))), rain:Math.max(0,Math.min(1,numberOr(raw.weather?.rain,0))), snow:Math.max(0,Math.min(1,numberOr(raw.weather?.snow,0))), ash:Math.max(0,Math.min(1,numberOr(raw.weather?.ash,0))), dust:Math.max(0,Math.min(1,numberOr(raw.weather?.dust,0))), sand:Math.max(0,Math.min(1,numberOr(raw.weather?.sand,0))), magic:Math.max(0,Math.min(1,numberOr(raw.weather?.magic,0))), fog:Math.max(0,Math.min(1,numberOr(raw.weather?.fog,0))), heatHaze:Math.max(0,Math.min(1,numberOr(raw.weather?.heatHaze,0))), heatHazeSpeed:Math.max(0,Math.min(5,numberOr(raw.weather?.heatHazeSpeed,.8))), lightning:Math.max(0,Math.min(1,numberOr(raw.weather?.lightning,0))), lightningRate:Math.max(0,Math.min(120,numberOr(raw.weather?.lightningRate,8))), precipitationSize:Math.max(.1,Math.min(5,numberOr(raw.weather?.precipitationSize,1))), fallSpeed:Math.max(.05,Math.min(8,numberOr(raw.weather?.fallSpeed,1))), area:Math.max(2,Math.min(200,numberOr(raw.weather?.area,24))), height:Math.max(2,Math.min(200,numberOr(raw.weather?.height,18))) },
+		weather: { ...DEFAULT_VISUAL_SCENE.weather, ...(raw.weather ?? {}), preset:(["clear","rain","snow","storm","ash","dust","sandstorm","magic"] as string[]).includes(String(raw.weather?.preset))?raw.weather!.preset as VisualWeatherPreset:"clear", intensity:Math.max(0,Math.min(3,numberOr(raw.weather?.intensity,1))),
+			rain:Math.max(0,Math.min(1,numberOr(raw.weather?.rain,0))), rainColor:typeof raw.weather?.rainColor==="string"?raw.weather.rainColor:DEFAULT_VISUAL_SCENE.weather.rainColor, rainOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.rainOpacity,DEFAULT_VISUAL_SCENE.weather.rainOpacity))), rainVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.rainVelocity,DEFAULT_VISUAL_SCENE.weather.rainVelocity))),
+			snow:Math.max(0,Math.min(1,numberOr(raw.weather?.snow,0))), snowColor:typeof raw.weather?.snowColor==="string"?raw.weather.snowColor:DEFAULT_VISUAL_SCENE.weather.snowColor, snowOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.snowOpacity,DEFAULT_VISUAL_SCENE.weather.snowOpacity))), snowVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.snowVelocity,DEFAULT_VISUAL_SCENE.weather.snowVelocity))),
+			ash:Math.max(0,Math.min(1,numberOr(raw.weather?.ash,0))), ashColor:typeof raw.weather?.ashColor==="string"?raw.weather.ashColor:DEFAULT_VISUAL_SCENE.weather.ashColor, ashOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.ashOpacity,DEFAULT_VISUAL_SCENE.weather.ashOpacity))), ashVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.ashVelocity,DEFAULT_VISUAL_SCENE.weather.ashVelocity))),
+			dust:Math.max(0,Math.min(1,numberOr(raw.weather?.dust,0))), dustColor:typeof raw.weather?.dustColor==="string"?raw.weather.dustColor:DEFAULT_VISUAL_SCENE.weather.dustColor, dustOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.dustOpacity,DEFAULT_VISUAL_SCENE.weather.dustOpacity))), dustVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.dustVelocity,DEFAULT_VISUAL_SCENE.weather.dustVelocity))),
+			sand:Math.max(0,Math.min(1,numberOr(raw.weather?.sand,0))), sandColor:typeof raw.weather?.sandColor==="string"?raw.weather.sandColor:DEFAULT_VISUAL_SCENE.weather.sandColor, sandOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.sandOpacity,DEFAULT_VISUAL_SCENE.weather.sandOpacity))), sandVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.sandVelocity,DEFAULT_VISUAL_SCENE.weather.sandVelocity))),
+			magic:Math.max(0,Math.min(1,numberOr(raw.weather?.magic,0))), magicColor:typeof raw.weather?.magicColor==="string"?raw.weather.magicColor:DEFAULT_VISUAL_SCENE.weather.magicColor, magicOpacity:Math.max(0,Math.min(1,numberOr(raw.weather?.magicOpacity,DEFAULT_VISUAL_SCENE.weather.magicOpacity))), magicVelocity:Math.max(-8,Math.min(8,numberOr(raw.weather?.magicVelocity,DEFAULT_VISUAL_SCENE.weather.magicVelocity))),
+			fog:Math.max(0,Math.min(1,numberOr(raw.weather?.fog,0))), heatHaze:Math.max(0,Math.min(1,numberOr(raw.weather?.heatHaze,0))), heatHazeSpeed:Math.max(0,Math.min(5,numberOr(raw.weather?.heatHazeSpeed,.8))), lightning:Math.max(0,Math.min(1,numberOr(raw.weather?.lightning,0))), lightningRate:Math.max(0,Math.min(120,numberOr(raw.weather?.lightningRate,8))), precipitationSize:Math.max(.1,Math.min(5,numberOr(raw.weather?.precipitationSize,1))), fallSpeed:Math.max(.05,Math.min(8,numberOr(raw.weather?.fallSpeed,1))), area:Math.max(2,Math.min(200,numberOr(raw.weather?.area,24))), height:Math.max(2,Math.min(200,numberOr(raw.weather?.height,18))) },
 		spectrum: { ...DEFAULT_VISUAL_SCENE.spectrum, ...(raw.spectrum ?? {}) },
 		nowPlaying: { ...DEFAULT_VISUAL_SCENE.nowPlaying, ...(raw.nowPlaying ?? {}) },
 		layers: raw.layers.map((layer) => ({
@@ -1491,6 +1540,64 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 			timeline: normalizeTimeline(layer.timeline),
 		})),
 	};
+	// v26 makes the stock PBR material a neutral texture multiplier. The old lavender
+	// default tinted every albedo map blue; migrate only the untouched stock color.
+	if (numberOr(raw.version, 0) < 26) {
+		normalized.materials=normalized.materials.map(material=>material.id==="material-default"&&String(material.baseColor).toLowerCase()==="#b9c2ff"?{...material,baseColor:"#ffffff"}:material);
+	}
+
+	// v25 makes music reactivity explicitly opt-in. Previous defaults pulsed object scale
+	// and modulated authored lights merely because transport was playing. Migrate only the
+	// exact old defaults so deliberately authored custom reaction amounts survive.
+	if (numberOr(raw.version, 0) < 25) {
+		const approx=(value:number,target:number)=>Math.abs(value-target)<1e-6;
+		if (approx(numberOr(raw.object?.pulseAmount,.22),.22)) normalized.object.pulseAmount=0;
+		if (approx(numberOr(raw.object?.glowAmount,1.15),1.15)) normalized.object.glowAmount=0;
+		if (approx(numberOr(raw.object?.bodyAmount,1),1)) normalized.object.bodyAmount=0;
+		if (approx(numberOr(raw.object?.armAmount,1),1)) normalized.object.armAmount=0;
+		if (approx(numberOr(raw.object?.springAmount,.22),.22)) normalized.object.springAmount=0;
+		if (approx(numberOr(raw.stage?.fogAmount,.35),.35)) normalized.stage.fogAmount=0;
+		if (approx(numberOr(raw.stage?.sunAmount,.55),.55)) normalized.stage.sunAmount=0;
+		if (approx(numberOr(raw.stage?.moonAmount,.25),.25)) normalized.stage.moonAmount=0;
+		if (approx(numberOr(raw.stage?.keyAmount,1.9),1.9)) normalized.stage.keyAmount=0;
+		if (approx(numberOr(raw.stage?.rimAmount,1.6),1.6)) normalized.stage.rimAmount=0;
+		if (approx(numberOr(raw.stage?.fillAmount,1.1),1.1)) normalized.stage.fillAmount=0;
+		if (approx(numberOr(raw.grid?.amount,.8),.8)) normalized.grid.amount=0;
+		if (approx(numberOr(raw.particles?.amount,1.35),1.35)) normalized.particles.amount=0;
+		if (!Array.isArray(raw.audioModulation?.bindings) || raw.audioModulation!.bindings.length===0) normalized.audioModulation.enabled=false;
+	}
+
+	// v23 removes the legacy starter mannequin from previously saved scenes. Older Visuals
+	// builds persisted the demo performer as visible, which could flash during hydration or
+	// remain stuck after a transient Bridge read. Only migrate the untouched built-in dummy;
+	// user-imported/custom performers are left alone.
+	if (numberOr(raw.version, 0) < 23) {
+		const legacyObject = normalized.layers.find(layer => layer.type === "object");
+		const untouchedStarter = !!legacyObject
+			&& legacyObject.id === "object"
+			&& (legacyObject.name === "3D Performer" || legacyObject.name === "Humanoid Dummy" || legacyObject.name === "Reactive Core")
+			&& normalized.object.model === "mannequin"
+			&& !raw.object?.modelUrl
+			&& !raw.object?.modelFileName
+			&& !raw.object?.materialId;
+		if (untouchedStarter) legacyObject.visible = false;
+	}
+
+	// v22 separates the old monolithic Stage Lighting & Fog layer into three independently
+	// activatable scene components while preserving the authored stage configuration object.
+	if (numberOr(raw.version, 0) < 22) {
+		const legacyStage = normalized.layers.find(layer => layer.type === "stage");
+		if (legacyStage) {
+			if (!legacyStage.name || legacyStage.name === "Stage Lighting & Fog") legacyStage.name = "Stage";
+			const at = normalized.layers.indexOf(legacyStage);
+			const timeline = structuredClone(legacyStage.timeline ?? { start:0,duration:0,trimIn:0,trimOut:0,fadeIn:0,fadeOut:0 });
+			const additions: VisualLayer[] = [];
+			if (!normalized.layers.some(layer => layer.type === "lighting")) additions.push({ id:"lighting", type:"lighting", name:"Lighting", visible:legacyStage.visible, locked:false, opacity:1, timeline:structuredClone(timeline) });
+			if (!normalized.layers.some(layer => layer.type === "fog")) additions.push({ id:"fog", type:"fog", name:"Fog", visible:legacyStage.visible, locked:false, opacity:1, timeline:structuredClone(timeline) });
+			if (additions.length) normalized.layers.splice(at + 1, 0, ...additions);
+		}
+	}
+
 	const rawCameras = Array.isArray(raw.cameras) ? raw.cameras : [];
 	normalized.cameras = (rawCameras.length ? rawCameras : [{
 		...DEFAULT_VISUAL_SCENE.cameras[0],
@@ -1611,7 +1718,7 @@ export function createBlankVisualScene(mode: VisualProjectMode, name = "Untitled
 	next.project={id:`visual-project-${crypto.randomUUID()}`,name,mode};
 	next.updatedAt=Date.now();
 	next.assets=[]; next.primitives=[]; next.shapes2d=[]; next.secondaryDynamics=[]; next.animations=[]; next.animationCues=[]; next.ikConstraints=[]; next.cameraCuts=[]; next.timeline.markers=[]; next.audioModulation.bindings=[]; next.audioModulation.testSignal=0;
-	next.object.modelUrl=""; next.object.modelFileName=""; next.object.animation=""; next.object.materialId=""; next.object.humanoidMap={}; next.object.morphTargets={};
+	next.object.modelUrl=""; next.object.modelFileName=""; next.object.animation=""; next.object.assetFiles=[]; next.object.role="auto"; next.object.materialId=""; next.object.humanoidMap={}; next.object.morphTargets={};
 	next.performance.timelineCues=[]; next.performance.manualCueSequence=0; next.performance.autoDirector=false; next.director.lastPlanId=""; next.director.lastPlanSummary=""; next.director.lastPlanSource=""; next.director.lastAppliedAt=0;
 	// A blank project is genuinely blank. Runtime/editor infrastructure may still exist,
 	// but no optional visual/physics/post stack is active until the user creates it.
@@ -1629,7 +1736,7 @@ export function isLayerAllowedInProject(mode: VisualProjectMode, type: VisualLay
 	// 2D shapes and world-space 3D objects are mode-specific.
 	const universal=type==="media"||type==="spectrum"||type==="nowPlaying";
 	const is2D=type==="shape2d";
-	const is3D=type==="stage"||type==="sky"||type==="clouds"||type==="weather"||type==="particles"||type==="object"||type==="primitive"||type==="secondary";
+	const is3D=type==="stage"||type==="lighting"||type==="fog"||type==="sky"||type==="clouds"||type==="weather"||type==="particles"||type==="object"||type==="primitive"||type==="secondary";
 	return universal || mode==="hybrid" || (mode==="2d"&&is2D) || (mode==="3d"&&is3D);
 }
 

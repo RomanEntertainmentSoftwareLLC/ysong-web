@@ -7,7 +7,7 @@ import worldWordmark from "../assets/ysong-world.png";
 import { useWorldPlayer } from "../components/WorldPlayer";
 import { bridgeApi, normalizeVisualAdvertisingSettings, normalizeVisualBroadcastGlobals, normalizeVisualBroadcastProgram, type VisualAdCreative, type VisualVideoPrerollCreative, type VisualAdvertisingSettings, type VisualBroadcastAssignment, type VisualBroadcastGlobals, type VisualBroadcastProgram, type VisualScenePreset } from "../lib/bridgeApi";
 import { normalizeVisualScene, type VisualSceneState } from "../lib/visualsScene";
-import { applyRadioStationDefaults, radioProgramId, tracksForRadioStation, ysongRadioStationsForCatalog, type YSongRadioStation } from "../lib/ysongRadio";
+import { applyRadioStationDefaults, radioProgramId, radioStationArtworkUrl, tracksForRadioStation, ysongRadioStationsForCatalog, type YSongRadioStation } from "../lib/ysongRadio";
 import {
 	addTrackToWorldPlaylist,
 	createWorldComment,
@@ -286,9 +286,9 @@ function RadioShelf({entries,onPlay,onProgram,onAdvertising}:{entries:Array<{sta
 		<div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
 			{entries.map(({station,tracks})=><div key={station.id} className="relative overflow-hidden rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/10 via-neutral-900 to-neutral-950 p-4 shadow-lg">
 				<div className="absolute right-3 top-2 text-5xl opacity-[.06]">📻</div>
-				<div className="relative"><div className="text-[10px] font-bold uppercase tracking-[.2em] text-violet-300">YSong Radio</div><div className="mt-1 text-lg font-semibold">{station.name}</div><div className="mt-1 min-h-[2.5rem] text-xs leading-relaxed text-neutral-500">{station.description}</div>
+				<div className="relative flex gap-3"><img src={radioStationArtworkUrl(station)} alt="" className="h-20 w-20 shrink-0 rounded-xl border border-white/10 object-cover shadow-lg"/><div className="min-w-0 flex-1"><div className="text-[10px] font-bold uppercase tracking-[.2em] text-violet-300">YSong Radio</div><div className="mt-1 truncate text-lg font-semibold">{station.name}</div><div className="mt-1 min-h-[2.5rem] text-xs leading-relaxed text-neutral-500">{station.description}</div>
 					<div className="mt-3 flex items-center justify-between gap-2"><div className="text-[10px] uppercase tracking-wider text-neutral-600">{tracks.length} eligible song{tracks.length===1?"":"s"}</div><div className="flex gap-2"><button onClick={()=>onProgram(station)} className="rounded-lg border border-neutral-700 px-2.5 py-1.5 text-xs text-neutral-300 hover:bg-neutral-800">Program</button><button disabled={!tracks.length} onClick={()=>onPlay(station)} className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-30">▶ Listen</button></div></div>
-				</div>
+				</div></div>
 			</div>)}
 		</div>
 	</div>;

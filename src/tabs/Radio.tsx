@@ -1,25 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useWorldPlayer } from "../components/WorldPlayer";
-import { fetchWorldTracks, worldArtworkUrl, type WorldTrack } from "../lib/worldApi";
-import { radioProgramId, tracksForRadioStation, ysongRadioStationsForCatalog, type YSongRadioStation } from "../lib/ysongRadio";
-
-function fallbackCover(station: YSongRadioStation) {
-  const palette: Record<string, [string,string]> = {
-    "world-mix": ["#7c3aed","#111827"],
-    "fresh-releases": ["#06b6d4","#0f172a"],
-    trending: ["#f97316","#3f0d12"],
-    "deep-discovery": ["#2563eb","#111827"],
-  };
-  const [a,b] = palette[station.id] || ["#8b5cf6","#111827"];
-  const label = station.name.replace(/[<&>]/g, "");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="800" height="800" fill="url(#g)"/><circle cx="640" cy="130" r="170" fill="white" opacity=".08"/><circle cx="150" cy="670" r="240" fill="white" opacity=".05"/><path d="M180 420h70l55-180 95 330 78-250 60 160 58-100h100" fill="none" stroke="white" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/><text x="58" y="90" fill="white" font-family="Arial,sans-serif" font-size="34" font-weight="700" letter-spacing="8">YSONG RADIO</text><text x="58" y="730" fill="white" font-family="Arial,sans-serif" font-size="56" font-weight="700">${label}</text></svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-function stationCover(station: YSongRadioStation, eligible: WorldTrack[]) {
-  const candidate = eligible.find((track) => !!track?.id);
-  return candidate ? worldArtworkUrl(candidate.id) : fallbackCover(station);
-}
+import { fetchWorldTracks, type WorldTrack } from "../lib/worldApi";
+import { radioProgramId, radioStationArtworkUrl, tracksForRadioStation, ysongRadioStationsForCatalog, type YSongRadioStation } from "../lib/ysongRadio";
 
 export default function RadioPane() {
   const { startQueue, current, playing } = useWorldPlayer();
@@ -81,7 +63,7 @@ export default function RadioPane() {
           const live = current && eligible.some(t => t.id === current.id);
           return <article key={station.id} className="group overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/70 shadow-xl">
             <div className="relative aspect-square overflow-hidden bg-neutral-900">
-              <img src={stationCover(station, eligible)} alt={`${station.name} station cover`} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]" loading="lazy" />
+              <img src={radioStationArtworkUrl(station)} alt={`${station.name} station cover`} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]" loading="lazy" />
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-transparent" />
               <div className="absolute bottom-0 left-0 right-0 p-4">
                 <div className="text-[10px] font-semibold uppercase tracking-[.22em] text-violet-200">YSong Radio</div>

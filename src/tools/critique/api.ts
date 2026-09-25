@@ -1,12 +1,19 @@
 import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api";
 
+type JsonErrorPayload = { detail?: unknown; message?: unknown; error?: unknown };
+
+function asErrorPayload(value: unknown): JsonErrorPayload {
+  return value && typeof value === "object" ? value as JsonErrorPayload : {};
+}
+
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${VOCAL_API_BASE}${path}`, init);
   const text = await response.text();
-  let payload: any = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
+  let payload: unknown = null;
+  try { payload = text ? JSON.parse(text) as unknown : null; } catch { payload = text; }
   if (!response.ok) {
-    const detail = payload?.detail || payload?.message || (typeof payload === "string" ? payload : `${response.status} ${response.statusText}`);
+    const errorPayload = asErrorPayload(payload);
+    const detail = errorPayload.detail || errorPayload.message || (typeof payload === "string" ? payload : `${response.status} ${response.statusText}`);
     throw new Error(String(detail));
   }
   return payload as T;
@@ -48,7 +55,7 @@ export type CritiqueReport = {
     spectral_centroid_hz?: number;
     spectral_band_percent?: Record<string, number>;
     stereo?: { correlation?: number; left_right_balance_db?: number; side_to_mid_ratio?: number };
-    tempo?: { estimated_bpm?: number | null; confidence?: number; variability_percent?: number | null; chunk_bpms?: number[] };
+    tempo?: { estimated_bpm?: number | null; alternate_bpm?: number | null; interpretation?: string | null; confidence?: number; variability_percent?: number | null; chunk_bpms?: number[] };
   };
   findings: CritiqueFinding[];
   limitations?: string[];
@@ -73,4 +80,35 @@ export function sourceAudioUrl(assetId: string) {
 
 export function critiqueReportUrl(assetId: string) {
   return `${VOCAL_API_BASE}/v1/files/reports/${encodeURIComponent(assetId)}/critique`;
+}
+
+export type AiCritiqueSummary = {
+  headline: string;
+  summary: string;
+  readiness_score: number | null;
+  strengths: string[];
+  priorities: string[];
+  caveats: string[];
+  model?: string;
+};
+
+export async function requestAiCritiqueSummary(report: CritiqueReport): Promise<AiCritiqueSummary> {
+  let token = "";
+  try { token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token") || ""; } catch { /* unavailable */ }
+  const response = await fetch("/api/critique/ai-summary", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ report }),
+  });
+  const text = await response.text();
+  let payload: unknown = null;
+  try { payload = text ? JSON.parse(text) as unknown : null; } catch { payload = null; }
+  if (!response.ok) {
+    const errorPayload = asErrorPayload(payload);
+    throw new Error(String(errorPayload.message || errorPayload.error || `AI critic HTTP ${response.status}`));
+  }
+  return payload as AiCritiqueSummary;
 }

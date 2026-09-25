@@ -1,28 +1,41 @@
-import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { apiGet, apiPost } from "../lib/authApi";
-import { clearToken } from "../lib/authApi";
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { apiPost, clearToken } from "../lib/authApi";
 import { YSButton } from "../components/YSButton";
 import SocialAuthButtons from "../components/SocialAuthButtons";
 
 type ApiUser = { id: string; email: string };
 
 export default function Login() {
-	const navigate = useNavigate();
-	const location = useLocation();
 	const [show, setShow] = useState(false);
 	const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
 	const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-	useEffect(() => {
-		let alive = true;
-		const token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token");
-		if (!token) return;
-		apiGet("/auth/me")
-			.then(() => { if (alive) navigate("/app", { replace: true }); })
-			.catch(() => {});
-		return () => { alive = false; };
-	}, [navigate]);
+	// Always render the login form. Saved passwords belong to the browser/OS
+	// credential manager; a prior YSong token must never bypass this screen.
+
+	async function offerCredentialToBrowser(email: string, password: string) {
+		// Never store a password ourselves. When supported (Chrome/Chromium), hand
+		// the successful credential to the browser's password manager instead.
+		// The browser remains in control of whether it saves/prompts/autofills it.
+		try {
+			const nav = navigator as Navigator & {
+				credentials?: { store?: (credential: unknown) => Promise<unknown> };
+			};
+			const PasswordCredentialCtor = (window as unknown as {
+				PasswordCredential?: new (data: { id: string; password: string; name?: string }) => unknown;
+			}).PasswordCredential;
+			if (!nav.credentials?.store || !PasswordCredentialCtor) return;
+			await nav.credentials.store(new PasswordCredentialCtor({ id: email, password, name: email }));
+		} catch {
+			// Password-manager support/permissions vary by browser. Login must never
+			// fail just because the browser declines to store a credential.
+		}
+	}
+
+	function codeFromError(error: unknown) {
+		return error instanceof Error ? error.message : "request_failed";
+	}
 
 	async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
 		e.preventDefault();
@@ -47,14 +60,15 @@ export default function Login() {
 			let resp: { token: string; user: ApiUser };
 			try {
 				resp = await doLogin();
-			} catch (firstErr: any) {
-				const code = String(firstErr?.message ?? "request_failed");
+			} catch (firstErr: unknown) {
+				const code = codeFromError(firstErr);
 				if (code !== "server_error" && code !== "request_failed") throw firstErr;
 				await new Promise((resolve) => window.setTimeout(resolve, 300));
 				resp = await doLogin();
 			}
 
-			// Always replace the token we use everywhere
+			// Replace the in-app auth token after a successful explicit login.
+			// Password persistence is handled only by the browser/OS password manager.
 			localStorage.setItem("ys_token", resp.token);
 			// Clean up any legacy key you might have used in the past
 			localStorage.removeItem("ysong_auth_token");
@@ -63,17 +77,22 @@ export default function Login() {
 			try {
 				const payload = JSON.parse(atob(resp.token.split(".")[1]));
 				console.log("Login payload uid:", payload?.uid, "email:", resp.user.email);
-			} catch {}
+			} catch {
+				// Debug-only token decoding; malformed tokens are handled by /auth/me.
+			}
 
-			// Keep login out of browser history so Back returns to the previous YSong surface, not the credential form.
+			// Give the browser password manager the successful credential. We never
+			// persist the raw password ourselves.
+			await offerCredentialToBrowser(email, password);
+
+			// Hard redirect avoids any race with state that might still hold the old user
 			const devDevice = new URLSearchParams(window.location.search).get("devDevice");
-			const routeState = location.state as { from?: unknown } | null;
-			const from = routeState?.from;
-			const target = typeof from === "string" && from.startsWith("/app") ? from : (devDevice ? `/app?devDevice=${encodeURIComponent(devDevice)}` : "/app");
-			navigate(target, { replace: true });
-		} catch (err: any) {
+			window.location.replace(devDevice ? `/app?devDevice=${encodeURIComponent(devDevice)}` : "/app");
+			// If you prefer SPA navigation, you can keep:
+			// navigate("/app", { replace: true });
+		} catch (err: unknown) {
 			setStatus("error");
-			const code = String(err?.message ?? "request_failed");
+			const code = codeFromError(err);
 			const friendly =
 				code === "invalid_credentials"
 					? "Email or password is incorrect."
@@ -96,7 +115,7 @@ export default function Login() {
 		<div className="mx-auto max-w-md px-4 sm:px-6 lg:px-8 py-10">
 			<h1 className="text-3xl sm:text-4xl font-bold text-center">Log in</h1>
 
-			<form className="mt-6 space-y-4" onSubmit={onSubmit}>
+			<form className="mt-6 space-y-4" onSubmit={onSubmit} method="post" autoComplete="on">
 				<div>
 					<label htmlFor="email" className="block text-sm font-medium mb-1">
 						Email
@@ -106,6 +125,8 @@ export default function Login() {
 						name="email"
 						type="email"
 						autoComplete="username"
+						autoCapitalize="none"
+						spellCheck={false}
 						required
 						className="px-3 py-2 w-full rounded-lg border
               border-neutral-300 dark:border-neutral-700

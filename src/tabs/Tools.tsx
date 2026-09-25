@@ -7,10 +7,11 @@ import MasteringApp from "../tools/mastering/MasteringApp";
 import AudioIntelligenceApp from "../tools/audiointelligence/AudioIntelligenceApp";
 import PromotionCenterApp from "../tools/promotion/PromotionCenterApp";
 import CuratorMarketplaceApp from "../tools/curators/CuratorMarketplaceApp";
+import AIDetectorApp from "../tools/aidetector/AIDetectorApp";
 import type { AudioIntelligenceReport } from "../tools/audiointelligence/api";
 import type { UploadResult } from "../tools/stemrestore/api";
 
-type ToolId = "seo" | "stem-restore" | "critique" | "humanize" | "mastering" | "audio-intelligence" | "promotion" | "curators";
+type ToolId = "seo" | "stem-restore" | "critique" | "humanize" | "mastering" | "audio-intelligence" | "ai-detector" | "promotion" | "curators";
 
 export default function ToolsPane() {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
@@ -34,6 +35,9 @@ export default function ToolsPane() {
   }
   if (activeTool === "audio-intelligence") {
     return <AudioIntelligenceApp onBack={() => { setActiveTool(null); setHandoffAsset(null); }} initialUpload={handoffAsset} onOpenCritique={(asset) => { setHandoffAsset(asset); setActiveTool("critique"); }} onOpenMastering={(asset) => { setHandoffAsset(asset); setActiveTool("mastering"); }} onOpenCurators={(report) => { setCuratorIntelligence(report); setActiveTool("curators"); }} />;
+  }
+  if (activeTool === "ai-detector") {
+    return <AIDetectorApp onBack={() => setActiveTool(null)} />;
   }
   if (activeTool === "promotion") {
     return <PromotionCenterApp onBack={() => setActiveTool(null)} />;
@@ -68,6 +72,13 @@ export default function ToolsPane() {
             <div className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">CLAP genre/subgenre, mood, energy, sonic fingerprint cues, vocal/instrument presence, BPM/key cross-check, metadata helpers, and uncertainty-aware AI-likelihood.</div>
             <div className="mt-5 text-xs text-violet-500 group-hover:text-violet-400">Analyze once →</div>
           </button>
+          <button type="button" onClick={() => setActiveTool("ai-detector")} className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/55 p-5 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition">
+            <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">◈</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Available</span></div>
+            <div className="mt-5 text-base font-semibold">AI Music Detector</div>
+            <div className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">Local six-layer origin scan using provenance, decoder/spectral fingerprints, timing, dynamics, stereo behavior, and cross-section consistency.</div>
+            <div className="mt-5 text-xs text-violet-500 group-hover:text-violet-400">Analyze origin →</div>
+          </button>
+
 
           <button type="button" onClick={() => { setHandoffAsset(null); setActiveTool("stem-restore"); }} className="group rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/55 p-5 text-left hover:border-violet-500/60 hover:bg-violet-500/[.04] transition">
             <div className="flex items-start justify-between gap-4"><div className="h-11 w-11 rounded-xl border border-violet-500/25 bg-violet-500/10 grid place-items-center text-violet-500 text-xl">≈</div><span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-500">Available</span></div>

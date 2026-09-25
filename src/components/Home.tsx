@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Reveal from "./Reveal";
 import { YSButton } from "./YSButton";
@@ -21,10 +21,6 @@ export default function Home() {
   const navigate = useNavigate();
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
-  const signedIn = useMemo(() => {
-    try { return !!(localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token")); } catch { return false; }
-  }, []);
-
   return <div className="overflow-hidden">
     <section className="relative mx-auto max-w-7xl px-4 pb-12 pt-8 sm:px-6 md:pt-14 lg:px-8 lg:pb-20">
       <div className="pointer-events-none absolute -left-40 top-10 h-96 w-96 rounded-full bg-violet-600/15 blur-3xl" />
@@ -42,11 +38,11 @@ export default function Home() {
             YSong brings production, audio intelligence, visuals, radio, promotion and release tools into one workspace without turning AI into an autopilot you never asked for.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
-            <YSButton onClick={() => navigate(signedIn ? "/app" : "/signup")} className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-500">
-              {signedIn ? "Open YSong" : "Create your studio"}
+            <YSButton onClick={() => navigate("/signup")} className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-500">
+              Create your studio
             </YSButton>
             <YSButton onClick={() => navigate("/login")} className="rounded-xl border border-neutral-300 px-5 py-3 text-sm font-semibold dark:border-neutral-700">
-              {signedIn ? "Switch account" : "Log in"}
+              Log in
             </YSButton>
           </div>
           <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-xs text-neutral-500">
@@ -96,7 +92,7 @@ export default function Home() {
         <div className="text-xs font-semibold uppercase tracking-[.22em] text-violet-500">Your music stays yours</div>
         <h2 className="mx-auto mt-3 max-w-3xl text-3xl font-bold tracking-tight sm:text-5xl">Create the track, finish it, broadcast it and find the audience from the same place.</h2>
         <p className="mx-auto mt-4 max-w-2xl text-sm text-neutral-500">YSong is being built around explicit control: tools propose, artists decide.</p>
-        <YSButton onClick={() => navigate(signedIn ? "/app" : "/signup")} className="mt-7 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white">{signedIn ? "Return to YSong" : "Get started"}</YSButton>
+        <YSButton onClick={() => navigate("/signup")} className="mt-7 rounded-xl bg-violet-600 px-6 py-3 text-sm font-semibold text-white">Get started</YSButton>
       </Reveal>
     </section>
   </div>;

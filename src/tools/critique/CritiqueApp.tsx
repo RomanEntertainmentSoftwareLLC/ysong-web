@@ -6,6 +6,8 @@ import {
   startCritique,
   uploadForCritique,
   waitForLocalJob,
+  requestAiCritiqueSummary,
+  type AiCritiqueSummary,
   type CritiqueFinding,
   type CritiqueReport,
 } from "./api";
@@ -69,6 +71,11 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const dragDepthRef = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
+  const [aiCritique, setAiCritique] = useState<AiCritiqueSummary | null>(null);
+  const [aiCritiqueState, setAiCritiqueState] = useState<"idle" | "writing" | "done" | "error">("idle");
+  const [aiCritiqueError, setAiCritiqueError] = useState("");
 
   const busy = stage === "uploading" || stage === "analyzing";
 
@@ -88,9 +95,58 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     return () => abortRef.current?.abort();
   }, []);
 
+  useEffect(() => {
+    const preventWindowFileDrop = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+      event.preventDefault();
+    };
+    const clearWindowDrag = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setDragActive(false);
+    };
+    window.addEventListener("dragover", preventWindowFileDrop);
+    window.addEventListener("drop", clearWindowDrag);
+    return () => {
+      window.removeEventListener("dragover", preventWindowFileDrop);
+      window.removeEventListener("drop", clearWindowDrag);
+    };
+  }, []);
+
   function selectFile(next: File | null) {
     abortRef.current?.abort();
     setFile(next); setUpload(null); setJob(null); setReport(null); setError(""); setFilter("all"); setStage("idle");
+    setAiCritique(null); setAiCritiqueState("idle"); setAiCritiqueError("");
+  }
+
+  function acceptDroppedFile(next: File | null) {
+    if (!next || busy) return;
+    const name = next.name.toLowerCase();
+    const supported = next.type.startsWith("audio/") || /\.(wav|flac|mp3|m4a|aac|ogg)$/i.test(name);
+    if (!supported) { setError("Drop an audio file: WAV, FLAC, MP3, M4A, AAC, or OGG."); return; }
+    selectFile(next);
+  }
+
+  function onDragEnter(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault(); event.stopPropagation();
+    if (!event.dataTransfer.types.includes("Files")) return;
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+  function onDragOver(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault(); event.stopPropagation();
+    if (event.dataTransfer.types.includes("Files")) { event.dataTransfer.dropEffect = "copy"; setDragActive(true); }
+  }
+  function onDragLeave(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault(); event.stopPropagation();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+  function onDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault(); event.stopPropagation();
+    dragDepthRef.current = 0; setDragActive(false);
+    acceptDroppedFile(event.dataTransfer.files?.[0] || null);
   }
 
   async function prepare() {
@@ -101,6 +157,16 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
       setUpload(result); setStage("ready");
     } catch (e: unknown) {
       setError(errorMessage(e, "Audio preparation failed.")); setStage("error");
+    }
+  }
+
+  async function runAiCritique(nextReport: CritiqueReport) {
+    setAiCritiqueState("writing"); setAiCritiqueError("");
+    try {
+      const summary = await requestAiCritiqueSummary(nextReport);
+      setAiCritique(summary); setAiCritiqueState("done");
+    } catch (e: unknown) {
+      setAiCritique(null); setAiCritiqueState("error"); setAiCritiqueError(errorMessage(e, "YSong AI Critic could not summarize the findings."));
     }
   }
 
@@ -116,6 +182,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
       const next = finished.result?.report as CritiqueReport | undefined;
       if (!next?.asset_id) throw new Error("Critique completed without a report.");
       setReport(next); setStage("done");
+      void runAiCritique(next);
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(errorMessage(e, "Critique failed.")); setStage("error");
@@ -154,7 +221,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
         <div className="mt-7 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
           <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Source</div><h2 className="mt-1 text-lg font-semibold">Give YSong a finished mix</h2>
-            <label className="mt-4 block cursor-pointer rounded-xl border border-dashed border-neutral-300 dark:border-neutral-700 p-5 hover:border-violet-500/60 transition"><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" disabled={busy} onChange={e => { selectFile(e.target.files?.[0] || null); e.currentTarget.value = ""; }} /><div className="font-medium">{file?.name || "Drop/select an audio file"}</div><div className="mt-1 text-xs text-neutral-500">YSong prepares a local 48 kHz analysis copy. Your original upload is retained.</div></label>
+            <label onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} className={`relative mt-4 block cursor-pointer rounded-xl border border-dashed p-5 transition ${dragActive ? "border-violet-400 bg-violet-500/10 shadow-[inset_0_0_36px_rgba(139,92,246,.08)]" : "border-neutral-300 dark:border-neutral-700 hover:border-violet-500/60"}`}><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" disabled={busy} onChange={e => { acceptDroppedFile(e.target.files?.[0] || null); e.currentTarget.value = ""; }} /><div className={`font-medium ${dragActive ? "text-violet-400" : ""}`}>{dragActive ? "Drop audio to analyze" : file?.name || "Drop/select an audio file"}</div><div className="mt-1 text-xs text-neutral-500">{dragActive ? "Release anywhere inside this box. The file stays local to YSong's analysis pipeline." : "YSong prepares a local 48 kHz analysis copy. Your original upload is retained."}</div></label>
             {file && !upload && <button type="button" disabled={busy || health !== "online"} onClick={prepare} className="mt-3 min-h-10 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white disabled:opacity-40">{stage === "uploading" ? "Preparing…" : "Prepare audio"}</button>}
             {upload && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-neutral-500"><span>Asset <span className="font-mono text-neutral-700 dark:text-neutral-300">{upload.asset_id}</span></span><span className="text-emerald-500">Prepared</span>{onOpenStemRestore && <button type="button" onClick={() => onOpenStemRestore(upload)} className="text-violet-500 hover:text-violet-400">Open same source in Stem Restore →</button>}{onOpenMastering && <button type="button" onClick={() => onOpenMastering(upload)} className="text-violet-500 hover:text-violet-400">Open in Master / Remaster →</button>}{onOpenAudioIntelligence && <button type="button" onClick={() => onOpenAudioIntelligence(upload)} className="text-violet-500 hover:text-violet-400">Open in Audio Intelligence →</button>}</div>}
           </section>
@@ -172,7 +239,14 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
         {report && upload && <>
           <section className="mt-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="flex flex-wrap items-center gap-6"><ScoreRing score={report.technical_score}/><div className="min-w-0 flex-1"><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">{report.engine}</div><h2 className="mt-1 text-2xl font-semibold">{report.verdict}</h2><p className="mt-1 text-sm text-neutral-500">This is a technical-integrity score, not a songwriting score. Candidates remain audition-first.</p><div className="mt-3 flex flex-wrap gap-2"><SeverityBadge severity="critical"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.critical || 0}</span><SeverityBadge severity="warning"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.warning || 0}</span><SeverityBadge severity="info"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.info || 0}</span></div></div><div className="flex flex-wrap gap-2">{onOpenMastering && <button type="button" onClick={() => onOpenMastering(upload)} className="rounded-xl border border-violet-500/35 bg-violet-500/[.05] px-3 py-2 text-xs text-violet-500">Send findings to Master / Remaster</button>}{onOpenAudioIntelligence && <button type="button" onClick={() => onOpenAudioIntelligence(upload)} className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-xs">Analyze musical identity</button>}<a href={critiqueReportUrl(upload.asset_id)} target="_blank" rel="noreferrer" className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-xs hover:border-violet-500/60">JSON report</a></div></div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label="Peak" value={fmt(report.metrics?.peak_dbfs, 2, " dBFS")}/><Metric label="RMS" value={fmt(report.metrics?.rms_dbfs, 2, " dBFS")}/><Metric label="Crest" value={fmt(report.metrics?.crest_factor_db, 1, " dB")}/><Metric label="Dynamics" value={fmt(report.metrics?.dynamic_range_proxy_db, 1, " dB")} note="proxy"/><Metric label="Tempo" value={report.metrics?.tempo?.estimated_bpm ? fmt(report.metrics.tempo.estimated_bpm, 1, " BPM") : "—"}/><Metric label="Stereo corr." value={fmt(report.metrics?.stereo?.correlation, 2)}/></div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label="Peak" value={fmt(report.metrics?.peak_dbfs, 2, " dBFS")}/><Metric label="RMS" value={fmt(report.metrics?.rms_dbfs, 2, " dBFS")}/><Metric label="Crest" value={fmt(report.metrics?.crest_factor_db, 1, " dB")}/><Metric label="Dynamics" value={fmt(report.metrics?.dynamic_range_proxy_db, 1, " dB")} note="proxy"/><Metric label="Tempo" value={report.metrics?.tempo?.estimated_bpm ? fmt(report.metrics.tempo.estimated_bpm, 1, " BPM") : "—"} note={report.metrics?.tempo?.alternate_bpm ? `${report.metrics.tempo.interpretation === "double_time_preferred" ? "Half-time alt" : "Alternate"}: ${fmt(report.metrics.tempo.alternate_bpm, 1, " BPM")}` : undefined}/><Metric label="Stereo corr." value={fmt(report.metrics?.stereo?.correlation, 2)}/></div>
+          </section>
+
+          <section className="mt-5 rounded-2xl border border-violet-500/20 bg-violet-500/[.04] p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">YSong AI Critic</div><h2 className="mt-1 text-lg font-semibold">What the measurements actually mean</h2><p className="mt-1 text-xs text-neutral-500">AI commentary is grounded in the local Ears report. It does not pretend to hear or judge things the analyzer did not measure.</p></div>{aiCritiqueState !== "writing" && <button type="button" onClick={() => void runAiCritique(report)} className="rounded-xl border border-violet-500/35 px-3 py-2 text-xs text-violet-500">{aiCritique ? "Rewrite critique" : "Ask AI Critic"}</button>}</div>
+            {aiCritiqueState === "writing" && <div className="mt-4 rounded-xl border border-violet-500/20 bg-black/10 p-4"><div className="flex items-center gap-2 text-sm font-medium"><span className="h-2 w-2 animate-pulse rounded-full bg-violet-500"/>YSong AI is reading the evidence…</div><div className="mt-1 text-xs text-neutral-500">Your technical results are already safe and usable while this finishes.</div></div>}
+            {aiCritiqueState === "error" && <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/[.05] p-4 text-sm"><div className="font-medium text-amber-500">AI commentary did not load.</div><div className="mt-1 text-xs text-neutral-500">{aiCritiqueError}</div></div>}
+            {aiCritique && <div className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_.75fr]"><div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white/50 dark:bg-black/15 p-4"><div className="flex flex-wrap items-center gap-3"><h3 className="text-xl font-semibold">{aiCritique.headline}</h3>{aiCritique.readiness_score != null && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-xs text-violet-500">Mix readiness {Math.round(aiCritique.readiness_score)}/100</span>}</div><p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-neutral-600 dark:text-neutral-300">{aiCritique.summary}</p>{aiCritique.caveats.length > 0 && <div className="mt-4 text-xs text-neutral-500">{aiCritique.caveats.map((row, i) => <div key={i}>• {row}</div>)}</div>}</div><div className="space-y-3">{aiCritique.strengths.length > 0 && <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[.04] p-4"><div className="text-xs font-semibold text-emerald-500">What is holding up</div><div className="mt-2 space-y-1.5 text-xs text-neutral-500">{aiCritique.strengths.map((row, i) => <div key={i}>• {row}</div>)}</div></div>}{aiCritique.priorities.length > 0 && <div className="rounded-xl border border-amber-500/20 bg-amber-500/[.04] p-4"><div className="text-xs font-semibold text-amber-500">Fix first</div><div className="mt-2 space-y-1.5 text-xs text-neutral-500">{aiCritique.priorities.map((row, i) => <div key={i}>• {row}</div>)}</div></div>}</div></div>}
           </section>
 
           <section className="mt-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">

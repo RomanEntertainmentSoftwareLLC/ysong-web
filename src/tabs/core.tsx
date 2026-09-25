@@ -16,6 +16,18 @@ import { YSButton } from "../components/YSButton";
 
 export type TabType = "chat" | "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "flashback" | "tools" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "radio" | "bridge" | "upload";
 
+const TAB_TYPES = new Set<TabType>(["chat","profile","settings","daw","mixer","visuals","createSong","band","singers","analytics","flashback","tools","artwork","library","achievements","rooms","market","world","radio","bridge","upload"]);
+const DEFAULT_TAB_TITLES: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"Visuals", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
+
+function workspaceLocationShape() {
+	const url = new URL(window.location.href);
+	const rawType = url.searchParams.get("view");
+	if (!rawType || !TAB_TYPES.has(rawType as TabType)) return null;
+	const type = rawType as TabType;
+	const chatId = type === "chat" ? (url.searchParams.get("chat") || "") : "";
+	return { type, chatId };
+}
+
 export type TabRecord = {
 	id: string;
 	type: TabType;
@@ -128,21 +140,21 @@ export function TabManagerProvider({ children }: { children: ReactNode }) {
 	useEffect(() => {
 		const onPopState = (event: PopStateEvent) => {
 			if (!window.location.pathname.startsWith("/app")) return;
-			const state = event.state;
-			if (!state?.ysongWorkspace) return;
 			popApplyingRef.current = true;
 			try {
-				if (!state.tabId) {
-					setActiveId(null);
-					return;
-				}
-				const exact = tabsRef.current.find((t) => t.id === state.tabId);
-				if (exact) {
-					setActiveId(exact.id);
-					return;
-				}
-				const byShape = tabsRef.current.find((t) => t.type === state.tabType && (state.tabType !== "chat" || String(t.payload?.chatId || "") === String(state.chatId || "")));
-				if (byShape) setActiveId(byShape.id);
+				// Browser history is URL-authoritative. event.state may be stale after a
+				// reload or a saved-layout restore, which previously made Profile haunt Back.
+				const shape = workspaceLocationShape();
+				if (!shape) { setActiveId(null); return; }
+				const state = event.state;
+				const exact = state?.ysongWorkspace && state.tabId ? tabsRef.current.find((tab) => tab.id === state.tabId && tab.type === shape.type) : null;
+				const byShape = exact || tabsRef.current.find((tab) => tab.type === shape.type && (shape.type !== "chat" || String(tab.payload?.chatId || "") === shape.chatId));
+				if (byShape) { setActiveId(byShape.id); return; }
+				const id = state?.ysongWorkspace && typeof state.tabId === "string" && state.tabId ? state.tabId : crypto.randomUUID();
+				const restored: TabRecord = { id, type:shape.type, title:DEFAULT_TAB_TITLES[shape.type], ...(shape.type === "chat" && shape.chatId ? { payload:{chatId:shape.chatId} } : {}) };
+				tabsRef.current = [...tabsRef.current, restored];
+				setTabs(tabsRef.current);
+				setActiveId(id);
 			} finally {
 				queueMicrotask(() => { popApplyingRef.current = false; });
 			}

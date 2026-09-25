@@ -34,3 +34,7 @@ public/spessasynth_processor.min.js
 public/soundfonts/GeneralUser-GS.sf2
 public/soundfonts/GENERALUSER-NOTICE.txt
 
+
+# Local AI Detector runtime (created on first launch)
+local-services/ai-detector/.venv/
+local-services/ai-detector/vendor/ffmpeg/

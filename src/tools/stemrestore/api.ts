@@ -34,8 +34,19 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export function checkVocalHealth(): Promise<VocalHealth> {
-  return jsonFetch<VocalHealth>("/health");
+export async function checkVocalHealth(): Promise<VocalHealth> {
+  // Vite/START-YSong can boot the integrated engine on demand. Give a cold Python
+  // process a short grace period instead of surfacing the proxy's transient 500.
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try { return await jsonFetch<VocalHealth>("/health"); }
+    catch (error) {
+      lastError = error;
+      if (attempt === 11) break;
+      await new Promise(resolve => window.setTimeout(resolve, attempt < 3 ? 350 : 700));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("YSong Audio Engine is offline.");
 }
 
 export async function uploadForStemRestore(file: File): Promise<UploadResult> {

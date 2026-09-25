@@ -13,6 +13,8 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+export type RemasterMode = "preserve" | "balanced" | "aggressive" | "custom";
+
 export type MasterMetrics = {
   duration_seconds: number;
   sample_rate: number;
@@ -79,6 +81,13 @@ export type MasteringAnalysis = {
   limitations?: string[];
 };
 
+export type MasteringDecision = {
+  type: string;
+  title: string;
+  detail: string;
+  amount?: Record<string, unknown>;
+};
+
 export type MasteringReport = {
   schema_version: number;
   engine: string;
@@ -86,23 +95,58 @@ export type MasteringReport = {
   asset_id: string;
   run_id: string;
   mode: "quick" | "assistant" | "reference" | string;
+  remaster_mode?: RemasterMode | string;
+  remaster_mode_label?: string;
   settings: {
     target_lufs: number;
     true_peak_dbtp: number;
     strength: number;
+    effective_strength?: number;
     stereo_width: number;
+    effective_stereo_width?: number;
     transient_amount: number;
+    effective_transient_amount?: number;
     apply_dynamic_eq: boolean;
     reference_asset_id?: string | null;
     reference_influence: number;
+    effective_reference_influence?: number;
   };
   before: MasterMetrics;
   after: MasterMetrics;
+  comparison?: {
+    integrated_lufs_delta: number;
+    true_peak_delta_db: number;
+    crest_delta_db: number;
+    dynamic_range_delta_db: number;
+    width_delta: number;
+    correlation_delta?: number | null;
+    spectral_band_delta_percent: Record<string, number>;
+  };
+  loudness_target?: {
+    requested_lufs: number;
+    achieved_lufs: number;
+    error_lu: number;
+    tolerance_lu: number;
+    target_met: boolean;
+    input_gain_db: number;
+    limiter_guard_db: number;
+    guard_limited: boolean;
+  };
   difference: { rms_dbfs: number; change_percent_of_source_rms: number };
   analysis: MasteringAnalysis;
+  decisions?: MasteringDecision[];
   stages: Array<Record<string, unknown>>;
   warnings: string[];
-  safety: { source_overwritten: boolean; difference_track_written: boolean; reference_cloning: boolean };
+  outputs?: { sample_rate?: number; bit_depth?: number } & Record<string, unknown>;
+  safety: {
+    source_overwritten: boolean;
+    original_upload_retained?: boolean;
+    difference_track_written: boolean;
+    reference_cloning: boolean;
+    limiter_guard_db?: number;
+    preserve_mix_bias?: boolean;
+  };
+  streaming_target_note?: string;
 };
 
 export async function uploadForMastering(file: File): Promise<UploadResult> {
@@ -122,6 +166,7 @@ export function startMasteringRender(
   assetId: string,
   settings: {
     mode: "quick" | "assistant" | "reference";
+    remasterMode: RemasterMode;
     targetLufs: number;
     truePeak: number;
     strength: number;
@@ -134,6 +179,7 @@ export function startMasteringRender(
 ): Promise<LocalJob> {
   const q = new URLSearchParams({
     mode: settings.mode,
+    remaster_mode: settings.remasterMode,
     target_lufs: String(settings.targetLufs),
     true_peak_dbtp: String(settings.truePeak),
     strength: String(settings.strength),
@@ -152,8 +198,21 @@ export function sourceAudioUrl(assetId: string) {
   return `${VOCAL_API_BASE}/v1/files/audio/${encodeURIComponent(assetId)}/source`;
 }
 
+export function masteringSourceAudioUrl(assetId: string) {
+  return `${VOCAL_API_BASE}/v1/files/audio/${encodeURIComponent(assetId)}/mastering-source`;
+}
+
+export function originalAudioUrl(assetId: string) {
+  return `${VOCAL_API_BASE}/v1/files/audio/${encodeURIComponent(assetId)}/original`;
+}
+
 export function masteringFileUrl(assetId: string, runId: string, kind: "master" | "difference" | "report") {
   return `${VOCAL_API_BASE}/v1/files/mastering/${encodeURIComponent(assetId)}/${encodeURIComponent(runId)}/${kind}`;
+}
+
+export function masteringPackageUrl(assetId: string, runId: string, includeOriginal = true) {
+  const q = new URLSearchParams({ include_original: includeOriginal ? "true" : "false" });
+  return `${VOCAL_API_BASE}/v1/files/mastering/${encodeURIComponent(assetId)}/${encodeURIComponent(runId)}/package?${q.toString()}`;
 }
 
 export function masteringAnalysisUrl(assetId: string) {
