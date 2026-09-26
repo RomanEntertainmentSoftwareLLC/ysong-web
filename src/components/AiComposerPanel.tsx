@@ -41,10 +41,11 @@ function PianoPreview({proposal}:{proposal:ComposerProposal}){
 }
 
 export default function AiComposerPanel({
-  open,onClose,project,bpm,sigNum,sigDen,totalBars,playheadBar,onAccept,onArrangementApproved,
+  open,onClose,project,bpm,sigNum,sigDen,totalBars,playheadBar,selectedPart,onAccept,onArrangementApproved,
 }:{
   open:boolean; onClose:()=>void; project:ComposerProjectContext; bpm:number; sigNum:number; sigDen:number; totalBars:number; playheadBar:number;
-  onAccept:(proposal:ComposerProposal,targetTrackId?:string|null)=>string;
+  selectedPart:{clipId:string;name:string;type:'audio'|'instrument'}|null;
+  onAccept:(proposal:ComposerProposal,targetTrackId?:string|null,targetClipId?:string|null)=>string;
   onArrangementApproved?:(arrangement:ComposerArrangement|null)=>void;
 }){
   const [status,setStatus]=useState<ComposerStatus|null>(null);
@@ -54,6 +55,7 @@ export default function AiComposerPanel({
   const [approved,setApproved]=useState(false);
   const [proposal,setProposal]=useState<ComposerProposal|null>(null);
   const [lastAcceptedTrackId,setLastAcceptedTrackId]=useState<string|null>(null);
+  const [proposalTarget,setProposalTarget]=useState<typeof selectedPart>(null);
   const [controls,setControls]=useState<ComposerControls>(()=>({
     bpm, keyRoot:0, keyLabel:'C Natural Minor', scaleId:'natural-minor', sigNum, sigDen, totalBars:Math.max(4,totalBars), bars:8,
     startBar:Math.max(1,Math.floor(playheadBar)), complexity:.55, humanization:.2, mood:'', style:'', role:'melody',
@@ -94,17 +96,18 @@ export default function AiComposerPanel({
     try{
       const result=await generateComposerIdea({controls,arrangement,action,sourceProposal:src,project:{...project,playheadBar}});
       setProposal(result.proposal);
+      setProposalTarget(selectedPart);
       if(action!=='continue_8_bars')setLastAcceptedTrackId(null);
       setMessage(`${roleLabel(result.proposal.role)} proposal ready. The DAW has not been changed.`);
     }catch(error){setMessage(error instanceof Error?error.message:'Composer generation failed.');}
     finally{setBusy(false);}
   }
-  function accept(){
+  function accept(replace=false){
     if(!proposal)return;
+    if(replace&&(!proposalTarget||proposalTarget.type!=='instrument')){setMessage('Select a MIDI clip before replacing it.');return;}
     const target=proposal.action==='continue_8_bars'?(lastAcceptedTrackId||project.source?.trackId||null):null;
-    const trackId=onAccept(proposal,target);
-    setLastAcceptedTrackId(trackId);
-    setMessage(target?`Accepted as a new MIDI clip on the existing ${roleLabel(proposal.role)} track. Undo remains available.`:`Accepted ${proposal.label} into the DAW as editable MIDI. Undo remains available.`);
+    try{const trackId=onAccept(proposal,replace?null:target,replace?proposalTarget?.clipId:null);setLastAcceptedTrackId(trackId);setProposal(null);setMessage(replace?`Replaced ${proposalTarget?.name} with editable MIDI. Undo remains available.`:target?`Added a MIDI clip on the existing ${roleLabel(proposal.role)} track. Undo remains available.`:`Added ${proposal.label} as editable MIDI. Undo remains available.`);}
+    catch(error){setMessage(error instanceof Error?error.message:'Could not accept the part.');}
   }
 
   if(!open)return null;
@@ -160,7 +163,7 @@ export default function AiComposerPanel({
           <PianoPreview proposal={proposal}/>
           <div className="rounded-lg bg-white/[0.035] p-2 text-xs"><div className="font-medium">{proposal.label}</div><div className="mt-1 opacity-60">{proposal.explanation||'Structured editable MIDI proposal.'}</div>{proposal.generationNotes&&<div className="mt-1 text-[10px] opacity-45">{proposal.generationNotes}</div>}{proposal.chords.length>0&&<div className="mt-2 flex flex-wrap gap-1">{proposal.chords.map((c,i)=><span key={`${c.atBars}-${i}`} className="rounded bg-black/30 px-1.5 py-0.5 text-[9px]">{c.symbol} @{n(c.atBars,2)}</span>)}</div>}</div>
           <div className="flex flex-wrap gap-1.5">{ACTIONS.map(a=><button className={button} key={a.id} disabled={busy||(a.requiresSource&&!sourceAvailable)} onClick={()=>void generate(a.id)}>{a.label}</button>)}</div>
-          <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[0.06] p-3"><div className="text-xs font-semibold text-emerald-100">Accept is the mutation boundary</div><p className="mt-1 text-[10px] opacity-60">Until you press this button, the proposal exists only in the Composer panel. Accept adds editable MIDI and can immediately be undone with normal DAW Undo.</p><button className="mt-2 rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-xs text-emerald-100 hover:bg-emerald-500/25" onClick={accept}>Accept into DAW</button></div>
+          <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[0.06] p-3"><div className="text-xs font-semibold text-emerald-100">Choose how to accept this ready MIDI part</div><p className="mt-1 text-[10px] opacity-60">Add keeps every existing clip. Replace changes only the MIDI clip selected when generation started; its track sound, mixer, and effects stay in place.</p><div className="mt-2 flex flex-wrap gap-2"><button className={accent} onClick={()=>accept(false)}>Add MIDI part</button>{proposalTarget?.type==='instrument'&&<button className={accent} onClick={()=>accept(true)}>Replace {proposalTarget.name}</button>}</div></div>
         </>}
       </section>}
       {message&&<div className="rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs opacity-75">{message}</div>}

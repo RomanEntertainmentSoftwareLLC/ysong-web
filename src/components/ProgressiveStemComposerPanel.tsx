@@ -9,7 +9,8 @@ type UniverseSeed={projectId:string;projectName:string;bpm:number;sigNum:number;
 type Props={
   open:boolean; onClose:()=>void; seed:UniverseSeed; state:ProgressiveStemState; onStateChange:(next:ProgressiveStemState)=>void;
   dependencySources:Record<string,Partial<StemDependency>>;
-  onAccept:(proposal:StemProposal,previous:StemNode|null)=>Promise<{clipId:string;trackId:string;assetId?:string;stemNodeId?:string}>|{clipId:string;trackId:string;assetId?:string;stemNodeId?:string};
+  selectedPart:{clipId:string;name:string;type:'audio'|'instrument'}|null;
+  onAccept:(proposal:StemProposal,previous:StemNode|null,targetClipId:string|null,desiredInstrument:string)=>Promise<{clipId:string;trackId:string;assetId?:string;stemNodeId?:string}>|{clipId:string;trackId:string;assetId?:string;stemNodeId?:string};
 };
 const input='w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-fuchsia-400/40';
 const button='rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] hover:bg-white/[0.08] disabled:opacity-40';
@@ -17,18 +18,20 @@ const accent='rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/15 px-3 py-
 function roleLabel(role:StemRole){return STEM_ROLES.find(r=>r.id===role)?.label||role;}
 function modeFor(role:StemRole){return STEM_ROLES.find(r=>r.id===role)?.preferred||'midi';}
 
-export default function ProgressiveStemComposerPanel({open,onClose,seed,state,onStateChange,dependencySources,onAccept}:Props){
+export default function ProgressiveStemComposerPanel({open,onClose,seed,state,onStateChange,dependencySources,selectedPart,onAccept}:Props){
   const [status,setStatus]=useState<StemComposerStatus|null>(null); const [busy,setBusy]=useState(false); const [message,setMessage]=useState('');
   const [keyRoot,setKeyRoot]=useState(seed.keyRoot); const [scaleId,setScaleId]=useState<MidiScaleId>(seed.scaleId); const [sampleRate,setSampleRate]=useState(48000);
   const [family,setFamily]=useState(()=>`family_${crypto.randomUUID().slice(0,8)}`); const [seedText,setSeedText]=useState(()=>crypto.randomUUID().replace(/-/g,'').slice(0,16));
   const [role,setRole]=useState<StemRole>('drums'); const [mode,setMode]=useState<StemMode>('midi'); const [desired,setDesired]=useState(''); const [negative,setNegative]=useState('');
   const [selectedDeps,setSelectedDeps]=useState<Set<string>>(new Set()); const [proposal,setProposal]=useState<StemProposal|null>(null);
+  const [proposalTarget,setProposalTarget]=useState<typeof selectedPart>(null);
+  const [proposalDesired,setProposalDesired]=useState('');
 
   useEffect(()=>{if(open)getStemComposerStatus().then(setStatus).catch(()=>setStatus(null));},[open]);
   useEffect(()=>{if(!state.universe){setKeyRoot(seed.keyRoot);setScaleId(seed.scaleId);} },[seed.keyRoot,seed.scaleId,state.universe]);
-  useEffect(()=>{const existing=state.nodes.find(n=>n.role===role);setMode(existing?.mode??modeFor(role));setProposal(null);setSelectedDeps(new Set(state.nodes.filter(n=>n.role!==role&&n.status==='active').map(n=>n.nodeId)));},[role,state.nodes]);
+  useEffect(()=>{const existing=state.nodes.find(n=>n.role===role&&n.status==='active');setMode(existing?.mode??modeFor(role));setProposal(null);setSelectedDeps(new Set(state.nodes.filter(n=>n.role!==role&&n.status==='active').map(n=>n.nodeId)));},[role,state.nodes]);
 
-  const activeForRole=state.nodes.find(n=>n.role===role)??null;
+  const activeForRole=state.nodes.find(n=>n.role===role&&n.status==='active')??null;
   const nextVersion=(activeForRole?.version??0)+1;
   const generationSeed=`${state.universe?.generationSeed||seedText}:${role}:${nextVersion}`;
   const durationText=state.universe?`${state.universe.exactDurationSec.toFixed(2)} sec · ${state.universe.totalBars} bars`:'';
@@ -55,18 +58,23 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
       const dependencies=await dependencyPayload();const negativeList=negative.split(',').map(x=>x.trim()).filter(Boolean);
       if(mode==='midi'){
         if(!status?.structuredMidiConfigured)throw new Error('Server AI is not configured yet for structured MIDI stem generation.');
-        const r=await generateMidiStem({universe:state.universe,targetRole:role,mode:'midi',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);
+        const r=await generateMidiStem({universe:state.universe,targetRole:role,mode:'midi',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setProposalTarget(selectedPart);setProposalDesired(desired);
       }else{
         if(!status?.audioProviderConfigured)throw new Error('No target-stem audio generation provider is configured yet. The contract is ready, but YSong will not fake an audio stem.');
-        const r=await generateAudioStem({universe:state.universe,targetRole:role,mode:'audio',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);
+        const r=await generateAudioStem({universe:state.universe,targetRole:role,mode:'audio',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setProposalTarget(selectedPart);setProposalDesired(desired);
       }
     }catch(e){setMessage(e instanceof Error?e.message:'Stem generation failed.');}finally{setBusy(false);}
   }
-  async function accept(){
+  async function accept(replace=false){
     if(!proposal||!state.universe)return;setBusy(true);setMessage('');try{
-      const previous=activeForRole;const refs=await onAccept(proposal,previous);const stableNodeId=refs.stemNodeId||previous?.nodeId||crypto.randomUUID();
+      if(replace&&!proposalTarget)throw new Error('Select a clip before replacing it.');
+      const targetedNode=replace?state.nodes.find(n=>n.clipId===proposalTarget?.clipId):null;
+      if(targetedNode&&targetedNode.role!==proposal.role)throw new Error('The selected generated stem has a different role. Select the matching role or add this part.');
+      if(targetedNode&&targetedNode.status!=='active')throw new Error('Select the active stem for this role before replacing it. Older versions remain available as clips.');
+      const previous=replace&&activeForRole?.clipId===proposalTarget?.clipId?activeForRole:null;
+      const refs=await onAccept(proposal,previous,replace?proposalTarget!.clipId:null,proposalDesired);const stableNodeId=refs.stemNodeId||previous?.nodeId||crypto.randomUUID();
       const nextNode:StemNode={nodeId:stableNodeId,role:proposal.role,mode:proposal.mode,version:proposal.version,label:proposal.label,universeHash:proposal.universeHash,generationFamily:proposal.generationFamily,generationSeed:proposal.generationSeed,dependsOn:proposal.dependsOn,clipId:refs.clipId,trackId:refs.trackId,assetId:refs.assetId,status:'active',createdAt:new Date().toISOString(),summary:proposal.mode==='midi'?proposal.explanation:`Generated ${proposal.role} target-only audio stem`};
-      let nodes=state.nodes.filter(n=>n.role!==proposal.role).concat(nextNode);
+      let nodes=state.nodes.filter(n=>n.nodeId!==stableNodeId).map(n=>n.role===proposal.role&&n.status==='active'?{...n,status:'superseded' as const}:n).concat(nextNode);
       if(previous){const staleIds=staleDependents(nodes,stableNodeId,nextNode.version);nodes=nodes.map(n=>staleIds.has(n.nodeId)?{...n,status:'stale'}:n);}
       const activeByRole={...state.activeByRole,[proposal.role]:stableNodeId};onStateChange({universe:state.universe,nodes,activeByRole});setProposal(null);
       const affected=nodes.filter(n=>n.status==='stale');setMessage(affected.length?`${roleLabel(proposal.role)} v${proposal.version} accepted. ${affected.map(n=>roleLabel(n.role)).join(', ')} were generated from an older dependency. Regenerate them?`:`${roleLabel(proposal.role)} v${proposal.version} accepted into the DAW.`);
@@ -96,7 +104,7 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
           <div className="flex items-center justify-between text-[10px] opacity-55"><span>{roleLabel(role)} v{nextVersion}</span><span className="font-mono">seed {generationSeed.slice(-28)}</span></div><button className={accent} disabled={busy||universeDrift||(mode==='midi'?!status?.structuredMidiConfigured:!status?.audioProviderConfigured)} onClick={()=>void generate()}>{busy?'Generating…':`Generate ${roleLabel(role)} ONLY`}</button>
         </section>
 
-        {proposal&&<section className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-500/[0.045] p-3 space-y-3"><div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.18em] opacity-45">3 · Target-stem proposal</div><div className="mt-1 text-sm font-semibold">{proposal.label} · v{proposal.version}</div></div><span className="rounded-full border border-fuchsia-400/25 px-2 py-1 text-[9px]">{proposal.mode.toUpperCase()}</span></div><div className="grid grid-cols-3 gap-2 text-center text-[10px]"><div className="rounded-lg bg-black/20 p-2"><div className="opacity-45">Start</div><div>0.000 sec / bar 1</div></div><div className="rounded-lg bg-black/20 p-2"><div className="opacity-45">Length</div><div>{proposal.exactDurationSec.toFixed(3)} sec</div></div><div className="rounded-lg bg-black/20 p-2"><div className="opacity-45">Dependencies</div><div>{proposal.dependsOn.length}</div></div></div>{proposal.mode==='midi'?<><div className="text-[10px] opacity-65">{proposal.notes.length} editable MIDI notes · full {proposal.lengthBars}-bar clip with silence preserved where no notes exist.</div><p className="text-xs opacity-65">{proposal.explanation}</p></>:<div className="text-[10px] opacity-65">Target-only normalized WAV · {proposal.sampleRate.toLocaleString()} Hz · stereo · exact timeline duration.</div>}<div className="rounded-lg border border-emerald-400/20 bg-emerald-500/[0.06] p-3"><div className="text-xs font-semibold text-emerald-100">Accept is the mutation boundary</div><p className="mt-1 text-[10px] opacity-60">A replacement updates only this generated stem. Any dependent stems generated from the previous version will be marked stale, not silently regenerated.</p><button className="mt-2 rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-xs text-emerald-100 hover:bg-emerald-500/25" disabled={busy} onClick={()=>void accept()}>Accept {roleLabel(proposal.role)} v{proposal.version}</button></div></section>}
+        {proposal&&<section className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-500/[0.045] p-3 space-y-3"><div className="text-[10px] opacity-55">3 · Ready target stem</div><div className="text-sm font-semibold">{proposal.label} · v{proposal.version} · {proposal.mode}</div><p className="text-xs opacity-65">{proposal.mode==='midi'?`${proposal.notes.length} editable notes`:`Target audio ${proposal.exactDurationSec.toFixed(2)} seconds`}. Nothing changes until you accept.</p><div className="flex flex-wrap gap-2"><button className={accent} disabled={busy} onClick={()=>void accept(false)}>Add part</button>{proposalTarget&&<button className={accent} disabled={busy} onClick={()=>void accept(true)}>Replace {proposalTarget.name}</button>}</div>{proposalTarget&&<p className="text-[10px] opacity-60">Replacement changes only the selected clip. If the output type differs, its track settings remain on the old track and the result gets a new track.</p>}</section>}
 
         <section className="rounded-xl border border-white/10 p-3"><div className="flex items-center justify-between"><div className="text-[10px] uppercase tracking-[.18em] opacity-45">Dependency graph</div><span className="text-[9px] opacity-45">{state.nodes.length} approved stems</span></div>{state.nodes.length===0?<div className="mt-3 text-[10px] opacity-45">No approved generated stems yet.</div>:<div className="mt-2 space-y-2">{state.nodes.map(n=><div key={n.nodeId} className={`rounded-lg border p-2 ${n.status==='stale'?'border-amber-400/25 bg-amber-500/[0.05]':'border-white/10 bg-white/[0.025]'}`}><div className="flex items-center gap-2 text-xs"><span className="font-medium">{roleLabel(n.role)} v{n.version}</span><span className="text-[9px] opacity-45">{n.mode}</span><span className="ml-auto text-[9px]">{n.status==='stale'?<span className="text-amber-300">REGENERATE?</span>:<span className="text-emerald-300">APPROVED</span>}</span></div><div className="mt-1 text-[9px] opacity-45">depends on {n.dependsOn.length?n.dependsOn.map(d=>`${roleLabel(d.role)} v${d.version}`).join(' + '):'song universe only'}</div>{n.status==='stale'&&<button className={`${button} mt-2`} onClick={()=>{setRole(n.role);setMode(n.mode);setSelectedDeps(new Set(state.nodes.filter(x=>x.nodeId!==n.nodeId&&x.status==='active').map(x=>x.nodeId)));setMessage(`${roleLabel(n.role)} was generated from an older dependency. Review dependencies and regenerate when ready.`);}}>Prepare regeneration</button>}</div>)}</div>}</section>
       </>}

@@ -43,6 +43,7 @@ import {
 } from "../lib/midi";
 
 type TrackType = "audio" | "instrument";
+type PartGeneration = { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string };
 
 type Track = {
 	id: string;
@@ -78,6 +79,7 @@ type Track = {
 	effects?: DawTrackEffect[];
 	// Full console channel-strip state shared by the DAW and YC-9000 mixer.
 	mixer?: DawMixerStripState;
+	partGeneration?: PartGeneration;
 };
 
 type ProjectAsset = {
@@ -127,6 +129,7 @@ type Clip = {
 	stemVersion?: number;
 	stemUniverseHash?: string;
 	stemGenerationFamily?: string;
+	partGeneration?: PartGeneration;
 };
 
 // Include all UI options (triplets + 1/128) so TS doesn't explode
@@ -4683,46 +4686,84 @@ export default function DAW(_props: TabRendererProps) {
 		}
 		return out;
 	}, [progressiveStemState.nodes, clips]);
+	const selectedPart = useMemo(() => {
+		const clip = clips.find((item) => item.id === selectedClipId);
+		const track = clip && tracks.find((item) => item.id === clip.trackId);
+		return clip && track ? { clipId: clip.id, name: clip.name, type: track.type } : null;
+	}, [clips, tracks, selectedClipId]);
+	const partStateRef = useRef({ clips, tracks, progressiveStemState });
+	partStateRef.current = { clips, tracks, progressiveStemState };
 
-	const acceptProgressiveStemProposal = async (proposal: StemProposal, previous: StemNode | null) => {
+	const acceptProgressiveStemProposal = async (proposal: StemProposal, previous: StemNode | null, targetClipId: string | null, desiredInstrument: string) => {
+		const projectId = activeProjectId;
+		const targetClip = targetClipId ? clips.find((clip) => clip.id === targetClipId) : null;
+		if (targetClipId && !targetClip) throw new Error("The selected part changed. Select it again before replacing.");
+		const targetTrack = targetClip ? tracks.find((track) => track.id === targetClip.trackId) : null;
+		if (targetClip && !targetTrack) throw new Error("The selected track is missing.");
+		const universe = progressiveStemState.universe;
+		if (!universe || universe.universeHash !== proposal.universeHash) throw new Error("The stem universe changed. Generate the part again.");
+		if (universe.songId !== projectId || universe.bpm !== bpm || universe.sigNum !== sigNum || universe.sigDen !== sigDen || universe.totalBars !== Math.max(1, Math.round(endBar - 1))) throw new Error("The project timeline no longer matches this stem. The original part was kept.");
+		if (proposal.mode === "audio" && (!proposal.objectKey || !proposal.assetId)) throw new Error("Generated audio is not available. The original part was kept.");
 		const expectedType: TrackType = proposal.mode === "midi" ? "instrument" : "audio";
-		const trackId = crypto.randomUUID();
-		const next = mkTrack(expectedType, tracks.filter((track) => track.type === expectedType).length + 1, trackId);
-		next.name = `${proposal.label || proposal.role} v${proposal.version}`;
+		const keepTrack = targetTrack?.type === expectedType;
+		const trackId = keepTrack ? targetTrack.id : crypto.randomUUID();
+		const next = keepTrack ? targetTrack : mkTrack(expectedType, tracks.filter((track) => track.type === expectedType).length + 1, trackId);
+		const generation: PartGeneration = { origin: "progressive-stem", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id } : {}) };
+		if (!keepTrack) { next.name = `${proposal.label || proposal.role} v${proposal.version}`; next.partGeneration = generation; }
 		if (proposal.mode === "midi") {
 			const roleProgram: Record<StemRole, number> = { drums: 118, bass: 38, piano: 0, strings: 48, lead: 81, vocals: 52, guitar: 29, choir: 52, atmosphere: 89, percussion: 115, fx: 103 };
-			next.gmProgram = roleProgram[proposal.role];
+			if (!keepTrack) {
+				next.gmProgram = roleProgram[proposal.role];
+				if (desiredInstrument.trim()) {
+					next.desiredInstrument = desiredInstrument.trim();
+					try {
+						const result = await bridgeApi.matchInstruments([desiredInstrument.trim()], 12, { role: proposal.role });
+						const candidates = result.matches.filter((item) => item.instrument.loadable && !!item.instrument.path);
+						const match = candidates[0];
+						if (match && match.score > 0 && match.weakEvidence === false && Array.isArray(match.evidence) && candidates[1]?.score !== match.score) {
+							next.vst3PluginPath = match.instrument.path;
+							next.vst3PluginName = match.instrument.name;
+							next.vst3PluginVendor = match.instrument.vendor ?? undefined;
+							next.instrumentResolution = { status: "resolved", source: "bridge-match", instrumentId: match.instrument.id, score: match.score, evidence: match.evidence, reasons: match.reasons, weakEvidence: false };
+						}
+					} catch { /* Keep the explicit GM fallback when Bridge matching is unavailable. */ }
+				}
+			}
 		}
-		setTracks((prev) => [...prev.map((track) => previous?.trackId && track.id === previous.trackId ? { ...track, mute: true } : track), next]);
-		setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H }));
+		if (activeProjectRef.current !== projectId) throw new Error("The project changed while preparing this part. Nothing was replaced.");
+		if (partStateRef.current.progressiveStemState !== progressiveStemState || (targetClip && JSON.stringify(partStateRef.current.clips.find((clip) => clip.id === targetClip.id)) !== JSON.stringify(targetClip)) || (targetTrack && JSON.stringify(partStateRef.current.tracks.find((track) => track.id === targetTrack.id)) !== JSON.stringify(targetTrack))) throw new Error("The part or stem graph changed while preparing the result. Nothing was replaced.");
 		const clipId = crypto.randomUUID();
 		const stableNodeId = previous?.nodeId ?? crypto.randomUUID();
+		let nextClip: Clip;
 		if (proposal.mode === "midi") {
-			const universe = progressiveStemState.universe;
-			if (!universe) throw new Error("stem_universe_missing");
-			const nextClip: Clip = {
+			nextClip = {
 				id: clipId, trackId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: universe.totalBars,
 				midiNotes: proposal.notes.map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
 				midiPitchBend: [], midiModulation: [], midiBendRange: 12,
 				midiScales: ["drums", "percussion", "fx"].includes(proposal.role) ? [] : [{ id: crypto.randomUUID(), root: universe.keyRoot, scaleId: universe.scaleId }],
 				midiScaleLock: ["drums", "percussion", "fx"].includes(proposal.role) ? "off" : "strict",
 				composerRole: proposal.role, composerChords: proposal.chords,
-				stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily,
+				stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily, partGeneration: generation,
 			};
-			setClips((prev) => [...prev, nextClip]);
 		} else {
 			const assetId = proposal.assetId || proposal.objectKey;
 			setProjectAssets((prev) => prev.some((asset) => asset.id === assetId || asset.objectKey === proposal.objectKey) ? prev : [...prev, { id: assetId, kind: "audio", name: `${proposal.label} v${proposal.version}.wav`, objectKey: proposal.objectKey, durationSec: proposal.exactDurationSec, sizeMB: proposal.sizeBytes / (1024 * 1024) }]);
-			setClips((prev) => [...prev, { id: clipId, trackId, assetId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: proposal.lengthBars, sourceOffsetSec: 0, sourceDurationSec: proposal.exactDurationSec, fadeInBars: 0, fadeOutBars: 0, composerRole: proposal.role, stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily }]);
+			nextClip = { id: clipId, trackId, assetId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: proposal.lengthBars, sourceOffsetSec: 0, sourceDurationSec: proposal.exactDurationSec, fadeInBars: 0, fadeOutBars: 0, composerRole: proposal.role, stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily, partGeneration: generation };
 		}
+		if (!keepTrack) { setTracks((prev) => [...prev, next]); setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H })); }
+		setClips((prev) => [...prev.filter((clip) => clip.id !== targetClipId), nextClip]);
 		setBars((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(proposal.lengthBars + 8))));
 		setSelectedTrackId(trackId);
 		setSelectedClipId(clipId);
+		if (targetClipId) setMidiEditorClipId((id) => id === targetClipId ? clipId : id);
 		return { clipId, trackId, assetId: proposal.mode === "audio" ? proposal.assetId : undefined, stemNodeId: stableNodeId };
 	};
 
-	const acceptComposerProposal = (proposal: ComposerProposal, targetTrackId?: string | null) => {
-		const usableTarget = targetTrackId ? tracks.find((track) => track.id === targetTrackId && track.type === "instrument") ?? null : null;
+	const acceptComposerProposal = (proposal: ComposerProposal, targetTrackId?: string | null, targetClipId?: string | null) => {
+		const targetClip = targetClipId ? clips.find((clip) => clip.id === targetClipId) : null;
+		if (targetClipId && (!targetClip || !tracks.some((track) => track.id === targetClip.trackId && track.type === "instrument"))) throw new Error("Selected MIDI part changed. The original was kept.");
+		if (targetClip?.stemNodeId) throw new Error("This clip belongs to a stem dependency graph. Replace it in Stem Composer.");
+		const usableTarget = targetClip ? tracks.find((track) => track.id === targetClip.trackId) : targetTrackId ? tracks.find((track) => track.id === targetTrackId && track.type === "instrument") ?? null : null;
 		const roleProgram: Record<ComposerProposal["role"], number> = {
 			melody: 81, chords: 0, bassline: 38, arpeggio: 81, countermelody: 80, drums: 118, strings: 48, piano: 0, atmosphere: 89, harmony: 52,
 		};
@@ -4731,10 +4772,12 @@ export default function DAW(_props: TabRendererProps) {
 			const next = mkTrack("instrument", tracks.filter((track) => track.type === "instrument").length + 1, trackId);
 			next.name = proposal.label || proposal.role;
 			next.gmProgram = roleProgram[proposal.role];
+			next.partGeneration = { origin: "ai-composer", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString() };
 			setTracks((prev) => [...prev, next]);
 			setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H }));
 		}
 		const clipId = crypto.randomUUID();
+		const generation: PartGeneration = { origin: "ai-composer", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id } : {}) };
 		const nextClip: Clip = {
 			id: clipId, trackId, name: proposal.label || proposal.role, startBar: proposal.startBar, lengthBars: proposal.lengthBars,
 			midiNotes: proposal.notes.map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
@@ -4743,10 +4786,12 @@ export default function DAW(_props: TabRendererProps) {
 			midiScaleLock: proposal.role === "drums" ? "off" : "strict",
 			composerRole: proposal.role,
 			composerChords: proposal.chords.map((chord) => ({ atBar: proposal.startBar + chord.atBars, symbol: chord.symbol, durationBars: chord.durationBars })),
+			partGeneration: generation,
 		};
-		setClips((prev) => [...prev, nextClip]);
+		setClips((prev) => [...prev.filter((clip) => clip.id !== targetClipId), nextClip]);
 		setSelectedTrackId(trackId);
 		setSelectedClipId(clipId);
+		if (targetClipId) setMidiEditorClipId((id) => id === targetClipId ? clipId : id);
 		return trackId;
 	};
 
@@ -5599,17 +5644,20 @@ export default function DAW(_props: TabRendererProps) {
 			/>
 
 			<ProgressiveStemComposerPanel
+				key={activeProjectId}
 				open={progressiveStemOpen}
 				onClose={() => setProgressiveStemOpen(false)}
 				seed={progressiveStemSeed}
 				state={progressiveStemState}
 				onStateChange={setProgressiveStemState}
 				dependencySources={progressiveDependencySources}
+				selectedPart={selectedPart}
 				onAccept={acceptProgressiveStemProposal}
 			/>
 
 			<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
 			<AiComposerPanel
+				key={activeProjectId}
 				open={aiComposerOpen}
 				onClose={() => setAiComposerOpen(false)}
 				project={composerProjectContext}
@@ -5618,6 +5666,7 @@ export default function DAW(_props: TabRendererProps) {
 				sigDen={sigDen}
 				totalBars={Math.max(4, Math.round(endBar - 1))}
 				playheadBar={playheadPosBars}
+				selectedPart={selectedPart}
 				onAccept={acceptComposerProposal}
 				onArrangementApproved={setApprovedComposerArrangement}
 			/>
