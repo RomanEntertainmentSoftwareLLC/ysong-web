@@ -66,6 +66,8 @@ type Track = {
 	// AI/session-generation target. Bridge preset enumeration is not universal yet,
 	// so preserve the producer hint without pretending it was loaded.
 	vstPresetHint?: string;
+	// Bridge owns the payload; the project retains only its local snapshot identity.
+	vstSnapshot?: { id: string; pluginPath: string; capturedAt: string; hasFullState: boolean; parameterCount: number };
 	// Additive Create Song provenance. A user reassignment clears the old match.
 	instrumentIntent?: GeneratedSessionTrack["instrumentIntent"];
 	desiredInstrument?: string;
@@ -609,6 +611,12 @@ export default function DAW(_props: TabRendererProps) {
 	const [midiInputDevices, setMidiInputDevices] = useState<BridgeMidiInputDevice[]>([]);
 	const [vstTrackState, setVstTrackState] = useState<Record<string, { status: "loading" | "ready" | "error"; message?: string }>>({});
 	const vstLoadedRef = useRef<Map<string, string>>(new Map());
+	const vstLoadingRef = useRef<Map<string, Promise<void>>>(new Map());
+	const vstRestoredRef = useRef<Set<string>>(new Set());
+	const vstAssignmentVersionRef = useRef<Map<string, number>>(new Map());
+	const [vstSoundState, setVstSoundState] = useState<Record<string, string>>({});
+	const capturePendingRef = useRef<Set<string>>(new Set());
+	const [capturePending, setCapturePending] = useState<Record<string, boolean>>({});
 	const vstMetersRef = useRef<Record<string, number>>({});
 	const vstGainReductionRef = useRef<Record<string, number>>({});
 	const [trackPanelOpen, setTrackPanelOpen] = useState<boolean>(() => {
@@ -708,6 +716,10 @@ export default function DAW(_props: TabRendererProps) {
 	const [switchError, setSwitchError] = useState<string | null>(null);
 	const handledLocalOpenRequestRef = useRef<string | null>(null);
 	const autosaveTimerRef = useRef<number | null>(null);
+	const activeProjectRef = useRef(activeProjectId);
+	const tracksRef = useRef(tracks);
+	activeProjectRef.current = activeProjectId;
+	tracksRef.current = tracks;
 
 	// --- Markers (bars are 1..BARS) ---
 	const [playheadPosBars, setPlayheadPosBars] = useState(1); // float bars (1.0 = bar 1)
@@ -770,6 +782,9 @@ export default function DAW(_props: TabRendererProps) {
 
 	const createNewProject = () => {
 		const id = crypto.randomUUID();
+		activeProjectRef.current = id;
+		vstLoadedRef.current.clear();
+		vstRestoredRef.current.clear();
 		try {
 			localStorage.setItem(`ysong:projectName:${id}`, "Untitled Project");
 		} catch {}
@@ -785,6 +800,9 @@ export default function DAW(_props: TabRendererProps) {
 		stop();
 		bridgeApi.unloadAllVst3().catch(() => {});
 		vstLoadedRef.current.clear();
+		vstRestoredRef.current.clear();
+		setVstSoundState({});
+		tracksRef.current = [];
 		vstMetersRef.current = {};
 		setVstTrackState({});
 		setTracks([]);
@@ -807,6 +825,10 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const loadProject = (id: string) => {
+		activeProjectRef.current = id;
+		vstLoadedRef.current.clear();
+		vstRestoredRef.current.clear();
+		setVstSoundState({});
 		if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
 		autosaveTimerRef.current = null;
 		setHydratedProjectId(null);
@@ -988,10 +1010,13 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const deleteTrack = (id: string) => {
+		vstAssignmentVersionRef.current.set(id, (vstAssignmentVersionRef.current.get(id) ?? 0) + 1);
+		tracksRef.current = tracksRef.current.filter((track) => track.id !== id);
 		const deletingTrack = tracks.find((t) => t.id === id);
 		if (deletingTrack?.vst3PluginPath) {
 			bridgeApi.unloadVst3Instrument(id).catch(() => {});
 			vstLoadedRef.current.delete(id);
+			vstRestoredRef.current.clear();
 		}
 		// Silence all currently playing/pre-scheduled sources owned by this track
 		// before removing its UI/project state.
@@ -1111,13 +1136,36 @@ export default function DAW(_props: TabRendererProps) {
 
 	const ensureVstLoaded = async (track: Track) => {
 		if (track.type !== "instrument" || !track.vst3PluginPath) return;
-		if (vstLoadedRef.current.get(track.id) === track.vst3PluginPath) return;
+		const projectId = activeProjectRef.current;
+		const path = track.vst3PluginPath;
+		const assignmentVersion = vstAssignmentVersionRef.current.get(track.id) ?? 0;
+		const currentTrack = () => activeProjectRef.current === projectId &&
+			(vstAssignmentVersionRef.current.get(track.id) ?? 0) === assignmentVersion &&
+			tracksRef.current.some((current) => current.id === track.id && current.type === "instrument" && current.vst3PluginPath === path);
+		const pendingKey = `${projectId}\0${track.id}\0${path}\0${assignmentVersion}`;
+		const pending = vstLoadingRef.current.get(pendingKey);
+		if (pending) return pending;
+		if (!currentTrack()) return;
+		const work = async () => {
+		// A prior project or assignment may use the same Bridge track ID. Let its
+		// in-flight load/restore finish before this assignment can own that ID.
+		const earlier = Array.from(vstLoadingRef.current.entries())
+			.filter(([key]) => key !== pendingKey && key.split("\0")[1] === track.id)
+			.map(([, operation]) => operation);
+		if (earlier.length) await Promise.allSettled(earlier);
+		if (!currentTrack()) return;
+		if (vstLoadedRef.current.get(track.id) !== path) {
 		setVstTrackState((prev) => ({ ...prev, [track.id]: { status: "loading" } }));
 		try {
-			const loaded = await bridgeApi.loadVst3Instrument(track.id, track.vst3PluginPath);
-			vstLoadedRef.current.set(track.id, track.vst3PluginPath);
+			const loaded = await bridgeApi.loadVst3Instrument(track.id, path);
+			if (!currentTrack()) return;
+			if (loaded.plugin?.path !== path) throw new Error("Bridge loaded a different plugin path.");
+			vstLoadedRef.current.set(track.id, path);
+			for (const key of vstRestoredRef.current) if (key.startsWith(`${projectId}\0${track.id}\0`)) vstRestoredRef.current.delete(key);
 			await bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects));
+			if (!currentTrack()) return;
 			await bridgeApi.setVst3Mixer(track.id, computedTrackGain(track) <= 0, clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track));
+			if (!currentTrack()) return;
 
 			// Selection owns live hardware MIDI. On a cold YSong launch the selection
 			// effect can run before Bridge is ready and its one-shot /midi/route request
@@ -1125,22 +1173,52 @@ export default function DAW(_props: TabRendererProps) {
 			// the route here for the currently-selected VST instrument.
 			if (selectedTrackId === track.id) {
 				await bridgeApi.setMidiRoute(track.id, track.midiInputName ?? null);
+				if (!currentTrack()) return;
 			}
 
 			setVstTrackState((prev) => ({ ...prev, [track.id]: { status: "ready" } }));
 			if (loaded.plugin?.name && loaded.plugin.name !== track.vst3PluginName) {
-				setTracks((prev) => prev.map((t) => t.id === track.id ? {
+				setTracks((prev) => prev.map((t) => t.id === track.id && t.vst3PluginPath === path && activeProjectRef.current === projectId ? {
 					...t,
 					vst3PluginName: loaded.plugin.name,
 					vst3PluginVendor: loaded.plugin.vendor ?? t.vst3PluginVendor,
 				} : t));
 			}
 		} catch (error) {
+			if (!currentTrack()) return;
 			vstLoadedRef.current.delete(track.id);
 			const message = error instanceof Error ? error.message : "Could not load VST3 instrument.";
 			setVstTrackState((prev) => ({ ...prev, [track.id]: { status: "error", message } }));
+			setVstSoundState((prev) => ({ ...prev, [track.id]: `Instrument load failed; saved state was not restored: ${message}` }));
 			throw error;
 		}
+		}
+		if (!currentTrack()) return;
+		const snapshot = tracksRef.current.find((current) => current.id === track.id)?.vstSnapshot;
+		if (!snapshot) return;
+		if (snapshot.pluginPath !== path) {
+			setVstSoundState((prev) => ({ ...prev, [track.id]: "Saved instrument state belongs to another plugin path; restore skipped." }));
+			return;
+		}
+		const restoreKey = `${pendingKey}\0${snapshot.id}`;
+		if (vstRestoredRef.current.has(restoreKey)) return;
+		setVstSoundState((prev) => ({ ...prev, [track.id]: "Restoring saved instrument state…" }));
+		try {
+			if (!currentTrack() || tracksRef.current.find((current) => current.id === track.id)?.vstSnapshot?.id !== snapshot.id) return;
+			const result = await bridgeApi.restoreInstrumentSnapshot(track.id, snapshot.id);
+			if (!currentTrack() || tracksRef.current.find((current) => current.id === track.id)?.vstSnapshot?.id !== snapshot.id) return;
+			if (result.snapshot.id !== snapshot.id || result.snapshot.pluginPath !== path) throw new Error("Bridge returned a different snapshot or plugin path.");
+			vstRestoredRef.current.add(restoreKey);
+			setVstSoundState((prev) => ({ ...prev, [track.id]: result.snapshot.hasFullState ? "Bridge restored the saved snapshot; it may have used parameter fallback. Sound equivalence is unverified." : "Saved parameters restored; native plugin state was unavailable." }));
+		} catch (error) {
+			if (currentTrack() && tracksRef.current.find((current) => current.id === track.id)?.vstSnapshot?.id === snapshot.id) {
+				setVstSoundState((prev) => ({ ...prev, [track.id]: `Saved instrument state was not restored: ${error instanceof Error ? error.message : "Bridge restore failed."}` }));
+			}
+		}
+		};
+		const promise = work().finally(() => { vstLoadingRef.current.delete(pendingKey); });
+		vstLoadingRef.current.set(pendingKey, promise);
+		return promise;
 	};
 
 	const openVstEditor = async (track: Track) => {
@@ -1155,6 +1233,12 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const setTrackInstrumentSource = async (track: Track, value: string): Promise<boolean> => {
+		const newPath = value.startsWith("vst3:") ? value.slice(5) : undefined;
+		if (newPath === track.vst3PluginPath) return true;
+		vstAssignmentVersionRef.current.set(track.id, (vstAssignmentVersionRef.current.get(track.id) ?? 0) + 1);
+		tracksRef.current = tracksRef.current.map((current) => current.id === track.id ? { ...current, vst3PluginPath: newPath, vstSnapshot: undefined } : current);
+		vstRestoredRef.current.clear();
+		setVstSoundState((prev) => { const next = { ...prev }; delete next[track.id]; return next; });
 		if (value.startsWith("gm:")) {
 			const program = normalizeGmProgram(Number(value.slice(3)));
 			// Patch changes must hand the native audio device back immediately. ASIO4ALL
@@ -1167,7 +1251,7 @@ export default function DAW(_props: TabRendererProps) {
 			gmProgramOverrideRef.current.set(track.id, program);
 			setTracks((prev) => prev.map((t) => t.id === track.id ? {
 				...t, gmProgram: program, vst3PluginPath: undefined, vst3PluginName: undefined, vst3PluginVendor: undefined,
-				vstPresetHint: undefined, instrumentResolution: undefined,
+				vstPresetHint: undefined, instrumentResolution: undefined, vstSnapshot: undefined,
 			} : t));
 			if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
 			return true;
@@ -1184,6 +1268,7 @@ export default function DAW(_props: TabRendererProps) {
 			vst3PluginVendor: catalog?.vendor ?? undefined,
 			vstPresetHint: undefined,
 			instrumentResolution: undefined,
+			vstSnapshot: undefined,
 		};
 		setTracks((prev) => prev.map((t) => t.id === track.id ? nextTrack : t));
 		vstLoadedRef.current.delete(track.id);
@@ -1197,6 +1282,7 @@ export default function DAW(_props: TabRendererProps) {
 			// A failed native load must not leave the project claiming that the broken
 			// plugin is assigned. Restore the exact previous GM/VST assignment.
 			setTracks((prev) => prev.map((t) => t.id === track.id ? previousTrack : t));
+			tracksRef.current = tracksRef.current.map((t) => t.id === track.id ? previousTrack : t);
 			vstLoadedRef.current.delete(track.id);
 			try {
 				if (previousTrack.vst3PluginPath) await ensureVstLoaded(previousTrack);
@@ -1935,7 +2021,12 @@ export default function DAW(_props: TabRendererProps) {
 	// Persisted VST assignments are part of the DAW project. Once project state is
 	// hydrated, reconcile the native Bridge instances with those assignments.
 	useEffect(() => {
-		if (!dawHydrated || bridgeAvailable === false) return;
+		if (bridgeAvailable === false) {
+			vstLoadedRef.current.clear();
+			vstRestoredRef.current.clear();
+			return;
+		}
+		if (!dawHydrated) return;
 		const wanted = new Map(
 			tracks
 				.filter((track) => track.type === "instrument" && !!track.vst3PluginPath)
@@ -1945,13 +2036,16 @@ export default function DAW(_props: TabRendererProps) {
 		for (const [trackId, loadedPath] of Array.from(vstLoadedRef.current.entries())) {
 			if (wanted.get(trackId) === loadedPath) continue;
 			vstLoadedRef.current.delete(trackId);
+			vstRestoredRef.current.clear();
 			delete vstMetersRef.current[trackId];
 			bridgeApi.unloadVst3Instrument(trackId).catch(() => {});
 		}
 
 		for (const track of tracks) {
 			if (track.type !== "instrument" || !track.vst3PluginPath) continue;
-			if (vstLoadedRef.current.get(track.id) === track.vst3PluginPath) continue;
+			const snapshot = track.vstSnapshot;
+			const restoreKey = `${activeProjectId}\0${track.id}\0${track.vst3PluginPath}\0${vstAssignmentVersionRef.current.get(track.id) ?? 0}\0${snapshot?.id}`;
+			if (vstLoadedRef.current.get(track.id) === track.vst3PluginPath && (!snapshot || vstRestoredRef.current.has(restoreKey))) continue;
 			void ensureVstLoaded(track).catch(() => {});
 		}
 		// Catalog refresh is included so a Bridge restart/re-scan naturally gives a
@@ -1981,6 +2075,7 @@ export default function DAW(_props: TabRendererProps) {
 	// Pull native meters/status from Bridge. If Bridge was restarted while YSong
 	// stayed open, a missing instance is automatically recreated from project state.
 	useEffect(() => {
+		const projectId = activeProjectId;
 		const assigned = bridgeAvailable === false ? [] : tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath);
 		if (assigned.length === 0) {
 			vstMetersRef.current = {};
@@ -1991,15 +2086,14 @@ export default function DAW(_props: TabRendererProps) {
 		const poll = async () => {
 			try {
 				const response = await bridgeApi.getVst3Status();
-				if (cancelled) return;
+				if (cancelled || activeProjectRef.current !== projectId) return;
 				const instances = new Map(response.instances.map((instance) => [instance.trackId, instance] as const));
 				const meters: Record<string, number> = {};
 				for (const track of assigned) {
 					const instance = instances.get(track.id);
-					if (instance) {
+					if (instance && instance.pluginPath === track.vst3PluginPath) {
 						meters[track.id] = Math.max(0, instance.peak ?? 0);
 						vstGainReductionRef.current[track.id] = Math.max(0, instance.gainReductionDb ?? 0);
-						vstLoadedRef.current.set(track.id, track.vst3PluginPath!);
 						setVstTrackState((prev) => {
 							const nextStatus = instance.error ? { status: "error" as const, message: instance.error } : { status: "ready" as const };
 							const current = prev[track.id];
@@ -2008,6 +2102,7 @@ export default function DAW(_props: TabRendererProps) {
 						});
 					} else if (vstLoadedRef.current.get(track.id) === track.vst3PluginPath) {
 						vstLoadedRef.current.delete(track.id);
+						vstRestoredRef.current.clear();
 					}
 				}
 				vstMetersRef.current = meters;
@@ -2021,7 +2116,7 @@ export default function DAW(_props: TabRendererProps) {
 		const timer = window.setInterval(() => { void poll(); }, 140);
 		return () => { cancelled = true; window.clearInterval(timer); };
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tracks, bridgeAvailable]);
+	}, [tracks, bridgeAvailable, activeProjectId]);
 
 	useEffect(() => {
 		if (meterRafRef.current != null) cancelAnimationFrame(meterRafRef.current);
@@ -2773,6 +2868,8 @@ export default function DAW(_props: TabRendererProps) {
 		progressiveStemState,
 	});
 	const currentFingerprint = JSON.stringify({ name: projectName, state: buildDawPersistPayload() });
+	const currentPayloadRef = useRef<{ name: string; payload: DawPersistV1 }>({ name: projectName, payload: buildDawPersistPayload() });
+	currentPayloadRef.current = { name: projectName, payload: buildDawPersistPayload() };
 	const projectDirty = hydratedProjectId !== activeProjectId ||
 		persistedSnapshot?.id !== activeProjectId || persistedSnapshot.fingerprint !== currentFingerprint;
 	const saveState = saveError ? "Save failed" : projectDirty ? (isSavingUi ? "Saving…" : "Unsaved changes") : "Saved locally";
@@ -2792,6 +2889,68 @@ export default function DAW(_props: TabRendererProps) {
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : "Could not save to local project storage.");
 			return false;
+		}
+	};
+
+	const captureVstSound = async (track: Track) => {
+		const projectId = activeProjectRef.current;
+		const trackId = track.id;
+		const path = track.vst3PluginPath;
+		const assignmentVersion = vstAssignmentVersionRef.current.get(trackId) ?? 0;
+		if (!dawHydrated || hydratedProjectId !== projectId || !projectId || track.type !== "instrument" || !path || capturePendingRef.current.has(trackId)) return;
+		const matches = () => activeProjectRef.current === projectId &&
+			(vstAssignmentVersionRef.current.get(trackId) ?? 0) === assignmentVersion &&
+			tracksRef.current.some((current) => current.id === trackId && current.type === "instrument" && current.vst3PluginPath === path);
+		capturePendingRef.current.add(trackId);
+		setCapturePending((prev) => ({ ...prev, [trackId]: true }));
+		setVstSoundState((prev) => ({ ...prev, [trackId]: "Capturing current instrument state…" }));
+		try {
+			await ensureVstLoaded(track);
+			if (!matches()) return;
+			if (vstLoadedRef.current.get(trackId) !== path) throw new Error("The matching instrument is not loaded.");
+			const response = await bridgeApi.captureInstrumentSnapshot(trackId, `${track.name} instrument state`);
+			if (!matches()) return;
+			const snapshot = response.snapshot;
+			if (!snapshot.id || snapshot.pluginPath !== path) throw new Error("Bridge captured a different plugin path.");
+			if (!snapshot.hasFullState && snapshot.parameterCount <= 0) throw new Error("Bridge captured no restorable native state or parameters.");
+			const previousTracks = currentPayloadRef.current.payload.tracks;
+			const nextTracks = previousTracks.map((current) => current.id === trackId ? { ...current, vstSnapshot: {
+				id: snapshot.id, pluginPath: snapshot.pluginPath, capturedAt: snapshot.createdAt,
+				hasFullState: snapshot.hasFullState, parameterCount: snapshot.parameterCount,
+			} } : current);
+			const nextPayload = { ...currentPayloadRef.current.payload, tracks: nextTracks };
+			const name = currentPayloadRef.current.name;
+			const projectKey = `ysong:daw:${projectId}`;
+			const nameKey = `ysong:projectName:${projectId}`;
+			const oldProject = localStorage.getItem(projectKey);
+			const oldName = localStorage.getItem(nameKey);
+			try {
+				localStorage.setItem(projectKey, JSON.stringify(nextPayload));
+				localStorage.setItem(nameKey, name);
+				upsertProjectMeta(projectId, name, projectGeneration);
+			} catch (error) {
+				try {
+					if (oldProject === null) localStorage.removeItem(projectKey); else localStorage.setItem(projectKey, oldProject);
+					if (oldName === null) localStorage.removeItem(nameKey); else localStorage.setItem(nameKey, oldName);
+				} catch { /* The prior reference remains in memory if storage itself is unavailable. */ }
+				throw error;
+			}
+			if (!matches()) return;
+			tracksRef.current = nextTracks;
+			setTracks(nextTracks);
+			currentPayloadRef.current = { name, payload: nextPayload };
+			setPersistedSnapshot({ id: projectId, fingerprint: JSON.stringify({ name, state: nextPayload }) });
+			setSaveError(null);
+			for (const key of vstRestoredRef.current) if (key.startsWith(`${projectId}\0${trackId}\0`)) vstRestoredRef.current.delete(key);
+			vstRestoredRef.current.add(`${projectId}\0${trackId}\0${path}\0${assignmentVersion}\0${snapshot.id}`);
+			setVstSoundState((prev) => ({ ...prev, [trackId]: snapshot.hasFullState
+				? "Instrument state captured and saved locally in Bridge; native state was included."
+				: "Instrument state captured and saved locally in Bridge; parameters only, so the sound may differ on reopen." }));
+		} catch (error) {
+			if (matches()) setVstSoundState((prev) => ({ ...prev, [trackId]: `Instrument state was not saved: ${error instanceof Error ? error.message : "Capture or local project save failed."}` }));
+		} finally {
+			capturePendingRef.current.delete(trackId);
+			setCapturePending((prev) => ({ ...prev, [trackId]: false }));
 		}
 	};
 
@@ -2919,6 +3078,10 @@ export default function DAW(_props: TabRendererProps) {
 		projectFileHandleRef.current = handle ?? null;
 		setFxChainTrackId(null);
 		setFxEditorEffectId(null);
+		activeProjectRef.current = id;
+		vstLoadedRef.current.clear();
+		vstRestoredRef.current.clear();
+		setVstSoundState({});
 		setActiveProjectId(id);
 	};
 
@@ -3296,6 +3459,10 @@ export default function DAW(_props: TabRendererProps) {
 			generatedSessionPendingRef.current = staged;
 			generatedSessionTargetProjectRef.current = nextProjectId;
 			try { localStorage.setItem(`ysong:projectName:${nextProjectId}`, staged.projectName || "Generated Song"); } catch {}
+			activeProjectRef.current = nextProjectId;
+			vstLoadedRef.current.clear();
+			vstRestoredRef.current.clear();
+			setVstSoundState({});
 			setActiveProjectId(nextProjectId);
 			return;
 		}
@@ -3306,6 +3473,7 @@ export default function DAW(_props: TabRendererProps) {
 		stop();
 		bridgeApi.unloadAllVst3().catch(() => {});
 		vstLoadedRef.current.clear();
+		vstRestoredRef.current.clear();
 		vstMetersRef.current = {};
 		setVstTrackState({});
 		const nextTracks: Track[] = [];
@@ -4768,7 +4936,8 @@ export default function DAW(_props: TabRendererProps) {
 																<span className="inline-block h-3 w-3 rounded-full border border-amber-200/40 border-t-amber-200 animate-spin" aria-label={`Loading ${t.vst3PluginName ?? "VST3"}`} />
 															) : bridgeAvailable === false ? "PREV" : vstTrackState[t.id]?.status === "error" ? "!" : "VST"}
 														</span>
-														<YSButton disabled={bridgeAvailable === false} className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0 disabled:opacity-35" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={bridgeAvailable === false ? "Desktop VST3 editors are unavailable on this mobile device" : `Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
+												<YSButton disabled={bridgeAvailable === false} className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0 disabled:opacity-35" onClick={(e) => { e.stopPropagation(); void openVstEditor(t); }} title={bridgeAvailable === false ? "Desktop VST3 editors are unavailable on this mobile device" : `Open ${t.vst3PluginName ?? "VST3"} editor`}>Open</YSButton>
+												<YSButton disabled={bridgeAvailable === false || !!capturePending[t.id] || !dawHydrated || hydratedProjectId !== activeProjectId} className="h-7 px-2 py-0 rounded-md text-[9px] shrink-0 disabled:opacity-35" onClick={(e) => { e.stopPropagation(); void captureVstSound(t); }} title="Capture this track's current Bridge instrument sound into a local YSong snapshot and save its reference in the project">{capturePending[t.id] ? "Saving…" : "Save Instrument State"}</YSButton>
 													</>
 												)}
 											</>
@@ -4789,10 +4958,17 @@ export default function DAW(_props: TabRendererProps) {
 												{midiInputDevices.filter((device) => device.enabled).map((device) => <option key={`${device.index}:${device.name}`} value={device.name}>{device.name}</option>)}
 												{t.midiInputName && !midiInputDevices.some((device) => device.enabled && device.name.toLowerCase() === t.midiInputName!.toLowerCase()) && <option value={t.midiInputName}>{t.midiInputName} (offline)</option>}
 											</select>
-										</div>
-									) : (
-										<div className="w-full mt-1 h-6 flex items-center text-[9px] opacity-35">Native MIDI routing applies to instrument tracks</div>
-									)}
+									</div>
+								) : (
+									<div className="w-full mt-1 h-6 flex items-center text-[9px] opacity-35">Native MIDI routing applies to instrument tracks</div>
+								)}
+								{t.type === "instrument" && t.vst3PluginPath && (
+									<div className="mt-1 text-[9px] opacity-75 truncate" role="status" title={vstSoundState[t.id]}>
+										{bridgeAvailable === false ? "Bridge offline; saved instrument state cannot be restored or captured here." : vstSoundState[t.id] ?? (t.vstSnapshot
+											? `Bridge snapshot ${t.vstSnapshot.id} referenced locally; current sound is unconfirmed.`
+											: "No saved instrument state. Project saves do not capture VST changes.")}
+									</div>
+								)}
 
 									<div className="w-full mt-1 flex items-center gap-2 min-w-0">
 										<span className="text-[9px] opacity-55 shrink-0">Vol</span>
@@ -5749,6 +5925,7 @@ export default function DAW(_props: TabRendererProps) {
 								</div>
 								{saveError && <div className="mt-1 text-xs text-red-300">Local save failed: {saveError}</div>}
 								<YSButton className="mt-2 px-3 py-1 rounded-lg text-xs" disabled={!dawHydrated || hydratedProjectId !== activeProjectId} onClick={() => { setIsSavingUi(true); persistCurrentProject(); setIsSavingUi(false); }}>Save locally</YSButton>
+								<p className="mt-2 text-[11px] opacity-65">Save locally stores the project only. Use Save Instrument State on each VST track to capture its live sound. Snapshot payloads stay in Bridge on this machine and user profile; .ysong files carry only their references.</p>
 							</div>
 
 							<div className="mt-4 flex flex-wrap gap-2">

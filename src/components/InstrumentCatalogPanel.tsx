@@ -173,10 +173,10 @@ export default function InstrumentCatalogPanel({ open, onClose, selectedTrack, t
 		if (transportPlaying) { setStatus("Stop DAW playback before capturing complete plug-in state."); return; }
 		setBusy("snapshot");
 		try {
-			await bridgeApi.captureInstrumentSnapshot(targetTrack.id, snapshotName.trim() || `${selected?.name ?? "Instrument"} Snapshot`, splitDesired(snapshotTags));
+			const captured = await bridgeApi.captureInstrumentSnapshot(targetTrack.id, snapshotName.trim() || `${selected?.name ?? "Instrument"} Snapshot`, splitDesired(snapshotTags));
 			const result = selected ? await bridgeApi.getInstrumentPresets(selected.id) : null;
 			if (result) setPresets(result.presets ?? []);
-			setStatus("Snapshot captured. Full plug-in state is preserved with a parameter fallback.");
+			setStatus(`Snapshot captured in Bridge (${captured.snapshot.hasFullState ? "native state included" : captured.snapshot.parameterCount > 0 ? "parameters only" : "no restorable state reported"}). Use Save Instrument State on the DAW track to link its current sound to the project.`);
 		} catch (error) { setStatus(messageOf(error, "Could not capture snapshot.")); }
 		finally { setBusy(null); }
 	};
