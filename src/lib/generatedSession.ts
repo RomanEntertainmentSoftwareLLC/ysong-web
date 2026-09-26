@@ -59,6 +59,7 @@ export type GeneratedSongSection = {
 
 export type GeneratedSessionManifest = {
   v: 1;
+  sessionId?: string;
   createdAt: number;
   projectName: string;
   bpm: number;

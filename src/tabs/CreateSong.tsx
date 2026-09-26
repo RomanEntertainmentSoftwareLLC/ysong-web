@@ -329,7 +329,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
         completed.push({ ...track, objectKey: uploaded.objectKey, durationSec });
       }
 
-      const manifest: GeneratedSessionManifest = { v: 1, createdAt: Date.now(), ...activePlan, tracks: completed };
+      const manifest: GeneratedSessionManifest = { v: 1, sessionId: crypto.randomUUID(), createdAt: Date.now(), ...activePlan, tracks: completed };
       stageGeneratedSession(manifest);
       setProgress("Session generated. Opening the editable YSong project…");
       const existingDaw = tabs.find((t) => t.type === "daw");

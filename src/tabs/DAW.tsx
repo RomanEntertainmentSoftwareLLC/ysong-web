@@ -537,8 +537,15 @@ function gridStepBars(v: GridValue, sigNum: number, sigDen: number) {
 }
 
 export default function DAW(_props: TabRendererProps) {
+	type GeneratedProjectProvenance = {
+		origin: "create-song";
+		sessionId: string;
+		createdAt: number;
+		title: string;
+	};
 	type DawPersistV1 = {
 		v: 1;
+		generation?: GeneratedProjectProvenance;
 		tracks: Track[];
 		clips: Clip[];
 		projectAssets: ProjectAsset[];
@@ -669,6 +676,7 @@ export default function DAW(_props: TabRendererProps) {
 			return "Untitled Project";
 		}
 	});
+	const [projectGeneration, setProjectGeneration] = useState<GeneratedProjectProvenance | undefined>();
 	const [projectSheetOpen, setProjectSheetOpen] = useState(false);
 	const [fileMenuOpen, setFileMenuOpen] = useState(false);
 	const fileMenuRef = useRef<HTMLDivElement | null>(null);
@@ -728,7 +736,7 @@ export default function DAW(_props: TabRendererProps) {
 		// IMPORTANT: clips are allowed to extend past E. Never move E automatically.
 	}, [clips, loopR, playheadPosBars, endBar]);
 
-	type ProjectMeta = { id: string; name: string; updatedAt: number };
+	type ProjectMeta = { id: string; name: string; updatedAt: number; generation?: GeneratedProjectProvenance };
 
 	const readProjects = (): ProjectMeta[] => {
 		try {
@@ -741,10 +749,10 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	};
 
-	const upsertProjectMeta = (id: string, name: string) => {
+	const upsertProjectMeta = (id: string, name: string, generation?: GeneratedProjectProvenance) => {
 		const list = readProjects();
 		const now = Date.now();
-		const next = [{ id, name, updatedAt: now }, ...list.filter((p) => p.id !== id)].slice(0, 30);
+		const next = [{ id, name, updatedAt: now, ...(generation ? { generation } : {}) }, ...list.filter((p) => p.id !== id)].slice(0, 30);
 		localStorage.setItem(PROJECTS_KEY, JSON.stringify(next));
 	};
 
@@ -2663,6 +2671,7 @@ export default function DAW(_props: TabRendererProps) {
 		const data = safeParse<DawPersistV1>(stored);
 		if (!data || data.v !== 1) {
 			// New/empty project: reset to defaults
+			setProjectGeneration(undefined);
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 			rafRef.current = null;
 			setIsPlaying(false);
@@ -2699,6 +2708,7 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 
 		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), mixer: normalizeMixerStrip(t.mixer) }));
+		setProjectGeneration(data.generation?.origin === "create-song" ? data.generation : undefined);
 		setTracks(restoredTracks);
 		setClips(data.clips ?? []);
 		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
@@ -2738,6 +2748,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	const buildDawPersistPayload = (): DawPersistV1 => ({
 		v: 1,
+		...(projectGeneration ? { generation: projectGeneration } : {}),
 		tracks,
 		clips,
 		projectAssets: projectAssets.map(normalizeProjectAssetForPersist),
@@ -2773,7 +2784,7 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			localStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(buildDawPersistPayload()));
 			localStorage.setItem(PROJECT_NAME_KEY, projectName);
-			upsertProjectMeta(activeProjectId, projectName);
+			upsertProjectMeta(activeProjectId, projectName, projectGeneration);
 			setPersistedSnapshot({ id: activeProjectId, fingerprint: currentFingerprint });
 			setSaveError(null);
 			return true;
@@ -2885,7 +2896,7 @@ export default function DAW(_props: TabRendererProps) {
 		};
 		localStorage.setItem(`ysong:daw:${id}`, JSON.stringify(state));
 		localStorage.setItem(`ysong:projectName:${id}`, name);
-		upsertProjectMeta(id, name);
+		upsertProjectMeta(id, name, state.generation?.origin === "create-song" ? state.generation : undefined);
 		projectFileHandleRef.current = handle ?? null;
 		setFxChainTrackId(null);
 		setFxEditorEffectId(null);
@@ -3327,6 +3338,12 @@ export default function DAW(_props: TabRendererProps) {
 		bpmRef.current = manifest.bpm; sigNumRef.current = manifest.sigNum; sigDenRef.current = manifest.sigDen;
 		setBpm(manifest.bpm); setSigNum(manifest.sigNum); setSigDen(manifest.sigDen);
 		setProjectName(manifest.projectName || "Generated Song");
+		setProjectGeneration({
+			origin: "create-song",
+			sessionId: manifest.sessionId || crypto.randomUUID(),
+			createdAt: manifest.createdAt,
+			title: manifest.projectName || "Generated Song",
+		});
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));
 		setEndBar(Math.min(MAX_BARS, Math.max(2, manifest.totalBars + 1)));
