@@ -14,12 +14,30 @@ import {
 import { listBandProfiles, setActiveBandId, type BandProfile } from "../lib/bandLibrary";
 
 const EMPTY: WorldLibrary = { tracks: [], releases: [], artists: [], playlists: [], savedPlaylists: [], uploads: [] };
-type Section = "all" | "saved" | "albums" | "artists" | "bands" | "playlists" | "uploads";
+type Section = "all" | "generated" | "saved" | "albums" | "artists" | "bands" | "playlists" | "uploads";
+type GeneratedProject = { id: string; name: string; updatedAt: number; generation: { origin: "create-song"; sessionId: string; createdAt: number; title: string } };
+
+function readGeneratedProjects(): GeneratedProject[] {
+  try {
+    const catalog: unknown = JSON.parse(localStorage.getItem("ysong:projects:v1") || "[]");
+    if (!Array.isArray(catalog)) return [];
+    return catalog.filter((item): item is GeneratedProject =>
+      item && typeof item.id === "string" && item.id.length > 0 &&
+      typeof item.name === "string" && typeof item.updatedAt === "number" &&
+      item.generation?.origin === "create-song" &&
+      typeof item.generation.sessionId === "string" &&
+      Number.isFinite(item.generation.createdAt) &&
+      typeof item.generation.title === "string"
+    ).sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch { return []; }
+}
 
 export default function LibraryPane() {
-  const { tabs, openTab, activateTab } = useTabManager();
+  const { tabs, openTab, activateTab, updateTab } = useTabManager();
   const [data, setData] = useState<WorldLibrary>(EMPTY);
   const [bands, setBands] = useState<BandProfile[]>([]);
+  const [generatedProjects, setGeneratedProjects] = useState(readGeneratedProjects);
+  const [selectedGeneratedId, setSelectedGeneratedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [section, setSection] = useState<Section>("all");
@@ -38,6 +56,12 @@ export default function LibraryPane() {
 
   useEffect(() => { void loadWorld(); void loadBands(); }, []);
   useEffect(() => {
+    const refresh = () => setGeneratedProjects(readGeneratedProjects());
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", refresh);
+    return () => { window.removeEventListener("focus", refresh); window.removeEventListener("storage", refresh); };
+  }, []);
+  useEffect(() => {
     const world = () => void loadWorld(); const local = () => void loadBands();
     window.addEventListener("ysong:library-changed", world);
     window.addEventListener("ysong:bands-changed", local);
@@ -54,6 +78,16 @@ export default function LibraryPane() {
     const existing = tabs.find((t) => t.type === "band");
     if (existing) activateTab(existing.id); else openTab({ type: "band", title: "Band Creation", pinned: true });
     window.setTimeout(() => window.dispatchEvent(new CustomEvent("ysong:band-open", { detail: { id } })), 60);
+  };
+  const viewGeneratedInDaw = (id: string) => {
+    const request = { id, requestId: crypto.randomUUID() };
+    const existing = tabs.find((t) => t.type === "daw");
+    if (existing) {
+      updateTab(existing.id, { payload: { ...existing.payload, localProjectOpenRequest: request } });
+      activateTab(existing.id);
+    } else {
+      openTab({ type: "daw", title: "DAW", pinned: true, payload: { localProjectOpenRequest: request } });
+    }
   };
   const newBand = () => {
     setActiveBandId(null);
@@ -86,24 +120,25 @@ export default function LibraryPane() {
 
   const counts = useMemo(() => ({
     all: allMusic.length,
+    generated: generatedProjects.length,
     saved: data.tracks.length,
     albums: data.releases.length,
     artists: data.artists.length,
     bands: bands.length,
     playlists: data.playlists.length + data.savedPlaylists.length,
     uploads: data.uploads.length,
-  }), [allMusic.length, data, bands]);
+  }), [allMusic.length, data, bands, generatedProjects.length]);
 
   return <div className="h-full min-h-0 overflow-y-auto bg-neutral-950 text-neutral-100">
     <div className="p-4 md:p-6 pb-28 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-6"><div><div className="text-xs uppercase tracking-[.22em] text-indigo-300">Everything you kept</div><h1 className="text-3xl font-semibold mt-1">Your Library</h1><p className="text-sm text-neutral-400 mt-1">Saved music, artists, bands, playlists and your own uploads.</p></div><div className="flex flex-wrap gap-2"><YSButton onClick={newBand} className="rounded-xl border border-fuchsia-400/30 px-4 py-2">+ New Band</YSButton><YSButton onClick={() => setCreating((v) => !v)} className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2">+ New Playlist</YSButton><YSButton onClick={() => openWorld()} className="rounded-xl border border-neutral-700 px-4 py-2">Explore World</YSButton></div></div>
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-6"><div><div className="text-xs uppercase tracking-[.22em] text-indigo-300">Everything you kept</div><h1 className="text-3xl font-semibold mt-1">Your Library</h1><p className="text-sm text-neutral-400 mt-1">Saved music, local generated sessions, artists, bands, playlists and your own uploads.</p></div><div className="flex flex-wrap gap-2"><YSButton onClick={newBand} className="rounded-xl border border-fuchsia-400/30 px-4 py-2">+ New Band</YSButton><YSButton onClick={() => setCreating((v) => !v)} className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2">+ New Playlist</YSButton><YSButton onClick={() => openWorld()} className="rounded-xl border border-neutral-700 px-4 py-2">Explore World</YSButton></div></div>
 
       {creating && <div className="mb-6 rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 grid gap-3"><div className="font-semibold">Create playlist</div><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Playlist title" className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-indigo-400" /><textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" rows={2} className="rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 outline-none focus:border-indigo-400 resize-y" /><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} /> Public playlist</label><div className="flex gap-2"><YSButton onClick={createPlaylist} className="rounded-lg bg-indigo-600 px-4 py-2">Create</YSButton><YSButton onClick={() => setCreating(false)} className="rounded-lg border border-neutral-700 px-4 py-2">Cancel</YSButton></div></div>}
 
-      <div className="flex gap-2 overflow-x-auto pb-2 mb-5 no-scrollbar">{(["all","saved","uploads","albums","artists","bands","playlists"] as Section[]).map((key) => <button key={key} onClick={() => setSection(key)} className={`shrink-0 rounded-full px-4 py-2 text-sm border ${section === key ? "bg-white text-black border-white" : "border-neutral-700 hover:bg-neutral-900"}`}>{label(key)} <span className="opacity-60">{counts[key]}</span></button>)}</div>
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-5 no-scrollbar">{(["all","generated","saved","uploads","albums","artists","bands","playlists"] as Section[]).map((key) => <button key={key} onClick={() => setSection(key)} className={`shrink-0 rounded-full px-4 py-2 text-sm border ${section === key ? "bg-white text-black border-white" : "border-neutral-700 hover:bg-neutral-900"}`}>{label(key)} <span className="opacity-60">{counts[key]}</span></button>)}</div>
 
       {error && <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div>}
-      {section === "bands" ? <BandsSection bands={bands} onOpen={openBand} onNew={newBand} /> : loading ? <div className="text-neutral-400">Loading your library…</div> : <>
+      {section === "generated" ? <GeneratedSessions projects={generatedProjects} selectedId={selectedGeneratedId} onSelect={setSelectedGeneratedId} onView={viewGeneratedInDaw} /> : section === "bands" ? <BandsSection bands={bands} onOpen={openBand} onNew={newBand} /> : loading ? <div className="text-neutral-400">Loading your library…</div> : <>
         {section === "all" && <TrackListEmptyAware tracks={allMusic} empty="Your saved songs and YSong uploads will appear here." onOpen={(id) => openWorld("track", id)} />}
         {section === "saved" && <TrackListEmptyAware tracks={data.tracks} empty="Songs you save in YSong World will appear here." onOpen={(id) => openWorld("track", id)} />}
         {section === "albums" && (data.releases.length ? <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{data.releases.map((r) => <button key={r.id} onClick={() => openWorld("release", r.id)} className="text-left min-w-0"><Cover trackId={r.coverTrackId} /><div className="font-medium text-sm mt-2 truncate">{r.title}</div><div className="text-xs text-neutral-400 truncate">{r.artistName}</div></button>)}</div> : <Empty text="Albums and releases you save will appear here." />)}
@@ -115,7 +150,21 @@ export default function LibraryPane() {
   </div>;
 }
 
-function label(section: Section) { return ({ all:"All Music", saved:"Saved Songs", albums:"Albums", artists:"Artists", bands:"Bands", playlists:"Playlists", uploads:"Your Uploads" } as const)[section]; }
+function label(section: Section) { return ({ all:"All Music", generated:"Generated Sessions", saved:"Saved Songs", albums:"Albums", artists:"Artists", bands:"Bands", playlists:"Playlists", uploads:"Your Uploads" } as const)[section]; }
+function GeneratedSessions({ projects, selectedId, onSelect, onView }: { projects: GeneratedProject[]; selectedId: string | null; onSelect: (id: string) => void; onView: (id: string) => void }) {
+  if (!projects.length) return <Empty text="Whole-song sessions saved locally from Create Song will appear here." />;
+  return <div>
+    <p className="mb-3 text-xs text-neutral-500">On this browser only · Recent local projects</p>
+    <div className="rounded-2xl border border-neutral-800 overflow-hidden">{projects.map((project) => <div key={project.id} className="border-b last:border-0 border-neutral-800">
+      <button type="button" onClick={() => onSelect(project.id)} aria-expanded={selectedId === project.id} className={`w-full text-left p-3 hover:bg-neutral-900 ${selectedId === project.id ? "bg-neutral-900" : ""}`}>
+        <div className="flex justify-between gap-3"><span className="font-medium truncate">{project.name || "Untitled Project"}</span><span className="text-xs text-indigo-300 shrink-0">Generated session</span></div>
+        <div className="text-xs text-neutral-500 mt-1 truncate">{project.generation.title && project.generation.title !== project.name ? `${project.generation.title} · ` : ""}{new Date(project.generation.createdAt).toLocaleString()}</div>
+        <div className="text-[11px] text-neutral-600 mt-1 break-all">Local project ID: {project.id}</div>
+      </button>
+      {selectedId === project.id && <div className="px-3 pb-3"><button type="button" onClick={() => onView(project.id)} className="rounded-lg border border-indigo-400/50 px-3 py-2 text-sm text-indigo-200 hover:bg-indigo-500/10">View in DAW</button></div>}
+    </div>)}</div>
+  </div>;
+}
 function Cover({ trackId }: { trackId?: string | null }) { return trackId ? <img src={worldArtworkUrl(trackId)} alt="" className="w-full aspect-square rounded-xl object-cover bg-neutral-900" /> : <div className="w-full aspect-square rounded-xl bg-gradient-to-br from-neutral-800 to-neutral-950 grid place-items-center text-neutral-600 text-3xl">♪</div>; }
 function Empty({ text }: { text: string }) { return <div className="rounded-2xl border border-dashed border-neutral-700 p-10 text-center text-neutral-400">{text}</div>; }
 

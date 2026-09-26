@@ -706,6 +706,7 @@ export default function DAW(_props: TabRendererProps) {
 	const [hydratedProjectId, setHydratedProjectId] = useState<string | null>(null);
 	const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
 	const [switchError, setSwitchError] = useState<string | null>(null);
+	const handledLocalOpenRequestRef = useRef<string | null>(null);
 	const autosaveTimerRef = useRef<number | null>(null);
 
 	// --- Markers (bars are 1..BARS) ---
@@ -2801,6 +2802,7 @@ export default function DAW(_props: TabRendererProps) {
 		try { stored = safeParse<DawPersistV1>(localStorage.getItem(`ysong:daw:${id}`)); } catch { /* Missing or inaccessible storage is an invalid target. */ }
 		if (!known || stored?.v !== 1) {
 			setSwitchError("That local project is missing or cannot be opened.");
+			setProjectSheetOpen(true);
 			return;
 		}
 		if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
@@ -2810,6 +2812,22 @@ export default function DAW(_props: TabRendererProps) {
 		if (projectDirty || saveError) setPendingProjectId(id);
 		else loadProject(id);
 	};
+
+	const localOpenRequest = _props.tab.payload?.localProjectOpenRequest as { id?: unknown; requestId?: unknown } | undefined;
+	useEffect(() => {
+		if (!dawHydrated || hydratedProjectId !== activeProjectId ||
+			typeof localOpenRequest?.requestId !== "string" ||
+			handledLocalOpenRequestRef.current === localOpenRequest.requestId) return;
+		handledLocalOpenRequestRef.current = localOpenRequest.requestId;
+		if (typeof localOpenRequest.id !== "string" || !localOpenRequest.id) {
+			setSwitchError("That local project is missing or cannot be opened.");
+			setProjectSheetOpen(true);
+			return;
+		}
+		requestOpenLocalProject(localOpenRequest.id);
+	// The request token is the event identity. State changes while a switch is pending must not replay it.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [localOpenRequest?.requestId, dawHydrated, hydratedProjectId, activeProjectId]);
 
 	const confirmOpenLocalProject = (saveFirst: boolean) => {
 		const id = pendingProjectId;
@@ -2821,6 +2839,7 @@ export default function DAW(_props: TabRendererProps) {
 		if (!readProjects().some((project) => project.id === id) || stored?.v !== 1) {
 			setSwitchError("That local project is missing or cannot be opened.");
 			setPendingProjectId(null);
+			setProjectSheetOpen(true);
 			return;
 		}
 		loadProject(id);
