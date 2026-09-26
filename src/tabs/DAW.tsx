@@ -689,7 +689,12 @@ export default function DAW(_props: TabRendererProps) {
 	const [generatedSessionRevision, setGeneratedSessionRevision] = useState(0);
 	const exportSampleRate = 48000;
 	const [isSavingUi, setIsSavingUi] = useState(false);
-	const projectDirty = false; // placeholder until cloud project persistence
+	const [persistedSnapshot, setPersistedSnapshot] = useState<{ id: string; fingerprint: string } | null>(null);
+	const [saveError, setSaveError] = useState<string | null>(null);
+	const [hydratedProjectId, setHydratedProjectId] = useState<string | null>(null);
+	const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
+	const [switchError, setSwitchError] = useState<string | null>(null);
+	const autosaveTimerRef = useRef<number | null>(null);
 
 	// --- Markers (bars are 1..BARS) ---
 	const [playheadPosBars, setPlayheadPosBars] = useState(1); // float bars (1.0 = bar 1)
@@ -719,32 +724,24 @@ export default function DAW(_props: TabRendererProps) {
 		// IMPORTANT: clips are allowed to extend past E. Never move E automatically.
 	}, [clips, loopR, playheadPosBars, endBar]);
 
-	// Keep name persisted
-	useEffect(() => {
-		try {
-			localStorage.setItem(PROJECT_NAME_KEY, projectName);
-		} catch {}
-	}, [PROJECT_NAME_KEY, projectName]);
-
 	type ProjectMeta = { id: string; name: string; updatedAt: number };
 
 	const readProjects = (): ProjectMeta[] => {
 		try {
 			const raw = localStorage.getItem(PROJECTS_KEY);
 			const parsed = raw ? (JSON.parse(raw) as ProjectMeta[]) : [];
-			return Array.isArray(parsed) ? parsed : [];
+			return Array.isArray(parsed) ? parsed.filter((item): item is ProjectMeta =>
+				!!item && typeof item.id === "string" && item.id.length > 0 && typeof item.name === "string" && typeof item.updatedAt === "number") : [];
 		} catch {
 			return [];
 		}
 	};
 
 	const upsertProjectMeta = (id: string, name: string) => {
-		try {
-			const list = readProjects();
-			const now = Date.now();
-			const next = [{ id, name, updatedAt: now }, ...list.filter((p) => p.id !== id)].slice(0, 30);
-			localStorage.setItem(PROJECTS_KEY, JSON.stringify(next));
-		} catch {}
+		const list = readProjects();
+		const now = Date.now();
+		const next = [{ id, name, updatedAt: now }, ...list.filter((p) => p.id !== id)].slice(0, 30);
+		localStorage.setItem(PROJECTS_KEY, JSON.stringify(next));
 	};
 
 	useEffect(() => {
@@ -797,6 +794,13 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const loadProject = (id: string) => {
+		if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
+		autosaveTimerRef.current = null;
+		setHydratedProjectId(null);
+		setPersistedSnapshot(null);
+		setSaveError(null);
+		setPendingProjectId(null);
+		setSwitchError(null);
 		projectFileHandleRef.current = null;
 		setFxChainTrackId(null);
 		setFxEditorEffectId(null);
@@ -2638,7 +2642,18 @@ export default function DAW(_props: TabRendererProps) {
 
 	useEffect(() => {
 		setDawHydrated(false);
-		const data = safeParse<DawPersistV1>(localStorage.getItem(DAW_STORAGE_KEY));
+		setHydratedProjectId(null);
+		setPersistedSnapshot(null);
+		setSaveError(null);
+		let stored: string | null = null;
+		let storedName = "Untitled Project";
+		try {
+			stored = localStorage.getItem(DAW_STORAGE_KEY);
+			storedName = localStorage.getItem(PROJECT_NAME_KEY) || storedName;
+		} catch (error) {
+			setSaveError(error instanceof Error ? error.message : "Could not read local project storage.");
+		}
+		const data = safeParse<DawPersistV1>(stored);
 		if (!data || data.v !== 1) {
 			// New/empty project: reset to defaults
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -2666,6 +2681,7 @@ export default function DAW(_props: TabRendererProps) {
 			setSigNum(4);
 			setSigDen(4);
 			setMasterLevel(100);
+			setHydratedProjectId(activeProjectId);
 			setDawHydrated(true);
 			return;
 		}
@@ -2707,6 +2723,8 @@ export default function DAW(_props: TabRendererProps) {
 		setSigNum(data.sigNum ?? 4);
 		setSigDen(data.sigDen ?? 4);
 		setMasterLevel(clamp(data.masterLevel ?? 100, 0, 127));
+		setPersistedSnapshot({ id: activeProjectId, fingerprint: JSON.stringify({ name: storedName, state: data }) });
+		setHydratedProjectId(activeProjectId);
 		setDawHydrated(true);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [DAW_STORAGE_KEY]);
@@ -2735,6 +2753,60 @@ export default function DAW(_props: TabRendererProps) {
 		approvedComposerArrangement,
 		progressiveStemState,
 	});
+	const currentFingerprint = JSON.stringify({ name: projectName, state: buildDawPersistPayload() });
+	const projectDirty = hydratedProjectId !== activeProjectId ||
+		persistedSnapshot?.id !== activeProjectId || persistedSnapshot.fingerprint !== currentFingerprint;
+	const saveState = saveError ? "Save failed" : projectDirty ? (isSavingUi ? "Saving…" : "Unsaved changes") : "Saved locally";
+
+	const persistCurrentProject = (): boolean => {
+		if (!dawHydrated || hydratedProjectId !== activeProjectId) {
+			setSaveError("The project is still opening. Try saving again in a moment.");
+			return false;
+		}
+		try {
+			localStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(buildDawPersistPayload()));
+			localStorage.setItem(PROJECT_NAME_KEY, projectName);
+			upsertProjectMeta(activeProjectId, projectName);
+			setPersistedSnapshot({ id: activeProjectId, fingerprint: currentFingerprint });
+			setSaveError(null);
+			return true;
+		} catch (error) {
+			setSaveError(error instanceof Error ? error.message : "Could not save to local project storage.");
+			return false;
+		}
+	};
+
+	const requestOpenLocalProject = (id: string) => {
+		if (id === activeProjectId) { setProjectSheetOpen(false); return; }
+		const known = readProjects().some((project) => project.id === id);
+		let stored: DawPersistV1 | null = null;
+		try { stored = safeParse<DawPersistV1>(localStorage.getItem(`ysong:daw:${id}`)); } catch { /* Missing or inaccessible storage is an invalid target. */ }
+		if (!known || stored?.v !== 1) {
+			setSwitchError("That local project is missing or cannot be opened.");
+			return;
+		}
+		if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
+		autosaveTimerRef.current = null;
+		setIsSavingUi(false);
+		setSwitchError(null);
+		if (projectDirty || saveError) setPendingProjectId(id);
+		else loadProject(id);
+	};
+
+	const confirmOpenLocalProject = (saveFirst: boolean) => {
+		const id = pendingProjectId;
+		if (!id) return;
+		if (saveFirst && !persistCurrentProject()) return;
+		// Recheck the target because browser storage can change while the dialog is open.
+		let stored: DawPersistV1 | null = null;
+		try { stored = safeParse<DawPersistV1>(localStorage.getItem(`ysong:daw:${id}`)); } catch { /* Missing or inaccessible storage is an invalid target. */ }
+		if (!readProjects().some((project) => project.id === id) || stored?.v !== 1) {
+			setSwitchError("That local project is missing or cannot be opened.");
+			setPendingProjectId(null);
+			return;
+		}
+		loadProject(id);
+	};
 
 	type YSongProjectFileV1 = {
 		format: "YSong Project";
@@ -2882,24 +2954,26 @@ export default function DAW(_props: TabRendererProps) {
 		// the restore Effect and other mount Effects run from the same initial commit;
 		// persisting before hydration can overwrite the saved selection/project with
 		// transient defaults before React has committed the restored state.
-		if (!dawHydrated) return;
-
-		const payload = buildDawPersistPayload();
-
+		if (!dawHydrated || hydratedProjectId !== activeProjectId || pendingProjectId) return;
+		if (!projectDirty && !saveError) return;
 		setIsSavingUi(true);
-		const t = window.setTimeout(() => {
-			try {
-				localStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(payload));
-				upsertProjectMeta(activeProjectId, projectName);
-			} catch {
-				// ignore quota / serialization issues for now
-			}
+		autosaveTimerRef.current = window.setTimeout(() => {
+			autosaveTimerRef.current = null;
+			persistCurrentProject();
 			setIsSavingUi(false);
 		}, 150);
 
-		return () => window.clearTimeout(t);
+		return () => {
+			if (autosaveTimerRef.current != null) window.clearTimeout(autosaveTimerRef.current);
+			autosaveTimerRef.current = null;
+		};
+		// A failed write stays failed until another edit or an explicit save; retrying on saveError would loop.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [
 		dawHydrated,
+		hydratedProjectId,
+		activeProjectId,
+		pendingProjectId,
 		DAW_STORAGE_KEY,
 		tracks,
 		clips,
@@ -4509,8 +4583,8 @@ export default function DAW(_props: TabRendererProps) {
 							{trackPanelOpen && (
 								<>
 									<div
-										className={`w-2 h-2 rounded-full ${projectDirty ? "bg-amber-400" : "bg-emerald-400/60"}`}
-										title={isSavingUi ? "Saving…" : projectDirty ? "Unsaved" : "Saved"}
+										className={`w-2 h-2 rounded-full ${saveError ? "bg-red-400" : projectDirty ? "bg-amber-400" : "bg-emerald-400/60"}`}
+										title={saveState}
 									/>
 									<button
 										type="button"
@@ -5623,10 +5697,12 @@ export default function DAW(_props: TabRendererProps) {
 									placeholder="Untitled Project"
 								/>
 								<div className="mt-1 text-[11px] opacity-60 flex items-center gap-2">
-									<span>{isSavingUi ? "Saving…" : "Autosaved"}</span>
+									<span className={saveError ? "text-red-300" : ""} title={saveError || undefined}>{saveState}</span>
 									<span className="opacity-40">•</span>
 									<span className="opacity-60">{activeProjectId.slice(0, 8)}</span>
 								</div>
+								{saveError && <div className="mt-1 text-xs text-red-300">Local save failed: {saveError}</div>}
+								<YSButton className="mt-2 px-3 py-1 rounded-lg text-xs" disabled={!dawHydrated || hydratedProjectId !== activeProjectId} onClick={() => { setIsSavingUi(true); persistCurrentProject(); setIsSavingUi(false); }}>Save locally</YSButton>
 							</div>
 
 							<div className="mt-4 flex flex-wrap gap-2">
@@ -5665,7 +5741,7 @@ export default function DAW(_props: TabRendererProps) {
 													className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 hover:bg-neutral-100/5 ${
 														p.id === activeProjectId ? "bg-neutral-100/5" : ""
 													}`}
-													onClick={() => loadProject(p.id)}
+													onClick={() => requestOpenLocalProject(p.id)}
 													title="Load project"
 												>
 													<div className="min-w-0">
@@ -5683,11 +5759,25 @@ export default function DAW(_props: TabRendererProps) {
 											))
 									)}
 								</div>
+								{switchError && <div className="mt-2 text-xs text-red-300" role="alert">{switchError}</div>}
 							</div>
 						</div>
 					</div>,
 					document.body,
 				)}
+			{pendingProjectId && createPortal(
+				<div className="fixed inset-0 z-[210] flex items-end sm:items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Open local project">
+					<div className="w-full max-w-md rounded-2xl border border-white/20 bg-neutral-950 p-5 shadow-2xl">
+						<div className="text-base font-semibold">Open another project?</div>
+						<p className="mt-2 text-sm opacity-80">Current changes are not confirmed saved locally. Earlier autosaves may already be stored. Opening without saving skips only the final save.</p>
+						{saveError && <p className="mt-2 text-xs text-red-300" role="alert">Local save failed: {saveError}</p>}
+						<div className="mt-5 flex flex-wrap justify-end gap-2">
+							<YSButton className="px-3 py-2 rounded-lg" onClick={() => { setPendingProjectId(null); setSwitchError(null); }}>Cancel</YSButton>
+							<YSButton className="px-3 py-2 rounded-lg" onClick={() => confirmOpenLocalProject(false)}>Open Without Saving</YSButton>
+							<YSButton className="px-3 py-2 rounded-lg" onClick={() => confirmOpenLocalProject(true)}>Save and Open</YSButton>
+						</div>
+					</div>
+				</div>, document.body)}
 		</div>
 	);
 }
