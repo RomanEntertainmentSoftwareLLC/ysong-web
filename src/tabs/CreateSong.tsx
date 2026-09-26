@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { TabRendererProps } from "./core";
 import { useTabManager } from "./core";
 import { localAiChat } from "../lib/localAiApi";
-import { bridgeApi, type BridgePlugin } from "../lib/bridgeApi";
+import { bridgeApi, type BridgePlugin, type InstrumentRoleIntent } from "../lib/bridgeApi";
 import { getActiveBandId, listBandProfiles, setActiveBandId, type BandProfile } from "../lib/bandLibrary";
 import { SCALE_DEFINITIONS, NOTE_NAMES, nearestAllowedPitch, type MidiScaleId, type MidiScaleRule } from "../lib/midi";
 import { decodeAudioDuration, generateMiniMaxTrack, getMusicEngineStatus, uploadGeneratedAudio, type MusicEngineStatus } from "../lib/musicGeneration";
@@ -79,6 +79,25 @@ function normalizeMidiRegions(raw: unknown, scaleRule: MidiScaleRule, totalBars:
   }).filter((region) => region.notes.length > 0).map(({ _regionIndex: _ignored, ...region }) => region);
 }
 
+function normalizedText(raw: unknown, limit = 120): string | undefined {
+  return typeof raw === "string" ? raw.trim().replace(/\s+/g, " ").slice(0, limit) || undefined : undefined;
+}
+
+function normalizeInstrumentIntent(raw: unknown): InstrumentRoleIntent | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const concept = (input: unknown) => {
+    const first = normalizedText(input)?.toLowerCase().split(/[\s,;/|]+/).find((part) => part.length > 1);
+    return first === "ambience" ? "ambient" : first;
+  };
+  const intent = {
+    family: concept(value.family),
+    role: concept(value.role),
+    timbre: concept(value.timbre),
+  };
+  return Object.values(intent).some(Boolean) ? intent : undefined;
+}
+
 function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDraft {
   const explicitBpm = Number(draft.bpm);
   const bpm = Number.isFinite(explicitBpm) && explicitBpm >= 20 ? Math.round(explicitBpm) : Math.round(numberIn(raw?.bpm, 120, 20, 400));
@@ -94,9 +113,9 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
     const requestedMode = track?.mode === "midi" ? "midi" : "audio";
     const requestedPath = String(track?.vst?.path || "");
     const catalog = requestedPath ? pluginByPath.get(requestedPath) : undefined;
-    // For generated sessions, missing/imaginary VSTs never fall back to GM. The
-    // quality-preserving fallback is a separately generated audio track.
-    const mode: "audio" | "midi" = requestedMode === "midi" && catalog ? "midi" : "audio";
+    // Keep MIDI candidates until Bridge has had a chance to resolve their intent.
+    // The later resolution step retains the existing audio fallback when needed.
+    const mode: "audio" | "midi" = requestedMode;
     const instructions = String(track?.instructions || `${track?.role || track?.name || "Music part"} isolated stem`).trim();
     const result: GeneratedSessionTrack = {
       id: safeId(track?.id, `track-${index + 1}`),
@@ -106,12 +125,15 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
       instructions,
       useLyrics: !draft.instrumental && Boolean(track?.useLyrics),
     };
-    if (mode === "midi" && catalog) {
-      result.vst = {
+    if (mode === "midi") {
+      result.instrumentIntent = normalizeInstrumentIntent(track?.instrumentIntent);
+      result.desiredInstrument = normalizedText(track?.desiredInstrument) ?? normalizedText(track?.role);
+      result.presetHint = normalizedText(track?.vst?.presetHint, 140);
+      if (catalog) result.vst = {
         name: catalog.name,
         path: catalog.path,
         vendor: catalog.vendor ?? undefined,
-        presetHint: String(track?.vst?.presetHint || "").trim().slice(0, 140) || undefined,
+        presetHint: result.presetHint,
       };
       result.midiRegions = normalizeMidiRegions(track?.midiRegions, scaleRule, totalBars);
       if (!result.midiRegions.length) {
@@ -155,11 +177,48 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
   };
 }
 
+async function resolveInstruments(plan: PlanDraft): Promise<PlanDraft> {
+  const tracks = await Promise.all(plan.tracks.map(async (track): Promise<GeneratedSessionTrack> => {
+    if (track.mode !== "midi") return track;
+    const desired = track.desiredInstrument ? [track.desiredInstrument] : [];
+    const fallback = track.vst;
+    let status: NonNullable<GeneratedSessionTrack["instrumentResolution"]>["status"] = "unavailable";
+    let message = "Bridge instrument matching is unavailable.";
+    let match: Awaited<ReturnType<typeof bridgeApi.matchInstruments>>["matches"][number] | undefined;
+    let instrumentIntent = track.instrumentIntent;
+    try {
+      const response = await bridgeApi.matchInstruments(desired, 12, track.instrumentIntent);
+      if (response.intent) instrumentIntent = { family: response.intent.family ?? undefined, role: response.intent.role ?? undefined, timbre: response.intent.timbre ?? undefined };
+      const candidates = response.matches.filter((item) => item.instrument?.loadable === true && !!item.instrument.path);
+      match = candidates[0];
+      if (!match) { status = "no-match"; message = "No loadable instrument matched this intent."; }
+      else if (match.weakEvidence !== false || !Array.isArray(match.evidence)) { status = "weak"; message = "Bridge found only weak instrument evidence."; }
+      else if (candidates[1] && candidates[1].score === match.score) { status = "ambiguous"; message = "Bridge found equally ranked instruments."; }
+      else if (!(match.score > 0)) { status = "weak"; message = "Bridge found no positive match evidence."; }
+      else status = "resolved";
+    } catch { /* Preserve the validated legacy path or audio fallback below. */ }
+    if (status === "resolved" && match) return {
+      ...track,
+      instrumentIntent,
+      vst: { name: match.instrument.name, path: match.instrument.path, vendor: match.instrument.vendor ?? undefined, presetHint: track.presetHint },
+      instrumentResolution: { status, source: "bridge-match", instrumentId: match.instrument.id, score: match.score, evidence: match.evidence, reasons: match.reasons, weakEvidence: false },
+    };
+    const instrumentResolution: NonNullable<GeneratedSessionTrack["instrumentResolution"]> = {
+      status, source: fallback ? "legacy-path" : "none", message,
+      ...(match ? { score: match.score, evidence: match.evidence, reasons: match.reasons, weakEvidence: match.weakEvidence } : {}),
+    };
+    return fallback ? { ...track, instrumentIntent, instrumentResolution } : {
+      ...track, instrumentIntent, mode: "audio", vst: undefined, midiRegions: undefined, instrumentResolution,
+    };
+  }));
+  return { ...plan, tracks };
+}
+
 function plannerPrompt(draft: Draft, band: BandProfile | null, plugins: BridgePlugin[]) {
   const instrumentPlugins = plugins.filter((p) => p.kind === "instrument" && p.loadable !== false);
   const pluginLines = instrumentPlugins.length ? instrumentPlugins.map((p) => `- name=${JSON.stringify(p.name)} vendor=${JSON.stringify(p.vendor || "")} category=${JSON.stringify(p.category || p.subCategories || "")} path=${JSON.stringify(p.path)}`).join("\n") : "(No usable desktop VST3 instruments are currently available.)";
   const bandContext = band ? `\nBAND / ARTIST\nName: ${band.name}\nSound: ${band.genre || "unspecified"}\nIdentity: ${band.bio || band.symbol || "unspecified"}` : "";
-  return `YSong CREATE SONG PRODUCER MODE\nYou are the producer/orchestrator between the user's musical request, MiniMax Music 3, the YSong DAW, and the installed VST3 instruments. Build an EDITABLE MULTITRACK SESSION, not a flattened song.\n\nHARD RULES\n1. Explicit user BPM, key, scale/mode, meter, lyrics, required instruments, exclusions, and section instructions are HARD CONSTRAINTS. Never reinterpret them. E Phrygian means pitch classes E F G A B C D for MIDI tracks.\n2. Never invent lyric lines, titles, style-token words, or prompt phrases for the singer. Only tracks with useLyrics=true may receive the supplied lyrics.\n3. Split the production into separate logical tracks: lead vocal, backing vocals/choir, guitars, bass, drums, synths, pads, arps, strings, effects, etc. Do not collapse unrelated parts together.\n4. Prefer mode=midi ONLY when one of the INSTALLED VST3 instruments below is genuinely appropriate. The vst.path must be copied EXACTLY from the list. Never invent a VST path or plugin.\n5. For MIDI tracks, create compact repeating midiRegions. Every note must obey the requested key/mode. Use startBars and lengthBars relative to the region. Keep patterns musically useful and editable.\n6. If no suitable installed VST exists, mode MUST be audio. Audio is the quality-preserving fallback; never substitute General MIDI for a generated song part.\n7. For audio tracks, instructions must request ONE ISOLATED STEM ONLY, while repeating the exact global BPM/key/mode, section map, role, and explicit exclusions.\n8. MiniMax itself may disobey prompts. Make hardConstraints and forbidden explicit so YSong can validate/enforce what it can before accepting a session.\n9. The structuredCaption must follow MiniMax Music 3's three-heading shape exactly: ### Global Metadata, ### Vocal Details, ### Arrangement.\n10. Return JSON ONLY. No markdown fences, explanations, or comments.\n\nINSTALLED VST3 INSTRUMENTS\n${pluginLines}${bandContext}\n\nUSER SONG BRIEF\nTitle: ${draft.title || "Untitled"}\nInstrumental: ${draft.instrumental}\nStyle: ${draft.style || "unspecified"}\nLyrics:\n${draft.instrumental ? "[Instrumental]" : (draft.lyrics || "(none supplied)")}\nExplicit BPM: ${draft.bpm || "unspecified"}\nExplicit key / mode: ${draft.key || "unspecified"}\nTarget duration: ${draft.duration || "unspecified"}\n\nRETURN THIS JSON SHAPE\n{\n  "projectName":"...",\n  "bpm":128,\n  "keyRoot":0,\n  "keyLabel":"C minor",\n  "scaleId":"natural-minor",\n  "sigNum":4,\n  "sigDen":4,\n  "totalBars":96,\n  "hardConstraints":["..."],\n  "forbidden":["..."],\n  "structuredCaption":"### Global Metadata\\n...\\n\\n### Vocal Details\\n...\\n\\n### Arrangement\\n...",\n  "sections":[{"name":"Intro","startBar":1,"endBar":8}],\n  "tracks":[\n    {\n      "id":"lead-vocal",\n      "name":"Lead Vocal",\n      "role":"lead vocal",\n      "mode":"audio",\n      "useLyrics":true,\n      "instructions":"Lead vocal isolated stem only..."\n    },\n    {\n      "id":"synth-pad",\n      "name":"Synth Pad",\n      "role":"warm analog pad",\n      "mode":"midi",\n      "useLyrics":false,\n      "instructions":"Warm analog pad...",\n      "vst":{"name":"EXACT INSTALLED NAME","path":"EXACT INSTALLED PATH","vendor":"...","presetHint":"warm slow-attack pad"},\n      "midiRegions":[{"startBar":1,"lengthBars":4,"repeatCount":4,"notes":[{"pitch":60,"startBars":0,"lengthBars":4,"velocity":82}]}]\n    }\n  ]\n}`;
+  return `YSong CREATE SONG PRODUCER MODE\nYou are the producer/orchestrator between the user's musical request, MiniMax Music 3, the YSong DAW, and the installed VST3 instruments. Build an EDITABLE MULTITRACK SESSION, not a flattened song.\n\nHARD RULES\n1. Explicit user BPM, key, scale/mode, meter, lyrics, required instruments, exclusions, and section instructions are HARD CONSTRAINTS. Never reinterpret them. E Phrygian means pitch classes E F G A B C D for MIDI tracks.\n2. Never invent lyric lines, titles, style-token words, or prompt phrases for the singer. Only tracks with useLyrics=true may receive the supplied lyrics.\n3. Split the production into separate logical tracks: lead vocal, backing vocals/choir, guitars, bass, drums, synths, pads, arps, strings, effects, etc. Do not collapse unrelated parts together.\n4. Prefer mode=midi when an installed VST3 instrument is genuinely appropriate. For each MIDI part provide instrumentIntent with concise family, role, and timbre labels plus desiredInstrument text. Bridge resolves the final instrument. If supplying a vst.path as a fallback, copy it EXACTLY from the list; never invent a path or plugin.\n5. For MIDI tracks, create compact repeating midiRegions. Every note must obey the requested key/mode. Use startBars and lengthBars relative to the region. Keep patterns musically useful and editable.\n6. If no suitable installed VST exists, mode MUST be audio. Audio is the quality-preserving fallback; never substitute General MIDI for a generated song part.\n7. For audio tracks, instructions must request ONE ISOLATED STEM ONLY, while repeating the exact global BPM/key/mode, section map, role, and explicit exclusions.\n8. MiniMax itself may disobey prompts. Make hardConstraints and forbidden explicit so YSong can validate/enforce what it can before accepting a session.\n9. The structuredCaption must follow MiniMax Music 3's three-heading shape exactly: ### Global Metadata, ### Vocal Details, ### Arrangement.\n10. Return JSON ONLY. No markdown fences, explanations, or comments.\n\nINSTALLED VST3 INSTRUMENTS\n${pluginLines}${bandContext}\n\nUSER SONG BRIEF\nTitle: ${draft.title || "Untitled"}\nInstrumental: ${draft.instrumental}\nStyle: ${draft.style || "unspecified"}\nLyrics:\n${draft.instrumental ? "[Instrumental]" : (draft.lyrics || "(none supplied)")}\nExplicit BPM: ${draft.bpm || "unspecified"}\nExplicit key / mode: ${draft.key || "unspecified"}\nTarget duration: ${draft.duration || "unspecified"}\n\nRETURN THIS JSON SHAPE\n{\n  "projectName":"...",\n  "bpm":128,\n  "keyRoot":0,\n  "keyLabel":"C minor",\n  "scaleId":"natural-minor",\n  "sigNum":4,\n  "sigDen":4,\n  "totalBars":96,\n  "hardConstraints":["..."],\n  "forbidden":["..."],\n  "structuredCaption":"### Global Metadata\\n...\\n\\n### Vocal Details\\n...\\n\\n### Arrangement\\n...",\n  "sections":[{"name":"Intro","startBar":1,"endBar":8}],\n  "tracks":[\n    {\n      "id":"lead-vocal",\n      "name":"Lead Vocal",\n      "role":"lead vocal",\n      "mode":"audio",\n      "useLyrics":true,\n      "instructions":"Lead vocal isolated stem only..."\n    },\n    {\n      "id":"synth-pad",\n      "name":"Synth Pad",\n      "role":"warm analog pad",\n      "mode":"midi",\n      "useLyrics":false,\n      "instructions":"Warm analog pad...",\n      "instrumentIntent":{"family":"synth","role":"pad","timbre":"warm"},\n      "desiredInstrument":"warm analog pad",\n      "vst":{"name":"EXACT INSTALLED NAME","path":"EXACT INSTALLED PATH","vendor":"...","presetHint":"warm slow-attack pad"},\n      "midiRegions":[{"startBar":1,"lengthBars":4,"repeatCount":4,"notes":[{"pitch":60,"startBars":0,"lengthBars":4,"velocity":82}]}]\n    }\n  ]\n}`;
 }
 
 function buildMiniMaxTrackInstructions(plan: PlanDraft, track: GeneratedSessionTrack) {
@@ -216,7 +275,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
         { role: "system", content: plannerPrompt(draft, selectedBand, plugins) },
         { role: "user", content: "Build the session manifest now. Return JSON only." },
       ]);
-      const normalized = normalizePlan(parseJsonReply(reply), draft, plugins);
+      const normalized = await resolveInstruments(normalizePlan(parseJsonReply(reply), draft, plugins));
       setPlan(normalized);
       setPlanApproved(false);
       setProgress(`Planned ${normalized.tracks.length} tracks: ${normalized.tracks.filter((t) => t.mode === "midi").length} editable MIDI/VST, ${normalized.tracks.filter((t) => t.mode === "audio").length} generated audio.`);
@@ -317,7 +376,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
           <div className="grid sm:grid-cols-4 gap-2"><Stat label="Tempo" value={`${plan.bpm} BPM`} /><Stat label="Key / mode" value={plan.keyLabel} /><Stat label="Meter" value={`${plan.sigNum}/${plan.sigDen}`} /><Stat label="Tracks" value={String(plan.tracks.length)} /></div>
           <div className={`rounded-xl border px-3 py-2 text-xs ${planApproved ? "border-emerald-400/25 bg-emerald-400/[.06] text-emerald-100" : "border-amber-400/25 bg-amber-400/[.06] text-amber-100"}`}>{planApproved ? "✓ Blueprint approved. Generate Session is unlocked." : "Blueprint is proposal-only. Review it and press Approve blueprint before YSong may create tracks."}</div>
           <div><SectionTitle>Hard constraints</SectionTitle><div className="mt-2 flex flex-wrap gap-2">{plan.hardConstraints.length ? plan.hardConstraints.map((x, i) => <span key={i} className="rounded-full border border-amber-300/20 bg-amber-300/[.06] px-2.5 py-1 text-xs text-amber-100">{x}</span>) : <span className="text-xs text-neutral-500">No explicit hard constraints beyond the session specification.</span>}</div></div>
-          <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}</div>)}</div></div>
+          <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}{track.instrumentResolution && <div className="mt-1 text-[11px] text-neutral-400">{track.instrumentResolution.status === "resolved" ? `Bridge match${track.instrumentResolution.score != null ? ` (${track.instrumentResolution.score})` : ""}: ${track.instrumentResolution.reasons?.[0] ?? "instrument tag evidence"}` : `${track.instrumentResolution.message} ${track.instrumentResolution.source === "legacy-path" ? "Using the validated planner choice." : "Using an audio part."}`}</div>}</div>)}</div></div>
           <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">MiniMax structured caption</summary><pre className="mt-3 whitespace-pre-wrap text-xs leading-5 text-neutral-400 font-sans">{plan.structuredCaption}</pre></details>
         </div>}
       </section>

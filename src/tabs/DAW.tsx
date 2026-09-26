@@ -27,7 +27,7 @@ import { connectWebAudioEffects, createDynamicsC1Effect, normalizeTrackEffects, 
 import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
-import { consumeGeneratedSession, type GeneratedSessionManifest } from "../lib/generatedSession";
+import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
 import {
@@ -66,6 +66,10 @@ type Track = {
 	// AI/session-generation target. Bridge preset enumeration is not universal yet,
 	// so preserve the producer hint without pretending it was loaded.
 	vstPresetHint?: string;
+	// Additive Create Song provenance. A user reassignment clears the old match.
+	instrumentIntent?: GeneratedSessionTrack["instrumentIntent"];
+	desiredInstrument?: string;
+	instrumentResolution?: GeneratedSessionTrack["instrumentResolution"];
 	// Optional per-track hardware MIDI filter. Undefined means every enabled input.
 	midiInputName?: string;
 	// Ordered insert chain. Audio flows through this array from first to last.
@@ -1154,6 +1158,7 @@ export default function DAW(_props: TabRendererProps) {
 			gmProgramOverrideRef.current.set(track.id, program);
 			setTracks((prev) => prev.map((t) => t.id === track.id ? {
 				...t, gmProgram: program, vst3PluginPath: undefined, vst3PluginName: undefined, vst3PluginVendor: undefined,
+				vstPresetHint: undefined, instrumentResolution: undefined,
 			} : t));
 			if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
 			return true;
@@ -1168,6 +1173,8 @@ export default function DAW(_props: TabRendererProps) {
 			vst3PluginPath: path,
 			vst3PluginName: catalog?.name ?? "VST3",
 			vst3PluginVendor: catalog?.vendor ?? undefined,
+			vstPresetHint: undefined,
+			instrumentResolution: undefined,
 		};
 		setTracks((prev) => prev.map((t) => t.id === track.id ? nextTrack : t));
 		vstLoadedRef.current.delete(track.id);
@@ -3287,6 +3294,9 @@ export default function DAW(_props: TabRendererProps) {
 				track.vst3PluginVendor = source.vst.vendor;
 				track.vstPresetHint = source.vst.presetHint;
 			}
+			track.instrumentIntent = source.instrumentIntent;
+			track.desiredInstrument = source.desiredInstrument;
+			track.instrumentResolution = source.instrumentResolution;
 			nextTracks.push(track);
 			nextHeights[trackId] = ROW_H;
 

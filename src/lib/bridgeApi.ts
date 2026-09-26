@@ -98,7 +98,13 @@ export type InstrumentMatchResult = {
 	score: number;
 	matchedTerms: string[];
 	bestPresets: InstrumentPresetEntry[];
+	matchedTags: string[];
+	evidence: Array<{ dimension: string; requested: string; matched: string; source: string; points: number }>;
+	reasons: string[];
+	weakEvidence: boolean;
 };
+
+export type InstrumentRoleIntent = { family?: string; role?: string; timbre?: string };
 
 export type Vst3MidiEvent = {
 	kind: "on" | "off";
@@ -746,7 +752,7 @@ export const bridgeApi = {
 		),
 	getPlugins: () => bridgeFetch<{ ok: true; plugins: BridgePlugin[] }>("/plugins", undefined, 10000),
 	getInstruments: () => bridgeFetch<{ ok: true; engine: string; instruments: InstrumentCatalogEntry[] }>("/instruments", undefined, 20000),
-	matchInstruments: (desired: string[], limit = 12) => bridgeFetch<{ ok: true; learnedModel: false; strategy: string; desired: string[]; matches: InstrumentMatchResult[] }>("/instruments/match", { method: "POST", body: JSON.stringify({ desired, limit }) }, 20000),
+	matchInstruments: (desired: string[], limit = 12, intent?: InstrumentRoleIntent) => bridgeFetch<{ ok: true; learnedModel: false; strategy: string; intent: { desired: string[]; family: string | null; role: string | null; timbre: string | null }; desired: string[]; matches: InstrumentMatchResult[] }>("/instruments/match", { method: "POST", body: JSON.stringify({ desired, limit, intent }) }, 20000),
 	getInstrumentPresets: (instrumentId: string) => bridgeFetch<{ ok: true; instrument: InstrumentCatalogEntry; presets: InstrumentPresetEntry[] }>(`/instruments/${encodeURIComponent(instrumentId)}/presets`, undefined, 20000),
 	getInstrumentParameters: (instrumentId: string, trackId?: string | null) => bridgeFetch<{ ok: true; instrumentId: string; trackId: string; parameters: InstrumentParameterEntry[] }>(`/plugins/${encodeURIComponent(instrumentId)}/parameters${trackId ? `?trackId=${encodeURIComponent(trackId)}` : ""}`, undefined, 20000),
 	loadInstrumentCapability: (trackId: string, instrumentId: string) => bridgeFetch<{ ok: true; instrument: InstrumentCatalogEntry; loaded: unknown }>("/instrument/load", { method: "POST", body: JSON.stringify({ trackId, instrumentId }) }, 30000),

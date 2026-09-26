@@ -1,4 +1,5 @@
 import type { MidiScaleId } from "./midi";
+import type { InstrumentRoleIntent } from "./bridgeApi";
 
 export type GeneratedMidiNote = {
   pitch: number;
@@ -21,6 +22,17 @@ export type GeneratedVstChoice = {
   presetHint?: string;
 };
 
+export type GeneratedInstrumentResolution = {
+  status: "resolved" | "weak" | "ambiguous" | "no-match" | "unavailable";
+  source: "bridge-match" | "legacy-path" | "none";
+  instrumentId?: string;
+  score?: number;
+  evidence?: Array<{ dimension: string; requested: string; matched: string; source: string; points: number }>;
+  reasons?: string[];
+  weakEvidence?: boolean;
+  message?: string;
+};
+
 export type GeneratedSessionTrack = {
   id: string;
   name: string;
@@ -31,6 +43,10 @@ export type GeneratedSessionTrack = {
   objectKey?: string;
   durationSec?: number;
   vst?: GeneratedVstChoice;
+  instrumentIntent?: InstrumentRoleIntent;
+  desiredInstrument?: string;
+  presetHint?: string;
+  instrumentResolution?: GeneratedInstrumentResolution;
   gmProgram?: number;
   midiRegions?: GeneratedMidiRegion[];
 };
