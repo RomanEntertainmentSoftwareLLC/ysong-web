@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   COMPOSER_ROLES, generateComposerIdea, getComposerStatus, proposeComposerArrangement,
   type ComposerAction, type ComposerArrangement, type ComposerControls, type ComposerProjectContext,
   type ComposerProposal, type ComposerRole, type ComposerStatus,
 } from '../lib/aiComposer';
 import { NOTE_NAMES, SCALE_DEFINITIONS, type MidiScaleId } from '../lib/midi';
+import { auditionMidiNotes } from '../lib/partAudition';
 
 const input='w-full rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-xs outline-none focus:border-fuchsia-400/50';
 const button='rounded-lg border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-xs hover:bg-white/[0.09] disabled:opacity-35 disabled:hover:bg-white/[0.055]';
@@ -54,6 +55,9 @@ export default function AiComposerPanel({
   const [arrangement,setArrangement]=useState<ComposerArrangement|null>(null);
   const [approved,setApproved]=useState(false);
   const [proposal,setProposal]=useState<ComposerProposal|null>(null);
+  const [candidates,setCandidates]=useState<ComposerProposal[]>([]);
+  const stopAudition=useRef<(()=>void)|null>(null);
+  useEffect(()=>{stopAudition.current?.();stopAudition.current=null;return()=>{stopAudition.current?.();stopAudition.current=null;};},[proposal,open]);
   const [lastAcceptedTrackId,setLastAcceptedTrackId]=useState<string|null>(null);
   const [proposalTarget,setProposalTarget]=useState<typeof selectedPart>(null);
   const [controls,setControls]=useState<ComposerControls>(()=>({
@@ -78,12 +82,12 @@ export default function AiComposerPanel({
       if(key==='keyRoot'||key==='scaleId') next.keyLabel=`${NOTE_NAMES[next.keyRoot]} ${SCALE_DEFINITIONS.find(s=>s.id===next.scaleId)?.label||next.scaleId}`;
       return next;
     });
-    setProposal(null); setLastAcceptedTrackId(null);
+    setProposal(null); setCandidates([]); setLastAcceptedTrackId(null);
     if(invalidate){setArrangement(null);setApproved(false);onArrangementApproved?.(null);}
   }
 
   async function proposePlan(){
-    setBusy(true);setMessage('');setProposal(null);setApproved(false);onArrangementApproved?.(null);
+    setBusy(true);setMessage('');setProposal(null);setCandidates([]);setApproved(false);onArrangementApproved?.(null);
     try{const result=await proposeComposerArrangement(controls,{...project,playheadBar});setArrangement(result.arrangement);setMessage('Arrangement proposed. Review it, then approve the plan before generating a part.');}
     catch(error){setMessage(error instanceof Error?error.message:'Could not propose arrangement.');}
     finally{setBusy(false);}
@@ -96,7 +100,8 @@ export default function AiComposerPanel({
     try{
       const result=await generateComposerIdea({controls,arrangement,action,sourceProposal:src,project:{...project,playheadBar}});
       setProposal(result.proposal);
-      setProposalTarget(selectedPart);
+      setCandidates(previous=>[...previous,result.proposal]);
+      if(candidates.length===0)setProposalTarget(selectedPart);
       if(action!=='continue_8_bars')setLastAcceptedTrackId(null);
       setMessage(`${roleLabel(result.proposal.role)} proposal ready. The DAW has not been changed.`);
     }catch(error){setMessage(error instanceof Error?error.message:'Composer generation failed.');}
@@ -106,7 +111,7 @@ export default function AiComposerPanel({
     if(!proposal)return;
     if(replace&&(!proposalTarget||proposalTarget.type!=='instrument')){setMessage('Select a MIDI clip before replacing it.');return;}
     const target=proposal.action==='continue_8_bars'?(lastAcceptedTrackId||project.source?.trackId||null):null;
-    try{const trackId=onAccept(proposal,replace?null:target,replace?proposalTarget?.clipId:null);setLastAcceptedTrackId(trackId);setProposal(null);setMessage(replace?`Replaced ${proposalTarget?.name} with editable MIDI. Undo remains available.`:target?`Added a MIDI clip on the existing ${roleLabel(proposal.role)} track. Undo remains available.`:`Added ${proposal.label} as editable MIDI. Undo remains available.`);}
+    try{const trackId=onAccept(proposal,replace?null:target,replace?proposalTarget?.clipId:null);setLastAcceptedTrackId(trackId);setProposal(null);setCandidates([]);setMessage(replace?`Replaced ${proposalTarget?.name} with editable MIDI. Earlier versions remain available on the selected clip.`:target?`Added a MIDI clip on the existing ${roleLabel(proposal.role)} track. Undo remains available.`:`Added ${proposal.label} as editable MIDI. Undo remains available.`);}
     catch(error){setMessage(error instanceof Error?error.message:'Could not accept the part.');}
   }
 
@@ -160,10 +165,12 @@ export default function AiComposerPanel({
         <button className={accent} disabled={busy} onClick={()=>void generate('generate')}>{busy?'Generating…':`Generate ${roleLabel(controls.role)}`}</button>
         {!proposal&&project.source?.notes?.length? <div className="rounded-lg border border-cyan-400/15 bg-cyan-500/[0.05] p-2"><div className="mb-2 text-[10px] text-cyan-100/75">Derive from selected MIDI without overwriting it</div><div className="flex flex-wrap gap-1.5"><button className={button} disabled={busy} onClick={()=>void generate('continue_8_bars')}>Continue 8 bars</button><button className={button} disabled={busy} onClick={()=>void generate('harmony')}>Generate harmony</button><button className={button} disabled={busy} onClick={()=>void generate('bass_from_this')}>Bass from this</button></div></div>:null}
         {proposal&&<>
+          {candidates.length>1&&<div className="flex flex-wrap gap-1">{candidates.map((candidate,index)=><button key={candidate.id} className={button} onClick={()=>setProposal(candidate)} aria-pressed={candidate.id===proposal.id}>Alternative {index+1}{candidate.id===proposal.id?' (selected)':''}</button>)}</div>}
           <PianoPreview proposal={proposal}/>
+          <button className={button} onClick={()=>{stopAudition.current?.();stopAudition.current=auditionMidiNotes(proposal.notes,controls.bpm,controls.sigNum,controls.sigDen);}}>Audition selected MIDI alternative</button>
           <div className="rounded-lg bg-white/[0.035] p-2 text-xs"><div className="font-medium">{proposal.label}</div><div className="mt-1 opacity-60">{proposal.explanation||'Structured editable MIDI proposal.'}</div>{proposal.generationNotes&&<div className="mt-1 text-[10px] opacity-45">{proposal.generationNotes}</div>}{proposal.chords.length>0&&<div className="mt-2 flex flex-wrap gap-1">{proposal.chords.map((c,i)=><span key={`${c.atBars}-${i}`} className="rounded bg-black/30 px-1.5 py-0.5 text-[9px]">{c.symbol} @{n(c.atBars,2)}</span>)}</div>}</div>
           <div className="flex flex-wrap gap-1.5">{ACTIONS.map(a=><button className={button} key={a.id} disabled={busy||(a.requiresSource&&!sourceAvailable)} onClick={()=>void generate(a.id)}>{a.label}</button>)}</div>
-          <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[0.06] p-3"><div className="text-xs font-semibold text-emerald-100">Choose how to accept this ready MIDI part</div><p className="mt-1 text-[10px] opacity-60">Add keeps every existing clip. Replace changes only the MIDI clip selected when generation started; its track sound, mixer, and effects stay in place.</p><div className="mt-2 flex flex-wrap gap-2"><button className={accent} onClick={()=>accept(false)}>Add MIDI part</button>{proposalTarget?.type==='instrument'&&<button className={accent} onClick={()=>accept(true)}>Replace {proposalTarget.name}</button>}</div></div>
+          <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/[0.06] p-3"><div className="text-xs font-semibold text-emerald-100">Choose how to use this MIDI part</div><p className="mt-1 text-[10px] opacity-60">The active part stays intact until Replace. Prior committed versions remain on the clip after replacement.</p><div className="mt-2 flex flex-wrap gap-2"><button className={accent} onClick={()=>accept(false)}>Add MIDI part</button>{proposalTarget?.type==='instrument'&&<button className={accent} onClick={()=>accept(true)}>Use / Replace {proposalTarget.name}</button>}<button className={button} onClick={()=>{setProposal(null);setCandidates([]);setMessage('Alternatives cancelled. The DAW part is unchanged.');}}>Cancel alternatives</button></div></div>
         </>}
       </section>}
       {message&&<div className="rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs opacity-75">{message}</div>}

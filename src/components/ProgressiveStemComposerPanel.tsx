@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NOTE_NAMES, SCALE_DEFINITIONS, type MidiScaleId } from '../lib/midi';
+import { auditionMidiNotes } from '../lib/partAudition';
 import {
   STEM_ROLES, generateAudioStem, generateMidiStem, getSignedAssetUrl, getStemComposerStatus, lockStemUniverse, staleDependents,
   type ProgressiveStemState, type StemComposerStatus, type StemDependency, type StemMode, type StemNode, type StemProposal, type StemRole, type StemSection, type StemChord,
@@ -24,12 +25,17 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
   const [family,setFamily]=useState(()=>`family_${crypto.randomUUID().slice(0,8)}`); const [seedText,setSeedText]=useState(()=>crypto.randomUUID().replace(/-/g,'').slice(0,16));
   const [role,setRole]=useState<StemRole>('drums'); const [mode,setMode]=useState<StemMode>('midi'); const [desired,setDesired]=useState(''); const [negative,setNegative]=useState('');
   const [selectedDeps,setSelectedDeps]=useState<Set<string>>(new Set()); const [proposal,setProposal]=useState<StemProposal|null>(null);
+  const [candidates,setCandidates]=useState<StemProposal[]>([]);
+  const [auditionUrl,setAuditionUrl]=useState('');
+  const stopAudition=useRef<(()=>void)|null>(null);
+  useEffect(()=>{stopAudition.current?.();stopAudition.current=null;return()=>{stopAudition.current?.();stopAudition.current=null;};},[proposal,open]);
+  useEffect(()=>{let cancelled=false;setAuditionUrl('');if(proposal?.mode==='audio'&&proposal.assetId){getSignedAssetUrl(proposal.assetId).then(result=>{if(!cancelled)setAuditionUrl(result.url);}).catch(()=>{if(!cancelled)setAuditionUrl('');});}return()=>{cancelled=true;};},[proposal]);
   const [proposalTarget,setProposalTarget]=useState<typeof selectedPart>(null);
   const [proposalDesired,setProposalDesired]=useState('');
 
   useEffect(()=>{if(open)getStemComposerStatus().then(setStatus).catch(()=>setStatus(null));},[open]);
   useEffect(()=>{if(!state.universe){setKeyRoot(seed.keyRoot);setScaleId(seed.scaleId);} },[seed.keyRoot,seed.scaleId,state.universe]);
-  useEffect(()=>{const existing=state.nodes.find(n=>n.role===role&&n.status==='active');setMode(existing?.mode??modeFor(role));setProposal(null);setSelectedDeps(new Set(state.nodes.filter(n=>n.role!==role&&n.status==='active').map(n=>n.nodeId)));},[role,state.nodes]);
+  useEffect(()=>{const existing=state.nodes.find(n=>n.role===role&&n.status==='active');setMode(existing?.mode??modeFor(role));setProposal(null);setCandidates([]);setSelectedDeps(new Set(state.nodes.filter(n=>n.role!==role&&n.status==='active').map(n=>n.nodeId)));},[role,state.nodes]);
 
   const activeForRole=state.nodes.find(n=>n.role===role&&n.status==='active')??null;
   const nextVersion=(activeForRole?.version??0)+1;
@@ -54,14 +60,14 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
     return deps;
   }
   async function generate(){
-    if(!state.universe)return;setBusy(true);setMessage('');setProposal(null);try{
+    if(!state.universe)return;setBusy(true);setMessage('');try{
       const dependencies=await dependencyPayload();const negativeList=negative.split(',').map(x=>x.trim()).filter(Boolean);
       if(mode==='midi'){
         if(!status?.structuredMidiConfigured)throw new Error('Server AI is not configured yet for structured MIDI stem generation.');
-        const r=await generateMidiStem({universe:state.universe,targetRole:role,mode:'midi',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setProposalTarget(selectedPart);setProposalDesired(desired);
+        const r=await generateMidiStem({universe:state.universe,targetRole:role,mode:'midi',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setCandidates(previous=>[...previous,r.proposal]);if(candidates.length===0)setProposalTarget(selectedPart);setProposalDesired(desired);
       }else{
         if(!status?.audioProviderConfigured)throw new Error('No target-stem audio generation provider is configured yet. The contract is ready, but YSong will not fake an audio stem.');
-        const r=await generateAudioStem({universe:state.universe,targetRole:role,mode:'audio',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setProposalTarget(selectedPart);setProposalDesired(desired);
+        const r=await generateAudioStem({universe:state.universe,targetRole:role,mode:'audio',desired,negative:negativeList,dependencies,version:nextVersion,generationSeed});setProposal(r.proposal);setCandidates(previous=>[...previous,r.proposal]);if(candidates.length===0)setProposalTarget(selectedPart);setProposalDesired(desired);
       }
     }catch(e){setMessage(e instanceof Error?e.message:'Stem generation failed.');}finally{setBusy(false);}
   }
@@ -76,7 +82,7 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
       const nextNode:StemNode={nodeId:stableNodeId,role:proposal.role,mode:proposal.mode,version:proposal.version,label:proposal.label,universeHash:proposal.universeHash,generationFamily:proposal.generationFamily,generationSeed:proposal.generationSeed,dependsOn:proposal.dependsOn,clipId:refs.clipId,trackId:refs.trackId,assetId:refs.assetId,status:'active',createdAt:new Date().toISOString(),summary:proposal.mode==='midi'?proposal.explanation:`Generated ${proposal.role} target-only audio stem`};
       let nodes=state.nodes.filter(n=>n.nodeId!==stableNodeId).map(n=>n.role===proposal.role&&n.status==='active'?{...n,status:'superseded' as const}:n).concat(nextNode);
       if(previous){const staleIds=staleDependents(nodes,stableNodeId,nextNode.version);nodes=nodes.map(n=>staleIds.has(n.nodeId)?{...n,status:'stale'}:n);}
-      const activeByRole={...state.activeByRole,[proposal.role]:stableNodeId};onStateChange({universe:state.universe,nodes,activeByRole});setProposal(null);
+      const activeByRole={...state.activeByRole,[proposal.role]:stableNodeId};onStateChange({universe:state.universe,nodes,activeByRole});setProposal(null);setCandidates([]);
       const affected=nodes.filter(n=>n.status==='stale');setMessage(affected.length?`${roleLabel(proposal.role)} v${proposal.version} accepted. ${affected.map(n=>roleLabel(n.role)).join(', ')} were generated from an older dependency. Regenerate them?`:`${roleLabel(proposal.role)} v${proposal.version} accepted into the DAW.`);
     }catch(e){setMessage(e instanceof Error?e.message:'Could not accept stem.');}finally{setBusy(false);}
   }
@@ -104,7 +110,7 @@ export default function ProgressiveStemComposerPanel({open,onClose,seed,state,on
           <div className="flex items-center justify-between text-[10px] opacity-55"><span>{roleLabel(role)} v{nextVersion}</span><span className="font-mono">seed {generationSeed.slice(-28)}</span></div><button className={accent} disabled={busy||universeDrift||(mode==='midi'?!status?.structuredMidiConfigured:!status?.audioProviderConfigured)} onClick={()=>void generate()}>{busy?'Generating…':`Generate ${roleLabel(role)} ONLY`}</button>
         </section>
 
-        {proposal&&<section className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-500/[0.045] p-3 space-y-3"><div className="text-[10px] opacity-55">3 · Ready target stem</div><div className="text-sm font-semibold">{proposal.label} · v{proposal.version} · {proposal.mode}</div><p className="text-xs opacity-65">{proposal.mode==='midi'?`${proposal.notes.length} editable notes`:`Target audio ${proposal.exactDurationSec.toFixed(2)} seconds`}. Nothing changes until you accept.</p><div className="flex flex-wrap gap-2"><button className={accent} disabled={busy} onClick={()=>void accept(false)}>Add part</button>{proposalTarget&&<button className={accent} disabled={busy} onClick={()=>void accept(true)}>Replace {proposalTarget.name}</button>}</div>{proposalTarget&&<p className="text-[10px] opacity-60">Replacement changes only the selected clip. If the output type differs, its track settings remain on the old track and the result gets a new track.</p>}</section>}
+        {proposal&&<section className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-500/[0.045] p-3 space-y-3"><div className="text-[10px] opacity-55">3 · Ready target stem</div><div className="text-sm font-semibold">{proposal.label} · v{proposal.version} · {proposal.mode}</div>{candidates.length>1&&<div className="flex flex-wrap gap-1">{candidates.map((candidate,index)=><button key={candidate.id} className={button} onClick={()=>setProposal(candidate)} aria-pressed={candidate.id===proposal.id}>Alternative {index+1}{candidate.id===proposal.id?' (selected)':''}</button>)}</div>}<p className="text-xs opacity-65">{proposal.mode==='midi'?`${proposal.notes.length} editable notes`:`Target audio ${proposal.exactDurationSec.toFixed(2)} seconds`}. The DAW is unchanged until Add or Use / Replace.</p>{proposal.mode==='midi'?<button className={button} onClick={()=>{stopAudition.current?.();stopAudition.current=auditionMidiNotes(proposal.notes,seed.bpm,seed.sigNum,seed.sigDen);}}>Audition selected MIDI alternative</button>:auditionUrl?<audio controls src={auditionUrl} className="w-full" aria-label="Audition selected audio alternative"/>:<p className="text-[10px] opacity-50">Audio preview is unavailable; the project is unchanged.</p>}<div className="flex flex-wrap gap-2"><button className={accent} disabled={busy} onClick={()=>void accept(false)}>Add part</button>{proposalTarget&&<button className={accent} disabled={busy} onClick={()=>void accept(true)}>Use / Replace {proposalTarget.name}</button>}<button className={button} disabled={busy} onClick={()=>{setProposal(null);setCandidates([]);setMessage('Alternatives cancelled. The active part is unchanged.');}}>Cancel alternatives</button></div>{proposalTarget&&<p className="text-[10px] opacity-60">A different output type uses a compatible track; prior track settings and the earlier clip version remain available.</p>}</section>}
 
         <section className="rounded-xl border border-white/10 p-3"><div className="flex items-center justify-between"><div className="text-[10px] uppercase tracking-[.18em] opacity-45">Dependency graph</div><span className="text-[9px] opacity-45">{state.nodes.length} approved stems</span></div>{state.nodes.length===0?<div className="mt-3 text-[10px] opacity-45">No approved generated stems yet.</div>:<div className="mt-2 space-y-2">{state.nodes.map(n=><div key={n.nodeId} className={`rounded-lg border p-2 ${n.status==='stale'?'border-amber-400/25 bg-amber-500/[0.05]':'border-white/10 bg-white/[0.025]'}`}><div className="flex items-center gap-2 text-xs"><span className="font-medium">{roleLabel(n.role)} v{n.version}</span><span className="text-[9px] opacity-45">{n.mode}</span><span className="ml-auto text-[9px]">{n.status==='stale'?<span className="text-amber-300">REGENERATE?</span>:<span className="text-emerald-300">APPROVED</span>}</span></div><div className="mt-1 text-[9px] opacity-45">depends on {n.dependsOn.length?n.dependsOn.map(d=>`${roleLabel(d.role)} v${d.version}`).join(' + '):'song universe only'}</div>{n.status==='stale'&&<button className={`${button} mt-2`} onClick={()=>{setRole(n.role);setMode(n.mode);setSelectedDeps(new Set(state.nodes.filter(x=>x.nodeId!==n.nodeId&&x.status==='active').map(x=>x.nodeId)));setMessage(`${roleLabel(n.role)} was generated from an older dependency. Review dependencies and regenerate when ready.`);}}>Prepare regeneration</button>}</div>)}</div>}</section>
       </>}

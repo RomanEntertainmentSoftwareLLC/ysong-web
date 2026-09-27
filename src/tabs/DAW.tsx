@@ -44,7 +44,7 @@ import {
 
 type TrackType = "audio" | "instrument";
 type PartGeneration =
-	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string }
+	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string; parentRequestId?: string }
 	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; sourceTrackId: string; sessionId: string; createdAt: string };
 
 type Track = {
@@ -132,6 +132,9 @@ type Clip = {
 	stemUniverseHash?: string;
 	stemGenerationFamily?: string;
 	partGeneration?: PartGeneration;
+	// Prior committed content lives with its canonical clip and persists in DawPersistV1.
+	partAlternatives?: Array<Omit<Clip, "partAlternatives">>;
+	partStemNode?: StemNode;
 };
 
 // Include all UI options (triplets + 1/128) so TS doesn't explode
@@ -4702,6 +4705,30 @@ export default function DAW(_props: TabRendererProps) {
 	}, [clips, tracks, selectedClipId]);
 	const partStateRef = useRef({ clips, tracks, progressiveStemState });
 	partStateRef.current = { clips, tracks, progressiveStemState };
+	const restorePartAlternative = (clipId: string, index: number) => {
+		const current = clips.find((clip) => clip.id === clipId);
+		const alternative = current?.partAlternatives?.[index];
+		if (!current || !alternative || !tracks.some((track) => track.id === current.trackId)) return;
+		const { partAlternatives: _unused, ...activeSnapshot } = current;
+		if (current.stemNodeId) activeSnapshot.partStemNode = progressiveStemState.nodes.find((node) => node.nodeId === current.stemNodeId);
+		const alternatives = current.partAlternatives!.filter((_, i) => i !== index);
+		const restored: Clip = { ...alternative, id: current.id, partAlternatives: [...alternatives, activeSnapshot] };
+		const track = tracks.find((item) => item.id === restored.trackId);
+		if (!track) return;
+		if ((track.type === "audio") !== Boolean(restored.assetId)) return;
+		setClips((previous) => previous.map((clip) => clip.id === clipId ? restored : clip));
+		setSelectedTrackId(restored.trackId);
+		if (current.stemNodeId) setProgressiveStemState((previous) => {
+			const restoredNode = restored.partStemNode;
+			const nodes = previous.nodes.flatMap((node) => node.nodeId === current.stemNodeId
+				? restoredNode ? [{ ...restoredNode, clipId, trackId: restored.trackId, status: "active" as const }] : []
+				: [node.dependsOn.some((dependency) => dependency.nodeId === current.stemNodeId) ? { ...node, status: "stale" as const } : node]);
+			const activeByRole = { ...previous.activeByRole };
+			const currentNode = previous.nodes.find((node) => node.nodeId === current.stemNodeId);
+			if (!restoredNode && currentNode) delete activeByRole[currentNode.role];
+			return { ...previous, nodes, activeByRole };
+		});
+	};
 
 	const acceptProgressiveStemProposal = async (proposal: StemProposal, previous: StemNode | null, targetClipId: string | null, desiredInstrument: string) => {
 		const projectId = activeProjectId;
@@ -4717,7 +4744,7 @@ export default function DAW(_props: TabRendererProps) {
 		const keepTrack = targetTrack?.type === expectedType;
 		const trackId = keepTrack ? targetTrack.id : crypto.randomUUID();
 		const next = keepTrack ? targetTrack : mkTrack(expectedType, tracks.filter((track) => track.type === expectedType).length + 1, trackId);
-		const generation: PartGeneration = { origin: "progressive-stem", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id } : {}) };
+		const generation: PartGeneration = { origin: "progressive-stem", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id, ...(targetClip.partGeneration && "requestId" in targetClip.partGeneration ? { parentRequestId: targetClip.partGeneration.requestId } : {}) } : {}) };
 		if (!keepTrack) { next.name = `${proposal.label || proposal.role} v${proposal.version}`; next.partGeneration = generation; }
 		if (proposal.mode === "midi") {
 			const roleProgram: Record<StemRole, number> = { drums: 118, bass: 38, piano: 0, strings: 48, lead: 81, vocals: 52, guitar: 29, choir: 52, atmosphere: 89, percussion: 115, fx: 103 };
@@ -4759,6 +4786,11 @@ export default function DAW(_props: TabRendererProps) {
 			setProjectAssets((prev) => prev.some((asset) => asset.id === assetId || asset.objectKey === proposal.objectKey) ? prev : [...prev, { id: assetId, kind: "audio", name: `${proposal.label} v${proposal.version}.wav`, objectKey: proposal.objectKey, durationSec: proposal.exactDurationSec, sizeMB: proposal.sizeBytes / (1024 * 1024) }]);
 			nextClip = { id: clipId, trackId, assetId, name: `${proposal.label || proposal.role} v${proposal.version}`, startBar: 1, lengthBars: proposal.lengthBars, sourceOffsetSec: 0, sourceDurationSec: proposal.exactDurationSec, fadeInBars: 0, fadeOutBars: 0, composerRole: proposal.role, stemNodeId: stableNodeId, stemVersion: proposal.version, stemUniverseHash: proposal.universeHash, stemGenerationFamily: proposal.generationFamily, partGeneration: generation };
 		}
+		if (targetClip) {
+			const { partAlternatives: _unused, ...oldVersion } = targetClip;
+			oldVersion.partStemNode = progressiveStemState.nodes.find((node) => node.clipId === targetClip.id);
+			nextClip.partAlternatives = [...(targetClip.partAlternatives ?? []), oldVersion];
+		}
 		if (!keepTrack) { setTracks((prev) => [...prev, next]); setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H })); }
 		setClips((prev) => [...prev.filter((clip) => clip.id !== targetClipId), nextClip]);
 		setBars((prev) => Math.min(MAX_BARS, Math.max(prev, Math.ceil(proposal.lengthBars + 8))));
@@ -4786,7 +4818,7 @@ export default function DAW(_props: TabRendererProps) {
 			setTrackHeights((prev) => ({ ...prev, [trackId]: prev[trackId] ?? ROW_H }));
 		}
 		const clipId = crypto.randomUUID();
-		const generation: PartGeneration = { origin: "ai-composer", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id } : {}) };
+		const generation: PartGeneration = { origin: "ai-composer", role: proposal.role, requestId: proposal.id, createdAt: new Date().toISOString(), ...(targetClip ? { replacedClipId: targetClip.id, ...(targetClip.partGeneration && "requestId" in targetClip.partGeneration ? { parentRequestId: targetClip.partGeneration.requestId } : {}) } : {}) };
 		const nextClip: Clip = {
 			id: clipId, trackId, name: proposal.label || proposal.role, startBar: proposal.startBar, lengthBars: proposal.lengthBars,
 			midiNotes: proposal.notes.map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
@@ -4797,6 +4829,10 @@ export default function DAW(_props: TabRendererProps) {
 			composerChords: proposal.chords.map((chord) => ({ atBar: proposal.startBar + chord.atBars, symbol: chord.symbol, durationBars: chord.durationBars })),
 			partGeneration: generation,
 		};
+		if (targetClip) {
+			const { partAlternatives: _unused, ...oldVersion } = targetClip;
+			nextClip.partAlternatives = [...(targetClip.partAlternatives ?? []), oldVersion];
+		}
 		setClips((prev) => [...prev.filter((clip) => clip.id !== targetClipId), nextClip]);
 		setSelectedTrackId(trackId);
 		setSelectedClipId(clipId);
@@ -4839,6 +4875,16 @@ export default function DAW(_props: TabRendererProps) {
 					<button type="button" onClick={() => { setDawAgentOpen((open) => !open); setAiComposerOpen(false); setInstrumentCatalogOpen(false); setSoundDesignerOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${dawAgentOpen ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open YSong AI inside the DAW">YSong AI</button>
 				</div>
 			</div>
+			{selectedClipId && clips.find((clip) => clip.id === selectedClipId)?.partAlternatives?.length ? (
+				<div className="shrink-0 flex items-center gap-2 overflow-x-auto border-b border-white/10 bg-fuchsia-500/[0.05] px-3 py-1 text-[10px]">
+					<span className="shrink-0 opacity-65">Saved part versions:</span>
+					{clips.find((clip) => clip.id === selectedClipId)!.partAlternatives!.map((version, index) => (
+						<button key={`${version.id}-${index}`} type="button" className="shrink-0 rounded border border-fuchsia-400/25 px-2 py-1 hover:bg-fuchsia-500/15" onClick={() => restorePartAlternative(selectedClipId, index)} title="Use this saved part version; the current version remains available">
+							Use {version.name} {version.partGeneration && "requestId" in version.partGeneration ? `(${version.partGeneration.requestId.slice(0, 8)})` : "(original)"}
+						</button>
+					))}
+				</div>
+			) : null}
 			{/* Main split */}
 			<div className="flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
 				{/* Left: independently collapsible DAW track panel. On smaller/mobile displays this defaults
