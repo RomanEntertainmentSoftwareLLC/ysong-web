@@ -37,6 +37,7 @@ export type GeneratedSessionTrack = {
   id: string;
   name: string;
   role: string;
+  vocalRole?: "lead vocal" | "harmony vocal" | "backing vocal" | "vocal double" | "ad-lib vocal" | "ensemble vocal";
   mode: "audio" | "midi";
   instructions: string;
   useLyrics?: boolean;
@@ -50,6 +51,17 @@ export type GeneratedSessionTrack = {
   gmProgram?: number;
   midiRegions?: GeneratedMidiRegion[];
 };
+
+export function classifyVocalRole(role: string): GeneratedSessionTrack["vocalRole"] {
+  const value = role.toLowerCase().replace(/[-_/]+/g, " ").replace(/\s+/g, " ").trim();
+  if (/\b(ad lib|adlib|vocal run|vocal riff)s?\b/.test(value)) return "ad-lib vocal";
+  if (/\b(double|doubled|doubling)s?\b/.test(value)) return "vocal double";
+  if (/\b(harmon(y|ies)|harmonized)\b/.test(value)) return "harmony vocal";
+  if (/\b(choir|ensemble|group|gang|chorus vocal)s?\b/.test(value)) return "ensemble vocal";
+  if (/\b(backing|background|backup|back up)\b/.test(value)) return "backing vocal";
+  if (/\b(lead|main|primary)\b.*\b(vocal|voice|sing)|\b(vocal|voice|sing)\b.*\b(lead|main|primary)\b/.test(value)) return "lead vocal";
+  return undefined;
+}
 
 export type GeneratedSongSection = {
   name: string;

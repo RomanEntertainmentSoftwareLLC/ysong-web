@@ -43,7 +43,9 @@ import {
 } from "../lib/midi";
 
 type TrackType = "audio" | "instrument";
-type PartGeneration = { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string };
+type PartGeneration =
+	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string }
+	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; sourceTrackId: string; sessionId: string; createdAt: string };
 
 type Track = {
 	id: string;
@@ -3483,12 +3485,18 @@ export default function DAW(_props: TabRendererProps) {
 		const nextClips: Clip[] = [];
 		const nextAssets: ProjectAsset[] = [];
 		const nextHeights: Record<string, number> = {};
+		const sessionId = manifest.sessionId || crypto.randomUUID();
 		const barSec = (60 / Math.max(1, manifest.bpm)) * (4 / Math.max(1, manifest.sigDen)) * Math.max(1, manifest.sigNum);
 		for (let index = 0; index < manifest.tracks.length; index++) {
 			const source = manifest.tracks[index];
+			const partGeneration: PartGeneration = {
+				origin: "create-song", role: source.role, vocalRole: source.vocalRole,
+				sourceTrackId: source.id, sessionId, createdAt: new Date(manifest.createdAt).toISOString(),
+			};
 			const trackId = crypto.randomUUID();
 			const track = mkTrack(source.mode === "midi" ? "instrument" : "audio", index + 1, trackId);
 			track.name = source.name || `${source.mode === "midi" ? "Instrument" : "Audio"} ${index + 1}`;
+			track.partGeneration = partGeneration;
 			if (source.mode === "midi" && source.vst?.path) {
 				track.vst3PluginPath = source.vst.path;
 				track.vst3PluginName = source.vst.name || "VST3";
@@ -3505,7 +3513,7 @@ export default function DAW(_props: TabRendererProps) {
 				const assetId = source.objectKey;
 				nextAssets.push({ id: assetId, kind: "audio", name: `${source.name}.wav`, objectKey: source.objectKey, sourceObjectKey: source.objectKey, durationSec: source.durationSec });
 				const lengthBars = source.durationSec && source.durationSec > 0 ? Math.max(0.01, source.durationSec / Math.max(0.0001, barSec)) : Math.max(1, manifest.totalBars);
-				nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name: source.name, startBar: 1, lengthBars, sourceOffsetSec: 0, sourceDurationSec: source.durationSec, fadeInBars: 0, fadeOutBars: 0 });
+				nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name: source.name, startBar: 1, lengthBars, sourceOffsetSec: 0, sourceDurationSec: source.durationSec, fadeInBars: 0, fadeOutBars: 0, partGeneration });
 			}
 			if (source.mode === "midi") {
 				for (const region of source.midiRegions ?? []) {
@@ -3519,6 +3527,7 @@ export default function DAW(_props: TabRendererProps) {
 							midiNotes: (region.notes ?? []).map((note) => ({ id: crypto.randomUUID(), pitch: clamp(Math.round(note.pitch), 0, 127), startBars: Math.max(0, note.startBars), lengthBars: Math.max(1 / 128, note.lengthBars), velocity: clamp(Math.round(note.velocity), 1, 127) })),
 							midiPitchBend: [], midiModulation: [], midiBendRange: 12,
 							midiScales: [{ id: crypto.randomUUID(), root: manifest.keyRoot, scaleId: manifest.scaleId }], midiScaleLock: "strict",
+							partGeneration,
 						});
 					}
 				}
@@ -3530,7 +3539,7 @@ export default function DAW(_props: TabRendererProps) {
 		setProjectName(manifest.projectName || "Generated Song");
 		setProjectGeneration({
 			origin: "create-song",
-			sessionId: manifest.sessionId || crypto.randomUUID(),
+			sessionId,
 			createdAt: manifest.createdAt,
 			title: manifest.projectName || "Generated Song",
 		});
