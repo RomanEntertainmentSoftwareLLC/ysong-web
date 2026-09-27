@@ -8,6 +8,7 @@ import TransportConsole from "../components/TransportConsole";
 import OnScreenKeyboard from "../components/OnScreenKeyboard";
 import FxChainPanel from "../components/FxChainPanel";
 import DynamicsC1Editor from "../components/DynamicsC1Editor";
+import BrowserEffectEditor from "../components/BrowserEffectEditor";
 import DawAgentPanel from "../components/DawAgentPanel";
 import AiComposerPanel from "../components/AiComposerPanel";
 import InstrumentCatalogPanel from "../components/InstrumentCatalogPanel";
@@ -23,7 +24,7 @@ import {
 	safeExportFileName,
 	type DawExportMidiTrack,
 } from "../lib/dawExport";
-import { connectWebAudioEffects, createDynamicsC1Effect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type WebAudioEffectRuntime } from "../lib/dawEffects";
+import { connectWebAudioEffects, createDynamicsC1Effect, createBrowserEffect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type BrowserEffect, type BrowserEffectType, type WebAudioEffectRuntime } from "../lib/dawEffects";
 import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
@@ -1057,7 +1058,10 @@ export default function DAW(_props: TabRendererProps) {
 		const bus = trackAudioBusesRef.current.get(id);
 		if (bus) {
 			try { bus.input.disconnect(); } catch {}
-			for (const runtime of bus.effectRuntimes.values()) for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
+			for (const runtime of bus.effectRuntimes.values()) {
+				try { runtime.stop?.(); } catch {}
+				for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
+			}
 			try { bus.gain.disconnect(); } catch {}
 			try { bus.analyser.disconnect(); } catch {}
 			trackAudioBusesRef.current.delete(id);
@@ -1091,7 +1095,7 @@ export default function DAW(_props: TabRendererProps) {
 		}));
 	};
 
-	const toVstTrackEffects = (effects: DawTrackEffect[] = []): Vst3TrackEffect[] => effects.map((effect) => ({
+	const toVstTrackEffects = (effects: DawTrackEffect[] = []): Vst3TrackEffect[] => effects.filter((effect): effect is DynamicsC1Effect => effect.type === "compressor").map((effect) => ({
 		id: effect.id, type: "compressor", enabled: effect.enabled, inputGainDb: effect.inputGainDb, thresholdDb: effect.thresholdDb,
 		ratio: effect.ratio, attackMs: effect.attackMs, releaseMs: effect.releaseMs, kneeDb: effect.kneeDb, outputGainDb: effect.outputGainDb,
 	}));
@@ -1102,10 +1106,16 @@ export default function DAW(_props: TabRendererProps) {
 		setFxEditorEffectId(effect.id);
 	};
 
-	const updateTrackEffect = (trackId: string, effectId: string, patch: Partial<DynamicsC1Effect>) => {
+	const addBrowserEffect = (trackId: string, type: BrowserEffectType) => {
+		const effect = createBrowserEffect(type);
+		setTracks((prev) => prev.map((track) => track.id === trackId ? { ...track, effects: [...(track.effects ?? []), effect] } : track));
+		setFxEditorEffectId(effect.id);
+	};
+
+	const updateTrackEffect = (trackId: string, effectId: string, patch: Partial<DynamicsC1Effect> | Partial<BrowserEffect>) => {
 		setTracks((prev) => prev.map((track) => track.id === trackId ? {
 			...track,
-			effects: (track.effects ?? []).map((effect) => effect.id === effectId ? { ...effect, ...patch, id: effect.id, type: "compressor", name: "YSong Dynamics C•1" } : effect),
+			effects: (track.effects ?? []).map((effect) => effect.id === effectId ? { ...effect, ...patch, id: effect.id, type: effect.type, name: effect.name } as DawTrackEffect : effect),
 		} : track));
 	};
 
@@ -1903,10 +1913,7 @@ export default function DAW(_props: TabRendererProps) {
 		};
 	};
 
-	const effectSignatureForTrack = (track: Track) => JSON.stringify((track.effects ?? []).map((effect) => ({
-		id: effect.id, type: effect.type, enabled: effect.enabled, inputGainDb: effect.inputGainDb, thresholdDb: effect.thresholdDb,
-		ratio: effect.ratio, attackMs: effect.attackMs, releaseMs: effect.releaseMs, kneeDb: effect.kneeDb, outputGainDb: effect.outputGainDb,
-	})));
+	const effectSignatureForTrack = (track: Track) => JSON.stringify(track.effects ?? []);
 
 	const configureTrackAudioBus = (track: Track, bus: TrackAudioBus) => {
 		const ctx = ensureAudioCtx();
@@ -1953,6 +1960,7 @@ export default function DAW(_props: TabRendererProps) {
 		if (signature === bus.effectSignature) return;
 		try { bus.compressor.disconnect(); } catch {}
 		for (const runtime of bus.effectRuntimes.values()) {
+			try { runtime.stop?.(); } catch {}
 			for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
 		}
 		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, track.effects ?? [], bus.gain);
@@ -4238,7 +4246,10 @@ export default function DAW(_props: TabRendererProps) {
 			for (const [trackId, bus] of trackAudioBusesRef.current.entries()) {
 				clearGmSoundFontTrackDestination(trackId);
 				try { bus.input.disconnect(); } catch {}
-				for (const runtime of bus.effectRuntimes.values()) for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
+			for (const runtime of bus.effectRuntimes.values()) {
+				try { runtime.stop?.(); } catch {}
+				for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
+			}
 				try { bus.gain.disconnect(); } catch {}
 				try { bus.analyser.disconnect(); } catch {}
 			}
@@ -4624,7 +4635,7 @@ export default function DAW(_props: TabRendererProps) {
 		? (fxChainTrack.effects ?? []).find((effect) => effect.id === fxEditorEffectId) ?? null
 		: null;
 	const fxEditorGainReductionDb = (() => {
-		if (!fxChainTrack || !fxEditorEffect) return 0;
+		if (!fxChainTrack || !fxEditorEffect || fxEditorEffect.type !== "compressor") return 0;
 		if (fxChainTrack.type === "instrument" && trackUsesNativeVst(fxChainTrack)) return Math.max(0, vstGainReductionRef.current[fxChainTrack.id] ?? 0);
 		const compressor = trackAudioBusesRef.current.get(fxChainTrack.id)?.effectRuntimes.get(fxEditorEffect.id)?.compressor;
 		return compressor ? Math.max(0, -compressor.reduction) : 0;
@@ -5888,7 +5899,9 @@ export default function DAW(_props: TabRendererProps) {
 				<FxChainPanel
 					trackName={fxChainTrack.name}
 					effects={fxChainTrack.effects ?? []}
+					browserEffectsAvailable={!trackUsesNativeVst(fxChainTrack)}
 					onAddCompressor={() => addDynamicsC1(fxChainTrack.id)}
+					onAddBrowserEffect={(type) => addBrowserEffect(fxChainTrack.id, type)}
 					onToggle={(effectId) => toggleTrackEffect(fxChainTrack.id, effectId)}
 					onRemove={(effectId) => removeTrackEffect(fxChainTrack.id, effectId)}
 					onOpen={(effectId) => setFxEditorEffectId(effectId)}
@@ -5898,11 +5911,20 @@ export default function DAW(_props: TabRendererProps) {
 				document.body,
 			)}
 
-			{fxChainTrack && fxEditorEffect && createPortal(
+			{fxChainTrack && fxEditorEffect?.type === "compressor" && createPortal(
 				<DynamicsC1Editor
 					effect={fxEditorEffect}
 					signal={trackMeters[fxChainTrack.id] ?? 0}
 					gainReductionDb={fxEditorGainReductionDb}
+					onChange={(patch) => updateTrackEffect(fxChainTrack.id, fxEditorEffect.id, patch)}
+					onClose={() => setFxEditorEffectId(null)}
+				/>,
+				document.body,
+			)}
+
+			{fxChainTrack && fxEditorEffect && fxEditorEffect.type !== "compressor" && !trackUsesNativeVst(fxChainTrack) && createPortal(
+				<BrowserEffectEditor
+					effect={fxEditorEffect}
 					onChange={(patch) => updateTrackEffect(fxChainTrack.id, fxEditorEffect.id, patch)}
 					onClose={() => setFxEditorEffectId(null)}
 				/>,
