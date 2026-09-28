@@ -31,6 +31,7 @@ import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
+import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import {
 	GM_PROGRAMS,
 	NOTE_NAMES,
@@ -46,7 +47,8 @@ import {
 type TrackType = "audio" | "instrument";
 type PartGeneration =
 	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string; parentRequestId?: string }
-	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string };
+	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string }
+	| { origin: "vocal-transcription"; role: "vocal melody"; sourceClipId: string; sourceAssetId: string; algorithm: "ysong-yin-v1"; createdAt: string };
 
 type Track = {
 	id: string;
@@ -136,6 +138,16 @@ type Clip = {
 	// Prior committed content lives with its canonical clip and persists in DawPersistV1.
 	partAlternatives?: Array<Omit<Clip, "partAlternatives">>;
 	partStemNode?: StemNode;
+};
+
+type VocalMidiPreview = {
+	sourceClipId: string;
+	sourceAssetId: string;
+	name: string;
+	startBar: number;
+	lengthBars: number;
+	notes: MidiNote[];
+	pitchBend: MidiAutomationPoint[];
 };
 
 // Include all UI options (triplets + 1/128) so TS doesn't explode
@@ -670,6 +682,9 @@ export default function DAW(_props: TabRendererProps) {
 	const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
 	const [clips, setClips] = useState<Clip[]>([]);
 	const [midiEditorClipId, setMidiEditorClipId] = useState<string | null>(null);
+	const [vocalMidiPreview, setVocalMidiPreview] = useState<VocalMidiPreview | null>(null);
+	const [vocalMidiStatus, setVocalMidiStatus] = useState("");
+	const [vocalMidiBusy, setVocalMidiBusy] = useState(false);
 	const [onScreenKeyboardOpen, setOnScreenKeyboardOpen] = useState(false);
 	const [hardwareActiveNotes, setHardwareActiveNotes] = useState<Set<number>>(() => new Set());
 	type ClipContextMenuState = { x: number; y: number; clipId: string } | null;
@@ -3677,6 +3692,96 @@ export default function DAW(_props: TabRendererProps) {
 		return { offsetSec, durationSec, outputSec, ratio };
 	};
 
+	const analyzeSelectedVocal = async () => {
+		const sourceClip = selectedClipId ? clips.find((clip) => clip.id === selectedClipId && !!clip.assetId) : undefined;
+		if (!sourceClip?.assetId) { setVocalMidiStatus("Select an audio clip first."); return; }
+		setVocalMidiBusy(true);
+		setVocalMidiPreview(null);
+		setVocalMidiStatus("Analyzing monophonic pitch…");
+		try {
+			const source = await ensureBufferForAsset(sourceClip.assetId);
+			const sourceWindow = getClipSourceWindow(sourceClip, source);
+			const firstFrame = Math.floor(sourceWindow.offsetSec * source.sampleRate);
+			const frameCount = Math.max(1, Math.min(source.length - firstFrame, Math.ceil(sourceWindow.durationSec * source.sampleRate)));
+			const mono = new Float32Array(frameCount);
+			for (let channel = 0; channel < source.numberOfChannels; channel++) {
+				const data = source.getChannelData(channel);
+				for (let index = 0; index < frameCount; index++) mono[index] += (data[firstFrame + index] ?? 0) / source.numberOfChannels;
+			}
+			await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+			const transcription = transcribeMonophonicVocal(mono, source.sampleRate);
+			if (!transcription.notes.length) throw new Error("No stable monophonic vocal melody was detected. Try a cleaner solo vocal or humming phrase.");
+			const secondsToBars = sourceClip.lengthBars / Math.max(0.001, sourceWindow.durationSec);
+			const notes: MidiNote[] = transcription.notes.map((note) => {
+				const startBars = clamp(note.startSeconds * secondsToBars, 0, sourceClip.lengthBars);
+				return {
+					id: crypto.randomUUID(),
+					pitch: note.pitch,
+					startBars,
+					lengthBars: clamp(note.durationSeconds * secondsToBars, 1 / 128, Math.max(1 / 128, sourceClip.lengthBars - startBars)),
+					velocity: note.velocity,
+				};
+			}).filter((note) => note.startBars < sourceClip.lengthBars);
+			const pitchBend: MidiAutomationPoint[] = transcription.pitchBend
+				.filter((point) => point.atSeconds <= sourceWindow.durationSec)
+				.map((point) => ({ id: crypto.randomUUID(), atBars: point.atSeconds * secondsToBars, value: point.value }));
+			setVocalMidiPreview({
+				sourceClipId: sourceClip.id,
+				sourceAssetId: sourceClip.assetId,
+				name: `${sourceClip.name} Melody`,
+				startBar: sourceClip.startBar,
+				lengthBars: sourceClip.lengthBars,
+				notes,
+				pitchBend,
+			});
+			setVocalMidiStatus(`Detected ${notes.length} editable MIDI note${notes.length === 1 ? "" : "s"}. The original audio remains unchanged.`);
+		} catch (error) {
+			setVocalMidiStatus(error instanceof Error ? error.message : "Vocal transcription failed.");
+		} finally {
+			setVocalMidiBusy(false);
+		}
+	};
+
+	const acceptVocalMidi = () => {
+		const preview = vocalMidiPreview;
+		if (!preview) return;
+		const trackId = crypto.randomUUID();
+		const clipId = crypto.randomUUID();
+		const generation: PartGeneration = {
+			origin: "vocal-transcription",
+			role: "vocal melody",
+			sourceClipId: preview.sourceClipId,
+			sourceAssetId: preview.sourceAssetId,
+			algorithm: "ysong-yin-v1",
+			createdAt: new Date().toISOString(),
+		};
+		const track = mkTrack("instrument", tracks.filter((item) => item.type === "instrument").length + 1, trackId);
+		track.name = preview.name;
+		track.partGeneration = generation;
+		const midiClip: Clip = {
+			id: clipId,
+			trackId,
+			name: preview.name,
+			startBar: preview.startBar,
+			lengthBars: preview.lengthBars,
+			midiNotes: preview.notes,
+			midiPitchBend: preview.pitchBend,
+			midiModulation: [],
+			midiBendRange: 2,
+			midiScales: [{ id: crypto.randomUUID(), root: 0, scaleId: "chromatic" }],
+			midiScaleLock: "soft",
+			partGeneration: generation,
+		};
+		setTracks((current) => [...current, track]);
+		setTrackHeights((current) => ({ ...current, [trackId]: ROW_H }));
+		setClips((current) => [...current, midiClip]);
+		setSelectedTrackId(trackId);
+		setSelectedClipId(clipId);
+		setMidiEditorClipId(clipId);
+		setVocalMidiPreview(null);
+		setVocalMidiStatus("Vocal melody added as an editable MIDI track.");
+	};
+
 	const ensurePlaybackBufferForClip = async (clip: Clip) => {
 		if (!clip.assetId) throw new Error("clip_has_no_asset");
 		const source = await ensureBufferForAsset(clip.assetId);
@@ -4899,6 +5004,13 @@ export default function DAW(_props: TabRendererProps) {
 					))}
 				</div>
 			) : null}
+			{vocalMidiStatus && (
+				<div className="shrink-0 flex items-center gap-2 border-b border-cyan-300/15 bg-cyan-400/[0.06] px-3 py-1.5 text-[11px] text-cyan-50">
+					<span className="min-w-0 flex-1 truncate">{vocalMidiStatus}</span>
+					{vocalMidiPreview && <YSButton className="px-3 py-1 rounded-md text-[11px]" onClick={acceptVocalMidi}>Add editable MIDI</YSButton>}
+					{vocalMidiPreview && <button type="button" className="px-2 py-1 opacity-65 hover:opacity-100" onClick={() => { setVocalMidiPreview(null); setVocalMidiStatus(""); }}>Cancel</button>}
+				</div>
+			)}
 			{/* Main split */}
 			<div className="flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
 				{/* Left: independently collapsible DAW track panel. On smaller/mobile displays this defaults
@@ -5177,6 +5289,15 @@ export default function DAW(_props: TabRendererProps) {
 									Relative
 								</YSButton>
 							</div>
+
+							<YSButton
+								disabled={vocalMidiBusy || !clips.some((clip) => clip.id === selectedClipId && !!clip.assetId)}
+								className="ml-2 px-3 py-1 text-[11px] rounded-md disabled:opacity-30"
+								onClick={() => void analyzeSelectedVocal()}
+								title="Analyze the selected monophonic vocal clip and preview editable MIDI"
+							>
+								{vocalMidiBusy ? "Analyzing…" : "Vocal → MIDI"}
+							</YSButton>
 
 							<div className="ml-auto shrink-0 min-w-[170px] px-2 py-1 rounded-lg border border-neutral-200/10 dark:border-neutral-800 bg-neutral-950/25">
 								<div className="flex items-center justify-center gap-1.5">
