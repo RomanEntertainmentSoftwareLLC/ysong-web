@@ -46,7 +46,7 @@ import {
 type TrackType = "audio" | "instrument";
 type PartGeneration =
 	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string; parentRequestId?: string }
-	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; sourceTrackId: string; sessionId: string; createdAt: string };
+	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string };
 
 type Track = {
 	id: string;
@@ -553,6 +553,7 @@ export default function DAW(_props: TabRendererProps) {
 		sessionId: string;
 		createdAt: number;
 		title: string;
+		singers?: NonNullable<GeneratedSessionManifest["singerRoster"]>;
 	};
 	type DawPersistV1 = {
 		v: 1;
@@ -3502,6 +3503,7 @@ export default function DAW(_props: TabRendererProps) {
 			const source = manifest.tracks[index];
 			const partGeneration: PartGeneration = {
 				origin: "create-song", role: source.role, vocalRole: source.vocalRole,
+				singerId: source.singer?.id, singerName: source.singer?.displayName, singerAvatarRef: source.singer?.avatarRef,
 				sourceTrackId: source.id, sessionId, createdAt: new Date(manifest.createdAt).toISOString(),
 			};
 			const trackId = crypto.randomUUID();
@@ -3553,6 +3555,7 @@ export default function DAW(_props: TabRendererProps) {
 			sessionId,
 			createdAt: manifest.createdAt,
 			title: manifest.projectName || "Generated Song",
+			singers: manifest.singerRoster,
 		});
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));

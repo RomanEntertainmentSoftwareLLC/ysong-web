@@ -7,10 +7,11 @@ import { getActiveBandId, listBandProfiles, setActiveBandId, type BandProfile } 
 import { SCALE_DEFINITIONS, NOTE_NAMES, nearestAllowedPitch, type MidiScaleId, type MidiScaleRule } from "../lib/midi";
 import { decodeAudioDuration, generateMiniMaxTrack, getMusicEngineStatus, uploadGeneratedAudio, type MusicEngineStatus } from "../lib/musicGeneration";
 import { classifyVocalRole, stageGeneratedSession, type GeneratedMidiRegion, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
+import { listSingerCharacters, saveSingerCharacter, singerIdentity, type SingerCharacter } from "../lib/singerLibrary";
 
 const STORAGE_KEY = "ysong:create-song:draft:v3";
-type Draft = { title: string; lyrics: string; style: string; instrumental: boolean; bpm: string; key: string; duration: string; bandId: string };
-const emptyDraft: Draft = { title: "", lyrics: "", style: "", instrumental: false, bpm: "", key: "", duration: "", bandId: "" };
+type Draft = { title: string; lyrics: string; style: string; instrumental: boolean; bpm: string; key: string; duration: string; bandId: string; singerIds: string[] };
+const emptyDraft: Draft = { title: "", lyrics: "", style: "", instrumental: false, bpm: "", key: "", duration: "", bandId: "", singerIds: [] };
 
 type PlanDraft = Omit<GeneratedSessionManifest, "createdAt" | "v">;
 
@@ -98,7 +99,11 @@ function normalizeInstrumentIntent(raw: unknown): InstrumentRoleIntent | undefin
   return Object.values(intent).some(Boolean) ? intent : undefined;
 }
 
-function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDraft {
+function isVocalPart(track: Pick<GeneratedSessionTrack, "role" | "name" | "vocalRole">) {
+  return Boolean(track.vocalRole) || /\b(vocal|voice|sing|singer|choir|growl|scream|rap|spoken|chant)\b/i.test(`${track.role} ${track.name}`);
+}
+
+function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[], singers: SingerCharacter[]): PlanDraft {
   const explicitBpm = Number(draft.bpm);
   const bpm = Number.isFinite(explicitBpm) && explicitBpm >= 20 ? Math.round(explicitBpm) : Math.round(numberIn(raw?.bpm, 120, 20, 400));
   const explicitRoot = rootFromText(draft.key);
@@ -110,6 +115,8 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
   const pluginByPath = new Map(plugins.filter((p) => p.kind === "instrument" && p.loadable !== false).map((p) => [p.path, p] as const));
   const rawTracks = Array.isArray(raw?.tracks) ? raw.tracks : [];
   const usedTrackIds = new Set<string>();
+  const selectedSingers = singers.filter((singer) => draft.singerIds.includes(singer.id));
+  const singerById = new Map(selectedSingers.map((singer) => [singer.id, singer]));
   const tracks: GeneratedSessionTrack[] = rawTracks.slice(0, 24).map((track: any, index: number) => {
     const sourceRole = normalizedText(track?.role, 120) ?? normalizedText(track?.name, 120) ?? "arrangement part";
     const vocalRole = classifyVocalRole(sourceRole);
@@ -134,6 +141,8 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
       instructions,
       useLyrics: !draft.instrumental && Boolean(track?.useLyrics),
     };
+    const plannedSinger = singerById.get(String(track?.singerId || "")) ?? (vocalRole && selectedSingers.length === 1 ? selectedSingers[0] : undefined);
+    if (plannedSinger && isVocalPart(result)) result.singer = singerIdentity(plannedSinger);
     if (mode === "midi") {
       result.instrumentIntent = normalizeInstrumentIntent(track?.instrumentIntent);
       result.desiredInstrument = normalizedText(track?.desiredInstrument) ?? normalizedText(track?.role);
@@ -182,6 +191,7 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[]): PlanDra
       startBar: numberIn(section?.startBar, 1, 1, totalBars),
       endBar: numberIn(section?.endBar, totalBars, 1, totalBars),
     })) : [],
+    singerRoster: selectedSingers.map(singerIdentity),
     tracks,
   };
 }
@@ -223,18 +233,20 @@ async function resolveInstruments(plan: PlanDraft): Promise<PlanDraft> {
   return { ...plan, tracks };
 }
 
-function plannerPrompt(draft: Draft, band: BandProfile | null, plugins: BridgePlugin[]) {
+function plannerPrompt(draft: Draft, band: BandProfile | null, plugins: BridgePlugin[], singers: SingerCharacter[]) {
   const instrumentPlugins = plugins.filter((p) => p.kind === "instrument" && p.loadable !== false);
   const pluginLines = instrumentPlugins.length ? instrumentPlugins.map((p) => `- name=${JSON.stringify(p.name)} vendor=${JSON.stringify(p.vendor || "")} category=${JSON.stringify(p.category || p.subCategories || "")} path=${JSON.stringify(p.path)}`).join("\n") : "(No usable desktop VST3 instruments are currently available.)";
   const bandContext = band ? `\nBAND / ARTIST\nName: ${band.name}\nSound: ${band.genre || "unspecified"}\nIdentity: ${band.bio || band.symbol || "unspecified"}` : "";
-  return `YSong CREATE SONG PRODUCER MODE\nYou are the producer/orchestrator between the user's musical request, MiniMax Music 3, the YSong DAW, and the installed VST3 instruments. Build an EDITABLE MULTITRACK SESSION, not a flattened song.\n\nHARD RULES\n1. Explicit user BPM, key, scale/mode, meter, lyrics, required instruments, exclusions, and section instructions are HARD CONSTRAINTS. Never reinterpret them. E Phrygian means pitch classes E F G A B C D for MIDI tracks.\n2. Never invent lyric lines, titles, style-token words, or prompt phrases for the singer. Only tracks with useLyrics=true may receive the supplied lyrics.\n3. Split the production into separate logical tracks: lead vocal, harmony vocal, backing vocal, vocal doubles, ad-libs, ensemble/group vocals, guitars, bass, drums, synths, pads, arps, strings, effects, etc. Keep every explicitly requested vocal role on its own named audio track, with a unique id and a specific role. Do not combine separate vocal roles or unrelated parts. Request one isolated performance per audio track; do not claim the provider can separate a mixed result. Use neutral role labels unless the user's source explicitly supplies singer identity; do not invent a singer.\n4. Prefer mode=midi when an installed VST3 instrument is genuinely appropriate. For each MIDI part provide instrumentIntent with concise family, role, and timbre labels plus desiredInstrument text. Bridge resolves the final instrument. If supplying a vst.path as a fallback, copy it EXACTLY from the list; never invent a path or plugin.\n5. For MIDI tracks, create compact repeating midiRegions. Every note must obey the requested key/mode. Use startBars and lengthBars relative to the region. Keep patterns musically useful and editable.\n6. If no suitable installed VST exists, mode MUST be audio. Audio is the quality-preserving fallback; never substitute General MIDI for a generated song part.\n7. For audio tracks, instructions must request ONE ISOLATED STEM ONLY, while repeating the exact global BPM/key/mode, section map, role, and explicit exclusions.\n8. MiniMax itself may disobey prompts. Make hardConstraints and forbidden explicit so YSong can validate/enforce what it can before accepting a session.\n9. The structuredCaption must follow MiniMax Music 3's three-heading shape exactly: ### Global Metadata, ### Vocal Details, ### Arrangement.\n10. Return JSON ONLY. No markdown fences, explanations, or comments.\n\nINSTALLED VST3 INSTRUMENTS\n${pluginLines}${bandContext}\n\nUSER SONG BRIEF\nTitle: ${draft.title || "Untitled"}\nInstrumental: ${draft.instrumental}\nStyle: ${draft.style || "unspecified"}\nLyrics:\n${draft.instrumental ? "[Instrumental]" : (draft.lyrics || "(none supplied)")}\nExplicit BPM: ${draft.bpm || "unspecified"}\nExplicit key / mode: ${draft.key || "unspecified"}\nTarget duration: ${draft.duration || "unspecified"}\n\nRETURN THIS JSON SHAPE\n{\n  "projectName":"...",\n  "bpm":128,\n  "keyRoot":0,\n  "keyLabel":"C minor",\n  "scaleId":"natural-minor",\n  "sigNum":4,\n  "sigDen":4,\n  "totalBars":96,\n  "hardConstraints":["..."],\n  "forbidden":["..."],\n  "structuredCaption":"### Global Metadata\\n...\\n\\n### Vocal Details\\n...\\n\\n### Arrangement\\n...",\n  "sections":[{"name":"Intro","startBar":1,"endBar":8}],\n  "tracks":[\n    {\n      "id":"lead-vocal",\n      "name":"Lead Vocal",\n      "role":"lead vocal",\n      "mode":"audio",\n      "useLyrics":true,\n      "instructions":"Lead vocal isolated stem only..."\n    },\n    {\n      "id":"synth-pad",\n      "name":"Synth Pad",\n      "role":"warm analog pad",\n      "mode":"midi",\n      "useLyrics":false,\n      "instructions":"Warm analog pad...",\n      "instrumentIntent":{"family":"synth","role":"pad","timbre":"warm"},\n      "desiredInstrument":"warm analog pad",\n      "vst":{"name":"EXACT INSTALLED NAME","path":"EXACT INSTALLED PATH","vendor":"...","presetHint":"warm slow-attack pad"},\n      "midiRegions":[{"startBar":1,"lengthBars":4,"repeatCount":4,"notes":[{"pitch":60,"startBars":0,"lengthBars":4,"velocity":82}]}]\n    }\n  ]\n}`;
+  const singerContext = singers.length ? `\nSINGER CHARACTERS\n${singers.map((singer) => `- singerId=${JSON.stringify(singer.id)} name=${JSON.stringify(singer.displayName)} voice=${JSON.stringify(singer.voiceDescription)} range=${JSON.stringify(singer.vocalRange)} style=${JSON.stringify(singer.vocalStyle)}`).join("\n")}\nAssign an exact singerId from this roster to each vocal track. Different vocal roles may use different singers.` : "";
+  return `YSong CREATE SONG PRODUCER MODE\nYou are the producer/orchestrator between the user's musical request, MiniMax Music 3, the YSong DAW, and the installed VST3 instruments. Build an EDITABLE MULTITRACK SESSION, not a flattened song.\n\nHARD RULES\n1. Explicit user BPM, key, scale/mode, meter, lyrics, required instruments, exclusions, and section instructions are HARD CONSTRAINTS. Never reinterpret them. E Phrygian means pitch classes E F G A B C D for MIDI tracks.\n2. Never invent lyric lines, titles, style-token words, or prompt phrases for the singer. Only tracks with useLyrics=true may receive the supplied lyrics.\n3. Split the production into separate logical tracks: lead vocal, harmony vocal, backing vocal, vocal doubles, ad-libs, ensemble/group vocals, guitars, bass, drums, synths, pads, arps, strings, effects, etc. Keep every explicitly requested vocal role on its own named audio track, with a unique id and a specific role. Do not combine separate vocal roles or unrelated parts. Request one isolated performance per audio track; do not claim the provider can separate a mixed result. Use neutral role labels unless the user's source explicitly supplies singer identity; do not invent a singer.\n4. Prefer mode=midi when an installed VST3 instrument is genuinely appropriate. For each MIDI part provide instrumentIntent with concise family, role, and timbre labels plus desiredInstrument text. Bridge resolves the final instrument. If supplying a vst.path as a fallback, copy it EXACTLY from the list; never invent a path or plugin.\n5. For MIDI tracks, create compact repeating midiRegions. Every note must obey the requested key/mode. Use startBars and lengthBars relative to the region. Keep patterns musically useful and editable.\n6. If no suitable installed VST exists, mode MUST be audio. Audio is the quality-preserving fallback; never substitute General MIDI for a generated song part.\n7. For audio tracks, instructions must request ONE ISOLATED STEM ONLY, while repeating the exact global BPM/key/mode, section map, role, and explicit exclusions.\n8. MiniMax itself may disobey prompts. Make hardConstraints and forbidden explicit so YSong can validate/enforce what it can before accepting a session.\n9. The structuredCaption must follow MiniMax Music 3's three-heading shape exactly: ### Global Metadata, ### Vocal Details, ### Arrangement.\n10. Return JSON ONLY. No markdown fences, explanations, or comments.\n\nINSTALLED VST3 INSTRUMENTS\n${pluginLines}${bandContext}${singerContext}\n\nUSER SONG BRIEF\nTitle: ${draft.title || "Untitled"}\nInstrumental: ${draft.instrumental}\nStyle: ${draft.style || "unspecified"}\nLyrics:\n${draft.instrumental ? "[Instrumental]" : (draft.lyrics || "(none supplied)")}\nExplicit BPM: ${draft.bpm || "unspecified"}\nExplicit key / mode: ${draft.key || "unspecified"}\nTarget duration: ${draft.duration || "unspecified"}\n\nRETURN THIS JSON SHAPE\n{\n  "projectName":"...",\n  "bpm":128,\n  "keyRoot":0,\n  "keyLabel":"C minor",\n  "scaleId":"natural-minor",\n  "sigNum":4,\n  "sigDen":4,\n  "totalBars":96,\n  "hardConstraints":["..."],\n  "forbidden":["..."],\n  "structuredCaption":"### Global Metadata\\n...\\n\\n### Vocal Details\\n...\\n\\n### Arrangement\\n...",\n  "sections":[{"name":"Intro","startBar":1,"endBar":8}],\n  "tracks":[\n    {\n      "id":"lead-vocal",\n      "name":"Lead Vocal",\n      "role":"lead vocal",\n      "singerId":"exact-stable-singer-id",\n      "mode":"audio",\n      "useLyrics":true,\n      "instructions":"Lead vocal isolated stem only..."\n    },\n    {\n      "id":"synth-pad",\n      "name":"Synth Pad",\n      "role":"warm analog pad",\n      "mode":"midi",\n      "useLyrics":false,\n      "instructions":"Warm analog pad...",\n      "instrumentIntent":{"family":"synth","role":"pad","timbre":"warm"},\n      "desiredInstrument":"warm analog pad",\n      "vst":{"name":"EXACT INSTALLED NAME","path":"EXACT INSTALLED PATH","vendor":"...","presetHint":"warm slow-attack pad"},\n      "midiRegions":[{"startBar":1,"lengthBars":4,"repeatCount":4,"notes":[{"pitch":60,"startBars":0,"lengthBars":4,"velocity":82}]}]\n    }\n  ]\n}`;
 }
 
 function buildMiniMaxTrackInstructions(plan: PlanDraft, track: GeneratedSessionTrack) {
   const sections = plan.sections.map((s) => `${s.name}: bars ${s.startBar}-${s.endBar}`).join("; ");
   const constraints = plan.hardConstraints.length ? plan.hardConstraints.map((x) => `- ${x}`).join("\n") : "- Preserve the supplied musical specification exactly.";
   const forbidden = plan.forbidden.length ? plan.forbidden.map((x) => `- ${x}`).join("\n") : "- Do not add unrequested lyrics, spoken words, or unrelated instruments.";
-  return `YSong isolated multitrack generation.\n\nHARD CONSTRAINTS\n${constraints}\n- Tempo: exactly ${plan.bpm} BPM.\n- Key / mode: exactly ${plan.keyLabel}.\n- Meter: ${plan.sigNum}/${plan.sigDen}.\n- This output must contain ONLY the ${track.name} / ${track.role} part. No full mix. No other instrument families.\n- Preserve full-song timeline and silence when this part is not active so it aligns at bar 1 in YSong.\n\nFORBIDDEN\n${forbidden}\n\nSECTION MAP\n${sections || `Full arrangement: bars 1-${plan.totalBars}`}\n\nTRACK DIRECTION\n${track.instructions}\n\nGLOBAL MINI MAX STRUCTURED CAPTION\n${plan.structuredCaption}`;
+  const singer = track.singer ? `\nSINGER IDENTITY\nStable singer ID: ${track.singer.id}\nDisplay name: ${track.singer.displayName}\nVoice: ${track.singer.voiceDescription || "unspecified"}\nRange: ${track.singer.vocalRange || "unspecified"}\nStyle: ${track.singer.vocalStyle || "unspecified"}\nTreat this as durable character direction for this role.` : "";
+  return `YSong isolated multitrack generation.\n\nHARD CONSTRAINTS\n${constraints}\n- Tempo: exactly ${plan.bpm} BPM.\n- Key / mode: exactly ${plan.keyLabel}.\n- Meter: ${plan.sigNum}/${plan.sigDen}.\n- This output must contain ONLY the ${track.name} / ${track.role} part. No full mix. No other instrument families.\n- Preserve full-song timeline and silence when this part is not active so it aligns at bar 1 in YSong.\n\nFORBIDDEN\n${forbidden}\n\nSECTION MAP\n${sections || `Full arrangement: bars 1-${plan.totalBars}`}\n\nTRACK DIRECTION\n${track.instructions}${singer}\n\nGLOBAL MINI MAX STRUCTURED CAPTION\n${plan.structuredCaption}`;
 }
 
 export default function CreateSongPane(_props: TabRendererProps) {
@@ -243,10 +255,12 @@ export default function CreateSongPane(_props: TabRendererProps) {
     try {
       const old = JSON.parse(localStorage.getItem("ysong:create-song:draft:v2") || localStorage.getItem("ysong:create-song:draft:v1") || "{}");
       const current = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      return { ...emptyDraft, ...old, ...current, bandId: current.bandId || getActiveBandId() || "" };
+      return { ...emptyDraft, ...old, ...current, bandId: current.bandId || getActiveBandId() || "", singerIds: Array.isArray(current.singerIds) ? current.singerIds : [] };
     } catch { return { ...emptyDraft, bandId: getActiveBandId() || "" }; }
   });
   const [bands, setBands] = useState<BandProfile[]>([]);
+  const [singers, setSingers] = useState<SingerCharacter[]>([]);
+  const [newSinger, setNewSinger] = useState({ displayName: "", voiceDescription: "", vocalRange: "", vocalStyle: "", avatar: null as File | null });
   const [plugins, setPlugins] = useState<BridgePlugin[]>([]);
   const [engine, setEngine] = useState<MusicEngineStatus | null>(null);
   const [plan, setPlan] = useState<PlanDraft | null>(null);
@@ -264,13 +278,48 @@ export default function CreateSongPane(_props: TabRendererProps) {
     return () => window.removeEventListener("ysong:bands-changed", load);
   }, []);
   useEffect(() => {
+    const load = () => void listSingerCharacters().then(setSingers).catch(() => {});
+    load();
+    window.addEventListener("ysong:singers-changed", load);
+    return () => window.removeEventListener("ysong:singers-changed", load);
+  }, []);
+  useEffect(() => {
     bridgeApi.getPlugins().then((r) => setPlugins(r.plugins ?? [])).catch(() => setPlugins([]));
     void refreshEngine();
   }, []);
 
   const patch = (next: Partial<Draft>) => { setDraft((d) => ({ ...d, ...next })); setPlan(null); setPlanApproved(false); };
   const selectedBand = useMemo(() => bands.find((b) => b.id === draft.bandId) ?? null, [bands, draft.bandId]);
+  const selectedSingers = useMemo(() => singers.filter((singer) => draft.singerIds.includes(singer.id)), [singers, draft.singerIds]);
   const usableVsts = useMemo(() => plugins.filter((p) => p.kind === "instrument" && p.loadable !== false), [plugins]);
+
+  async function createSinger() {
+    const displayName = newSinger.displayName.trim();
+    if (!displayName) { setError("Give the singer a display name."); return; }
+    try {
+      const id = crypto.randomUUID();
+      const saved = await saveSingerCharacter({
+        id, displayName, avatar: newSinger.avatar, avatarName: newSinger.avatar?.name,
+        voiceDescription: newSinger.voiceDescription.trim(), vocalRange: newSinger.vocalRange.trim(),
+        vocalStyle: newSinger.vocalStyle.trim(), tags: [],
+      });
+      setSingers((current) => [saved, ...current.filter((singer) => singer.id !== saved.id)]);
+      patch({ singerIds: [...draft.singerIds, saved.id] });
+      setNewSinger({ displayName: "", voiceDescription: "", vocalRange: "", vocalStyle: "", avatar: null });
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save this singer character.");
+    }
+  }
+
+  function toggleSinger(id: string) {
+    patch({ singerIds: draft.singerIds.includes(id) ? draft.singerIds.filter((value) => value !== id) : [...draft.singerIds, id] });
+  }
+
+  function assignSinger(trackId: string, singer: SingerCharacter) {
+    setPlan((current) => current ? { ...current, tracks: current.tracks.map((track) => track.id === trackId ? { ...track, singer: singerIdentity(singer) } : track) } : current);
+    setPlanApproved(false);
+  }
 
   async function refreshEngine() {
     try { setEngine(await getMusicEngineStatus()); }
@@ -281,10 +330,10 @@ export default function CreateSongPane(_props: TabRendererProps) {
     setBusy(true); setError(""); setProgress("YSong AI is turning the brief into a strict multitrack session…");
     try {
       const reply = await localAiChat([
-        { role: "system", content: plannerPrompt(draft, selectedBand, plugins) },
+        { role: "system", content: plannerPrompt(draft, selectedBand, plugins, selectedSingers) },
         { role: "user", content: "Build the session manifest now. Return JSON only." },
       ]);
-      const normalized = await resolveInstruments(normalizePlan(parseJsonReply(reply), draft, plugins));
+      const normalized = await resolveInstruments(normalizePlan(parseJsonReply(reply), draft, plugins, singers));
       setPlan(normalized);
       setPlanApproved(false);
       setProgress(`Planned ${normalized.tracks.length} tracks: ${normalized.tracks.filter((t) => t.mode === "midi").length} editable MIDI/VST, ${normalized.tracks.filter((t) => t.mode === "audio").length} generated audio.`);
@@ -369,8 +418,14 @@ export default function CreateSongPane(_props: TabRendererProps) {
           {!engine?.reachable && <div className="mt-1 opacity-70">YSong can still plan the editable session. Audio generation starts once the local/open-weights engine is ready.</div>}
         </div>
         <Field label="Song title"><input value={draft.title} onChange={(e) => patch({ title: e.target.value })} placeholder="Untitled song" className="input" /></Field>
-        <Field label="Band / artist"><select className="input" value={draft.bandId} onChange={(e) => { patch({ bandId: e.target.value }); if (e.target.value) setActiveBandId(e.target.value); }}><option value="">No saved band selected</option>{bands.map((b) => <option key={b.id} value={b.id}>{b.name || "Untitled Band"}</option>)}</select></Field>
+        <Field label="Band / artist"><select className="input" value={draft.bandId} onChange={(e) => { const band = bands.find((item) => item.id === e.target.value); patch({ bandId: e.target.value, ...(band?.singerIds?.length ? { singerIds: band.singerIds } : {}) }); if (e.target.value) setActiveBandId(e.target.value); }}><option value="">No saved band selected</option>{bands.map((b) => <option key={b.id} value={b.id}>{b.name || "Untitled Band"}</option>)}</select></Field>
         {selectedBand && <div className="rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-neutral-400"><b className="text-neutral-200">{selectedBand.name}</b>{selectedBand.genre ? ` · ${selectedBand.genre}` : ""}<div className="mt-1">Band identity is included in the producer brief.</div></div>}
+        {!draft.instrumental && <div className="rounded-xl border border-white/10 bg-white/[.025] p-3 space-y-3">
+          <div><div className="text-[11px] uppercase tracking-wider text-neutral-500">Singer characters</div><div className="text-xs text-neutral-400 mt-1">Select reusable singers, then assign their avatar to each vocal part in the blueprint.</div></div>
+          <div className="flex flex-wrap gap-2">{singers.map((singer) => <SingerBubble key={singer.id} singer={singer} active={draft.singerIds.includes(singer.id)} onClick={() => toggleSinger(singer.id)} />)}{!singers.length && <span className="text-xs text-neutral-500">Create your first singer below.</span>}</div>
+          <div className="grid grid-cols-2 gap-2"><input className="input" value={newSinger.displayName} onChange={(e) => setNewSinger((value) => ({ ...value, displayName: e.target.value }))} placeholder="Singer name" /><input className="input" value={newSinger.vocalRange} onChange={(e) => setNewSinger((value) => ({ ...value, vocalRange: e.target.value }))} placeholder="Range (alto, bass…)" /><input className="input col-span-2" value={newSinger.voiceDescription} onChange={(e) => setNewSinger((value) => ({ ...value, voiceDescription: e.target.value }))} placeholder="Voice profile (warm, raspy, clean…)" /><input className="input" value={newSinger.vocalStyle} onChange={(e) => setNewSinger((value) => ({ ...value, vocalStyle: e.target.value }))} placeholder="Style / delivery" /><label className="input text-xs text-neutral-400 cursor-pointer truncate"><input type="file" accept="image/*" className="hidden" onChange={(e) => setNewSinger((value) => ({ ...value, avatar: e.target.files?.[0] ?? null }))} />{newSinger.avatar?.name || "Choose avatar"}</label></div>
+          <button type="button" onClick={() => void createSinger()} className="rounded-lg border border-indigo-400/30 bg-indigo-500/15 px-3 py-1.5 text-xs">Save singer</button>
+        </div>}
         <label className="flex items-center gap-3 rounded-xl border border-white/10 p-3"><input type="checkbox" checked={draft.instrumental} onChange={(e) => patch({ instrumental: e.target.checked })} /><span className="text-sm">Instrumental</span></label>
         {!draft.instrumental && <Field label="Lyrics"><textarea value={draft.lyrics} onChange={(e) => patch({ lyrics: e.target.value })} placeholder="Write or paste lyrics…" className="input min-h-[230px] resize-y" /></Field>}
         <Field label="Style"><textarea value={draft.style} onChange={(e) => patch({ style: e.target.value })} placeholder="Genre, instruments, mood, vocal style, production direction…" className="input min-h-[120px] resize-y" /></Field>
@@ -385,7 +440,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
           <div className="grid sm:grid-cols-4 gap-2"><Stat label="Tempo" value={`${plan.bpm} BPM`} /><Stat label="Key / mode" value={plan.keyLabel} /><Stat label="Meter" value={`${plan.sigNum}/${plan.sigDen}`} /><Stat label="Tracks" value={String(plan.tracks.length)} /></div>
           <div className={`rounded-xl border px-3 py-2 text-xs ${planApproved ? "border-emerald-400/25 bg-emerald-400/[.06] text-emerald-100" : "border-amber-400/25 bg-amber-400/[.06] text-amber-100"}`}>{planApproved ? "✓ Blueprint approved. Generate Session is unlocked." : "Blueprint is proposal-only. Review it and press Approve blueprint before YSong may create tracks."}</div>
           <div><SectionTitle>Hard constraints</SectionTitle><div className="mt-2 flex flex-wrap gap-2">{plan.hardConstraints.length ? plan.hardConstraints.map((x, i) => <span key={i} className="rounded-full border border-amber-300/20 bg-amber-300/[.06] px-2.5 py-1 text-xs text-amber-100">{x}</span>) : <span className="text-xs text-neutral-500">No explicit hard constraints beyond the session specification.</span>}</div></div>
-          <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}{track.instrumentResolution && <div className="mt-1 text-[11px] text-neutral-400">{track.instrumentResolution.status === "resolved" ? `Bridge match${track.instrumentResolution.score != null ? ` (${track.instrumentResolution.score})` : ""}: ${track.instrumentResolution.reasons?.[0] ?? "instrument tag evidence"}` : `${track.instrumentResolution.message} ${track.instrumentResolution.source === "legacy-path" ? "Using the validated planner choice." : "Using an audio part."}`}</div>}</div>)}</div></div>
+          <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{isVocalPart(track) && selectedSingers.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{selectedSingers.map((singer) => <SingerBubble key={singer.id} singer={singer} active={track.singer?.id === singer.id} compact onClick={() => assignSinger(track.id, singer)} />)}</div>}{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}{track.instrumentResolution && <div className="mt-1 text-[11px] text-neutral-400">{track.instrumentResolution.status === "resolved" ? `Bridge match${track.instrumentResolution.score != null ? ` (${track.instrumentResolution.score})` : ""}: ${track.instrumentResolution.reasons?.[0] ?? "instrument tag evidence"}` : `${track.instrumentResolution.message} ${track.instrumentResolution.source === "legacy-path" ? "Using the validated planner choice." : "Using an audio part."}`}</div>}</div>)}</div></div>
           <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">MiniMax structured caption</summary><pre className="mt-3 whitespace-pre-wrap text-xs leading-5 text-neutral-400 font-sans">{plan.structuredCaption}</pre></details>
         </div>}
       </section>
@@ -397,3 +452,17 @@ export default function CreateSongPane(_props: TabRendererProps) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block"><span className="block text-[11px] uppercase tracking-wider text-neutral-500 mb-1.5">{label}</span>{children}</label>; }
 function Stat({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2"><div className="text-[10px] uppercase tracking-wider text-neutral-500">{label}</div><div className="text-sm mt-1">{value}</div></div>; }
 function SectionTitle({ children }: { children: React.ReactNode }) { return <div className="text-xs uppercase tracking-widest text-neutral-500">{children}</div>; }
+
+function SingerBubble({ singer, active, compact = false, onClick }: { singer: SingerCharacter; active: boolean; compact?: boolean; onClick: () => void }) {
+  const [avatarUrl, setAvatarUrl] = useState("");
+  useEffect(() => {
+    if (!singer.avatar) { setAvatarUrl(""); return; }
+    const url = URL.createObjectURL(singer.avatar);
+    setAvatarUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [singer.avatar]);
+  return <button type="button" onClick={onClick} title={`${singer.displayName}${singer.voiceDescription ? ` · ${singer.voiceDescription}` : ""}`} className={`rounded-full border flex items-center gap-1.5 pr-2 transition ${active ? "border-indigo-300 bg-indigo-400/20 text-indigo-100" : "border-white/10 bg-black/20 text-neutral-400"}`}>
+    <span className={`${compact ? "h-6 w-6 text-[9px]" : "h-8 w-8 text-[10px]"} rounded-full overflow-hidden bg-indigo-500/20 grid place-items-center font-bold shrink-0`}>{avatarUrl ? <img src={avatarUrl} alt="" className="h-full w-full object-cover" /> : singer.displayName.slice(0, 2).toUpperCase()}</span>
+    <span className={`${compact ? "text-[10px]" : "text-xs"} max-w-28 truncate`}>{singer.displayName}</span>
+  </button>;
+}

@@ -11,6 +11,7 @@ import {
   setActiveBandId,
   type BandProfile,
 } from "../lib/bandLibrary";
+import { listSingerCharacters, type SingerCharacter } from "../lib/singerLibrary";
 
 type BandDraft = Omit<BandProfile, "createdAt" | "updatedAt">;
 const blank = (): BandDraft => ({
@@ -25,12 +26,14 @@ const blank = (): BandDraft => ({
   accent: "#a78bfa",
   image: null,
   imageName: "",
+  singerIds: [],
 });
 
 export default function BandCreationPane(_props: TabRendererProps) {
   const { tabs, openTab, activateTab } = useTabManager();
   const [band, setBand] = useState<BandDraft>(() => blank());
   const [bands, setBands] = useState<BandProfile[]>([]);
+  const [singers, setSingers] = useState<SingerCharacter[]>([]);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -58,6 +61,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
       image: found.image ?? null,
       imageName: found.imageName ?? "",
       avatarObjectKey: found.avatarObjectKey ?? "",
+      singerIds: found.singerIds ?? [],
     });
     setActiveBandId(found.id);
     setSaved(true);
@@ -81,6 +85,13 @@ export default function BandCreationPane(_props: TabRendererProps) {
   }, []);
 
   useEffect(() => {
+    const load = () => void listSingerCharacters().then(setSingers).catch(() => {});
+    load();
+    window.addEventListener("ysong:singers-changed", load);
+    return () => window.removeEventListener("ysong:singers-changed", load);
+  }, []);
+
+  useEffect(() => {
     const onOpen = (event: Event) => {
       const id = String((event as CustomEvent<any>).detail?.id || getActiveBandId() || "");
       if (id) void loadBand(id);
@@ -97,7 +108,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     };
   }, []);
 
-  useEffect(() => { setSaved(false); }, [band.type, band.name, band.genre, band.bio, band.members, band.symbol, band.primary, band.accent, band.image, band.imageName]);
+  useEffect(() => { setSaved(false); }, [band.type, band.name, band.genre, band.bio, band.members, band.symbol, band.primary, band.accent, band.image, band.imageName, band.singerIds]);
 
   useEffect(() => {
     if (!band.image) { setPreviewUrl(""); return; }
@@ -186,6 +197,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
               {band.image && <div className="mt-2 text-right"><button type="button" onClick={() => patch({ image: null, imageName: "" })} className="text-xs text-red-300">Remove image</button></div>}
             </Field>
             <Field label="Members"><textarea className="input min-h-[130px]" value={band.members} onChange={(e) => patch({ members: e.target.value })} placeholder={'One per line, e.g.\nIsa — lead vocals\nFrey — alto vocals'} /></Field>
+            <Field label="Singer roster"><div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-black/20 p-3">{singers.map((singer) => { const active = (band.singerIds ?? []).includes(singer.id); return <button key={singer.id} type="button" onClick={() => patch({ singerIds: active ? (band.singerIds ?? []).filter((id) => id !== singer.id) : [...(band.singerIds ?? []), singer.id] })} className={`rounded-full border px-3 py-1.5 text-xs ${active ? "border-fuchsia-300 bg-fuchsia-400/20 text-fuchsia-100" : "border-white/10 text-neutral-400"}`}>{singer.displayName}</button>; })}{!singers.length && <span className="text-xs text-neutral-500">Create singer characters in Create Song, then add them to this roster.</span>}</div></Field>
             <Field label="Band story / bio"><textarea className="input min-h-[150px]" value={band.bio} onChange={(e) => patch({ bio: e.target.value })} placeholder="Identity, lore, attitude, visual language…" /></Field>
             <Field label="Logo / symbol direction"><textarea className="input min-h-[100px]" value={band.symbol} onChange={(e) => patch({ symbol: e.target.value })} placeholder="Describe the mark, icon, crest, symbol, typography…" /></Field>
             <div className="flex gap-4"><Field label="Primary"><input type="color" value={band.primary} onChange={(e) => patch({ primary: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field><Field label="Accent"><input type="color" value={band.accent} onChange={(e) => patch({ accent: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field></div>

@@ -1,5 +1,6 @@
 import type { MidiScaleId } from "./midi";
 import type { InstrumentRoleIntent } from "./bridgeApi";
+import type { SingerIdentity } from "./singerLibrary";
 
 export type GeneratedMidiNote = {
   pitch: number;
@@ -38,6 +39,7 @@ export type GeneratedSessionTrack = {
   name: string;
   role: string;
   vocalRole?: "lead vocal" | "harmony vocal" | "backing vocal" | "vocal double" | "ad-lib vocal" | "ensemble vocal";
+  singer?: SingerIdentity;
   mode: "audio" | "midi";
   instructions: string;
   useLyrics?: boolean;
@@ -86,6 +88,7 @@ export type GeneratedSessionManifest = {
   forbidden: string[];
   structuredCaption: string;
   sections: GeneratedSongSection[];
+  singerRoster?: SingerIdentity[];
   tracks: GeneratedSessionTrack[];
 };
 

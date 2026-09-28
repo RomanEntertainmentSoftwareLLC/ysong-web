@@ -1,5 +1,6 @@
 import { deleteAccountArtist, fetchAccountArtists, saveAccountArtist } from "./artistApi";
 import { uploadProfileAsset } from "./profileApi";
+import { BAND_STORE as STORE, openCreativeLibraryDb } from "./creativeLibraryDb";
 export type BandProfile = {
   id: string;
   type?: "solo" | "band";
@@ -13,26 +14,12 @@ export type BandProfile = {
   image?: Blob | null;
   imageName?: string;
   avatarObjectKey?: string;
+  singerIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
 
-const DB_NAME = "ysong-creative-library";
-const DB_VERSION = 1;
-const STORE = "bands";
 const ACTIVE_KEY = "ysong:band-active-id";
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "id" });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
 
 export function getActiveBandId() {
   try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; }
@@ -47,7 +34,7 @@ export function setActiveBandId(id: string | null) {
 
 export async function listBandProfiles(): Promise<BandProfile[]> {
   if (!("indexedDB" in window)) return [];
-  const db = await openDb();
+  const db = await openCreativeLibraryDb();
   try {
     const items = await new Promise<BandProfile[]>((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly");
@@ -60,7 +47,7 @@ export async function listBandProfiles(): Promise<BandProfile[]> {
     const remote = await fetchAccountArtists().catch(() => ({ artists: [] }));
     const byId = new Map(items.map((x) => [x.id, x]));
     for (const a of remote.artists || []) {
-      if (!byId.has(a.id)) byId.set(a.id, { id:a.id, type:a.type, name:a.name, genre:a.genre, bio:a.bio, members:a.members, symbol:a.symbol, primary:a.primary, accent:a.accent, image:null, imageName:"", avatarObjectKey:a.avatarObjectKey || "", createdAt:0, updatedAt:0 });
+      if (!byId.has(a.id)) byId.set(a.id, { id:a.id, type:a.type, name:a.name, genre:a.genre, bio:a.bio, members:a.members, symbol:a.symbol, primary:a.primary, accent:a.accent, image:null, imageName:"", avatarObjectKey:a.avatarObjectKey || "", singerIds: [], createdAt:0, updatedAt:0 });
     }
     return [...byId.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   } finally { db.close(); }
@@ -68,7 +55,7 @@ export async function listBandProfiles(): Promise<BandProfile[]> {
 
 export async function getBandProfile(id: string): Promise<BandProfile | null> {
   if (!("indexedDB" in window) || !id) return null;
-  const db = await openDb();
+  const db = await openCreativeLibraryDb();
   try {
     return await new Promise<BandProfile | null>((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly");
@@ -103,7 +90,7 @@ export async function saveBandProfile(profile: Omit<BandProfile, "createdAt" | "
     const uploaded = await uploadProfileAsset(avatarFile);
     next.avatarObjectKey = uploaded.objectKey;
   }
-  const db = await openDb();
+  const db = await openCreativeLibraryDb();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
@@ -122,7 +109,7 @@ export async function saveBandProfile(profile: Omit<BandProfile, "createdAt" | "
 export async function deleteBandProfile(id: string): Promise<void> {
   await deleteAccountArtist(id);
   if (!("indexedDB" in window)) return;
-  const db = await openDb();
+  const db = await openCreativeLibraryDb();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
