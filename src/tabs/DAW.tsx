@@ -32,6 +32,8 @@ import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedS
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
 import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
+import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
+import { localAiChat } from "../lib/localAiApi";
 import {
 	GM_PROGRAMS,
 	NOTE_NAMES,
@@ -4749,6 +4751,38 @@ export default function DAW(_props: TabRendererProps) {
 		return compressor ? Math.max(0, -compressor.reduction) : 0;
 	})();
 
+	const requestFxChainPlan = async (track: Track, intent: string): Promise<FxChainPlan> => {
+		const browserEffectsAvailable = !trackUsesNativeVst(track);
+		const allowed = browserEffectsAvailable
+			? "compressor, delay, chorus, flanger, phaser, bitcrusher, reverb"
+			: "compressor only";
+		try {
+			const reply = await localAiChat([
+				{
+					role: "system",
+					content: `You are YSong's FX-chain planner. Propose an ordered chain using ONLY these exact effect types: ${allowed}. Return JSON only, never code. Shape: {"summary":"concise","devices":[{"type":"compressor","enabled":true,"thresholdDb":-18,"ratio":4,"attackMs":12,"releaseMs":180,"kneeDb":18,"inputGainDb":0,"outputGainDb":0,"reason":"..."},{"type":"reverb","enabled":true,"mix":0.2,"decaySeconds":2.2,"reason":"..."}]}. Browser-effect fields, where relevant: mix 0..1, rateHz 0.05..8, depth 0..1, timeMs 1..1000, feedback 0..0.85, bits 2..16, cutoffHz 100..5000, decaySeconds 0.2..8. Compressor ranges: input/output gain -24..24 dB, threshold -60..0 dB, ratio 1..20, attack 0.1..200 ms, release 10..2000 ms, knee 0..40 dB. Use no more than 6 devices. YSong validates every value and ignores every unknown field.`,
+				},
+				{
+					role: "user",
+					content: `Track: ${track.name}\nTrack type: ${track.type}\nProcessing intention: ${intent}\nCurrent ordered chain: ${(track.effects ?? []).map((effect) => effect.type).join(", ") || "none"}\nPropose a complete replacement chain for review.`,
+				},
+			]);
+			const plan = normalizeFxChainPlan(parseFxChainPlanReply(reply), intent, { browserEffectsAvailable, source: "ai" });
+			if (plan.devices.length) return plan;
+		} catch { /* The local deterministic proposal remains available offline. */ }
+		return fallbackFxChainPlan(intent, { browserEffectsAvailable });
+	};
+
+	const applyFxChainPlan = (track: Track, plan: FxChainPlan) => {
+		const validated = normalizeFxChainPlan({ summary: plan.summary, devices: plan.devices }, plan.intent, {
+			browserEffectsAvailable: !trackUsesNativeVst(track),
+			source: plan.source,
+		});
+		if (!validated.devices.length) return;
+		setTracks((current) => current.map((item) => item.id === track.id ? { ...item, effects: validated.devices.map((device) => device.effect) } : item));
+		setFxEditorEffectId(null);
+	};
+
 	const composerProjectContext = useMemo<ComposerProjectContext>(() => {
 		const selectedMidi = selectedClipId ? clips.find((clip) => clip.id === selectedClipId && (clip.midiNotes?.length ?? 0) > 0) ?? null : null;
 		const sourceTrack = selectedMidi ? tracks.find((track) => track.id === selectedMidi.trackId) ?? null : null;
@@ -6030,6 +6064,8 @@ export default function DAW(_props: TabRendererProps) {
 					onRemove={(effectId) => removeTrackEffect(fxChainTrack.id, effectId)}
 					onOpen={(effectId) => setFxEditorEffectId(effectId)}
 					onReorder={(from, to) => reorderTrackEffect(fxChainTrack.id, from, to)}
+					onPlan={(intent) => requestFxChainPlan(fxChainTrack, intent)}
+					onApplyPlan={(plan) => applyFxChainPlan(fxChainTrack, plan)}
 					onClose={() => { setFxChainTrackId(null); setFxEditorEffectId(null); }}
 				/>,
 				document.body,

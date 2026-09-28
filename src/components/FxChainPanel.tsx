@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { browserEffectNames, type BrowserEffectType, type DawTrackEffect } from "../lib/dawEffects";
+import { summarizeEffect, type FxChainPlan } from "../lib/fxChainPlanner";
 
 type Props = {
   trackName: string;
@@ -11,12 +12,20 @@ type Props = {
   onRemove: (id: string) => void;
   onOpen: (id: string) => void;
   onReorder: (from: number, to: number) => void;
+  onPlan: (intent: string) => Promise<FxChainPlan>;
+  onApplyPlan: (plan: FxChainPlan) => void;
   onClose: () => void;
 };
 
-export default function FxChainPanel({ trackName, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onClose }: Props) {
+const COMMON_INTENTS = ["Spacious lead vocal", "Subtle vocal polish", "Aggressive electronic vocal", "Wide synth", "Dark atmospheric pad", "Distorted lo-fi texture", "Punchier drums", "Cleaner mix"];
+
+export default function FxChainPanel({ trackName, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onPlan, onApplyPlan, onClose }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [intent, setIntent] = useState("");
+  const [plan, setPlan] = useState<FxChainPlan | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState("");
   const ghostRef = useRef<HTMLElement | null>(null);
 
   const cleanupGhost = () => {
@@ -33,6 +42,28 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
     if (to !== from) onReorder(from, to);
   };
 
+  const requestPlan = async () => {
+    const request = intent.trim();
+    if (!request) { setPlanError("Describe the processing intention first."); return; }
+    setPlanning(true); setPlanError(""); setPlan(null);
+    try {
+      const next = await onPlan(request);
+      if (!next.devices.length) throw new Error("No compatible YSong effects were proposed for this track.");
+      setPlan(next);
+    } catch (error) { setPlanError(error instanceof Error ? error.message : "Could not create an FX-chain proposal."); }
+    finally { setPlanning(false); }
+  };
+
+  const movePlanDevice = (index: number, direction: -1 | 1) => setPlan((current) => {
+    if (!current) return current;
+    const destination = index + direction;
+    if (destination < 0 || destination >= current.devices.length) return current;
+    const devices = [...current.devices];
+    const [moved] = devices.splice(index, 1);
+    devices.splice(destination, 0, moved);
+    return { ...current, devices };
+  });
+
   return (
     <div className="fixed inset-0 z-[250] flex justify-end" role="dialog" aria-modal="true" aria-label={`${trackName} effects chain`}>
       <button className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} aria-label="Close effects chain" />
@@ -47,6 +78,21 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
 
         <div className="px-4 pt-4 text-[11px] opacity-55">Signal flows from top to bottom. Drag or use the arrow buttons to change processing order.</div>
         {!browserEffectsAvailable && <div className="mx-4 mt-3 rounded-lg border border-amber-300/25 bg-amber-300/5 p-3 text-xs text-amber-100/80">Native VST audio supports Dynamics C•1 only. Browser effects saved on this track are unavailable during native playback and export.</div>}
+        <div className="mx-4 mt-3 rounded-xl border border-fuchsia-300/20 bg-fuchsia-400/[0.04] p-3">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-fuchsia-100/65">YSong FX planner</div>
+          <div className="mt-2 flex gap-2"><input value={intent} onChange={(event) => setIntent(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void requestPlan(); }} className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs outline-none focus:border-fuchsia-300/40" placeholder="e.g. futuristic cyber vocal" /><button type="button" disabled={planning} onClick={() => void requestPlan()} className="rounded-lg border border-fuchsia-300/25 bg-fuchsia-400/10 px-3 py-2 text-xs disabled:opacity-40">{planning ? "Planning…" : "Propose"}</button></div>
+          <div className="mt-2 flex flex-wrap gap-1">{COMMON_INTENTS.map((example) => <button key={example} type="button" onClick={() => setIntent(example)} className="rounded-full border border-white/10 px-2 py-1 text-[9px] opacity-65 hover:opacity-100">{example}</button>)}</div>
+          {planError && <div className="mt-2 text-xs text-rose-200">{planError}</div>}
+          {plan && <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-2.5">
+            <div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold">Proposed chain</div><span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] uppercase tracking-wide opacity-60">{plan.source === "ai" ? "YSong AI" : "Local fallback"}</span></div>
+            <div className="mt-1 text-[10px] opacity-60">{plan.summary}</div>
+            <div className="mt-2 space-y-1.5">{plan.devices.map((device, index) => <div key={device.effect.id} className="rounded-lg border border-white/10 bg-white/[0.035] p-2">
+              <div className="flex items-center gap-2"><span className="w-5 text-[9px] font-mono opacity-45">{String(index + 1).padStart(2, "0")}</span><b className="min-w-0 flex-1 truncate text-xs">{device.effect.name}</b><button type="button" className={`rounded border px-2 py-1 text-[9px] ${device.effect.enabled ? "border-emerald-300/25 text-emerald-200" : "border-white/10 opacity-45"}`} onClick={() => setPlan((current) => current ? { ...current, devices: current.devices.map((item) => item.effect.id === device.effect.id ? { ...item, effect: { ...item.effect, enabled: !item.effect.enabled } } : item) } : current)}>{device.effect.enabled ? "ON" : "BYPASS"}</button><button type="button" disabled={index === 0} className="px-1 disabled:opacity-20" onClick={() => movePlanDevice(index, -1)}>↑</button><button type="button" disabled={index === plan.devices.length - 1} className="px-1 disabled:opacity-20" onClick={() => movePlanDevice(index, 1)}>↓</button><button type="button" className="px-1 text-rose-200/70" onClick={() => setPlan((current) => current ? { ...current, devices: current.devices.filter((item) => item.effect.id !== device.effect.id) } : current)}>✕</button></div>
+              <div className="mt-1 text-[10px] text-cyan-100/65">{summarizeEffect(device.effect)}</div><div className="mt-1 text-[10px] opacity-50">{device.reason}</div>
+            </div>)}</div>
+            <div className="mt-3 flex justify-end gap-2"><button type="button" className="rounded-lg border border-white/10 px-3 py-1.5 text-xs" onClick={() => setPlan(null)}>Cancel</button><button type="button" disabled={!plan.devices.length} className="rounded-lg border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-xs disabled:opacity-30" onClick={() => { onApplyPlan(plan); setPlan(null); }}>Apply proposal</button></div>
+          </div>}
+        </div>
         <div className="px-4 pt-3 text-center text-[10px] tracking-[0.18em] text-cyan-100/55">TRACK INPUT</div>
         <div className="mx-auto my-2 h-5 w-px bg-gradient-to-b from-cyan-300/55 to-white/10" />
 
