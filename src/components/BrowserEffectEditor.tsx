@@ -20,6 +20,19 @@ const descriptions: Record<BrowserEffect["type"], string> = {
   reverb: "Adds a generated room tail.",
 };
 
+const devicePresets: Partial<Record<BrowserEffect["type"], { label: string; mix: number; bits?: number; decaySeconds?: number }[]>> = {
+  bitcrusher: [
+    { label: "Subtle grit", mix: 0.16, bits: 12 },
+    { label: "Lo-fi", mix: 0.42, bits: 8 },
+    { label: "Hard crush", mix: 0.7, bits: 4 },
+  ],
+  reverb: [
+    { label: "Small room", mix: 0.12, decaySeconds: 0.8 },
+    { label: "Plate", mix: 0.24, decaySeconds: 2.2 },
+    { label: "Long hall", mix: 0.38, decaySeconds: 5.2 },
+  ],
+};
+
 const stepPrecision = (step: number) => {
   const decimal = String(step).split(".")[1];
   return decimal?.length ?? 0;
@@ -36,6 +49,12 @@ export default function BrowserEffectEditor({ effect, onChange, onClose }: {
         <button type="button" className="min-w-11 min-h-11 rounded-lg bg-white/10" onClick={onClose} aria-label="Close">×</button>
       </header>
       <div className="mt-5 space-y-5">
+        {devicePresets[effect.type] && <fieldset className="rounded-xl border border-white/10 p-3">
+          <legend className="px-1 text-xs text-white/60">Starting point</legend>
+          <div className="flex flex-wrap gap-2">
+            {devicePresets[effect.type]!.map((preset) => <button key={preset.label} type="button" className="min-h-10 rounded-lg border border-cyan-200/20 px-3 text-xs text-cyan-100/85 hover:bg-cyan-300/10" onClick={() => onChange({ mix: preset.mix, ...(preset.bits !== undefined ? { bits: preset.bits } : {}), ...(preset.decaySeconds !== undefined ? { decaySeconds: preset.decaySeconds } : {}) })}>{preset.label}</button>)}
+          </div>
+        </fieldset>}
         {parameters[effect.type].map(({ key, label, min, max, step, unit }) => {
           const value = Number(effect[key]);
           const display = unit === "%" ? `${Math.round(value * 100)}%` : `${value.toFixed(stepPrecision(step))} ${unit}`;
