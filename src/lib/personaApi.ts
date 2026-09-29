@@ -95,11 +95,41 @@ export async function createCustomPersona(input: {
   instructions: string;
   socialEnergy?: number;
   critiqueLevel?: number;
-  avatarObjectKey?: string;
+  voiceReference?: string;
+  modelReference?: string;
+  avatarPath?: string;
 }) {
-  const result = await apiPost<{ persona: Persona }>("/api/personas/custom", input);
-  saveCustomPersona(toRegistryRecord(result.persona, input.instructions));
-  return result;
+  let persona: Persona;
+  try {
+    const result = await apiPost<{ persona: Persona }>("/api/personas/custom", input);
+    persona = result.persona;
+  } catch {
+    // Custom personas remain usable without a configured persona provider.
+    persona = {
+      id: `persona_custom_${crypto.randomUUID()}`,
+      name: input.name.trim(), description: input.description || "", specialty: input.specialty || "",
+      humorStyle: input.humorStyle || "", socialEnergy: input.socialEnergy ?? 0.6,
+      critiqueLevel: input.critiqueLevel ?? 0.6, avatarPath: input.avatarPath || "", isCustom: true,
+      hasCustomAvatar: Boolean(input.avatarPath), sortOrder: Date.now(),
+      metadata: { instructions: input.instructions, voiceReference: input.voiceReference || "", modelReference: input.modelReference || "" },
+    };
+  }
+  const record = toRegistryRecord(persona, input.instructions);
+  record.assets = { ...record.assets, avatar: input.avatarPath || record.assets.avatar };
+  record.metadata = { ...record.metadata, voiceReference: input.voiceReference || "", modelReference: input.modelReference || "" };
+  saveCustomPersona(record);
+  return { persona: fromRegistryRecord(record) };
+}
+
+export function updateCustomPersona(persona: Persona, input: {
+  name: string; description: string; specialty: string; humorStyle: string; instructions: string;
+  socialEnergy: number; critiqueLevel: number; voiceReference: string; modelReference: string; avatarPath: string;
+}) {
+  if (!persona.isCustom) throw new Error("Built-in personas cannot be edited.");
+  const record = toRegistryRecord({ ...persona, ...input, avatarPath: input.avatarPath, hasCustomAvatar: Boolean(input.avatarPath) }, input.instructions);
+  record.assets = { ...record.assets, avatar: input.avatarPath || undefined, portrait: undefined };
+  record.metadata = { ...record.metadata, voiceReference: input.voiceReference, modelReference: input.modelReference };
+  return fromRegistryRecord(saveCustomPersona(record));
 }
 
 export async function deleteCustomPersona(personaId: string) {
