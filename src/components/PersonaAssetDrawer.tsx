@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import "../styles/asset-drawer.css";
 import { YSButton } from "./YSButton";
-import Avatar from "./Avatar";
 import {
   DEFAULT_PERSONA_ID,
   createCustomPersona,
@@ -51,8 +50,8 @@ function CustomPersonaModal({ onClose, onCreated }: { onClose: () => void; onCre
         avatarObjectKey: avatarObjectKey || undefined,
       });
       onCreated(result.persona);
-    } catch (e: any) {
-      setError(e?.message || "Could not create persona.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not create persona.");
     } finally { setSaving(false); }
   }
 
@@ -100,7 +99,7 @@ export default function PersonaAssetDrawer(props: Props) {
   const [customOpen, setCustomOpen] = useState(false);
   const isControlled = typeof controlledOpen === "boolean";
   const open = isControlled ? controlledOpen : openUncontrolled;
-  const handleRef = useRef<HTMLButtonElement | null>(null);
+  const [unavailableArt, setUnavailableArt] = useState<Set<string>>(new Set());
 
   const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
     const value = typeof next === "function" ? next(open) : next;
@@ -113,15 +112,15 @@ export default function PersonaAssetDrawer(props: Props) {
       const items = await listPersonas();
       setPersonas(items);
       if (activeContext === "chat" && activeChatId) {
-        try { setSelectedId((await getChatPersona(activeChatId)).personaId || DEFAULT_PERSONA_ID); } catch {}
+        try { setSelectedId((await getChatPersona(activeChatId)).personaId || DEFAULT_PERSONA_ID); } catch { /* Keep the default selection when chat state is unavailable. */ }
       }
       if (activeContext === "room") {
         const roomId = localStorage.getItem("ysong:activeRoomId") || "";
         if (roomId) {
-          try { setRoomPersonaIds(new Set((await getRoom(roomId)).personas.map((p) => p.id))); } catch {}
+          try { setRoomPersonaIds(new Set((await getRoom(roomId)).personas.map((p) => p.id))); } catch { /* The drawer still works when room state is unavailable. */ }
         }
       }
-    } catch (e: any) { setError(e?.message || "Could not load personas."); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Could not load personas."); }
     finally { setLoading(false); }
   }
 
@@ -149,32 +148,49 @@ export default function PersonaAssetDrawer(props: Props) {
       if (activeContext === "chat" && activeChatId) {
         await setChatPersona(activeChatId, persona.id);
         setSelectedId(persona.id);
-        try { localStorage.setItem(`ysong:chatPersona:${activeChatId}`, persona.id); } catch {}
+        try { localStorage.setItem(`ysong:chatPersona:${activeChatId}`, persona.id); } catch { /* The server remains the source of truth when storage is blocked. */ }
         window.dispatchEvent(new CustomEvent("ysong:persona-selected", { detail: { chatId: activeChatId, persona } }));
       }
-    } catch (e: any) { setError(e?.message || "Could not select persona."); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : "Could not select persona."); }
+  }
+
+  function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
+    const directions = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+    if (!directions.includes(event.key)) return;
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-persona-card]"));
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
+    const columns = getComputedStyle(event.currentTarget).gridTemplateColumns.split(" ").length;
+    const delta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" ? -columns : columns;
+    const next = buttons[Math.max(0, Math.min(buttons.length - 1, current + delta))];
+    if (next) { event.preventDefault(); next.focus(); }
   }
 
   const panel = <div id="persona-asset-drawer-panel" className={`asset-drawer-panel ${open ? "asset-drawer-panel-open" : "asset-drawer-panel-closed"}`}>
     <div className="asset-drawer-header"><div><div className="asset-drawer-title">AI PERSONAS</div><div className="text-[10px] opacity-55 mt-0.5">{hint}</div></div><div className="asset-drawer-actions"><YSButton type="button" onClick={() => setOpen(false)} className="asset-drawer-close-btn">Close</YSButton></div></div>
     <div className="asset-drawer-scroll"><div className="asset-drawer-inner">
-      {loading && !personas.length ? <div className="text-xs opacity-60 p-2">Loading personas...</div> : <div className="persona-drawer-grid">
+      {loading && !personas.length ? <div className="text-xs opacity-60 p-2">Loading personas...</div> : <div className="persona-drawer-grid" role="group" aria-label="AI personas" onKeyDown={moveFocus}>
         {personas.map((p) => {
           const selected = activeContext === "chat" && p.id === selectedId;
           const inRoom = activeContext === "room" && roomPersonaIds.has(p.id);
-          return <button key={p.id} type="button" onClick={() => void choose(p)} className={`persona-drawer-tile ${selected ? "persona-drawer-tile-selected" : ""} ${inRoom ? "persona-drawer-tile-in-room" : ""}`} title={`${p.name}${p.specialty ? ` · ${p.specialty}` : ""}`}>
-            <Avatar src={personaImage(p)} name={p.name} size={58} />
+          const image = personaImage(p);
+          const missingArt = !image || unavailableArt.has(p.id);
+          return <button key={p.id} data-persona-card type="button" onClick={() => void choose(p)} aria-pressed={selected || inRoom} className={`persona-drawer-tile ${selected ? "persona-drawer-tile-selected" : ""} ${inRoom ? "persona-drawer-tile-in-room" : ""}`} title={`${p.name}${p.specialty ? ` · ${p.specialty}` : ""}`}>
+            <span className={`persona-drawer-art ${missingArt ? "persona-drawer-art-missing" : ""}`}>
+              {missingArt ? <><span aria-hidden="true">✦</span><small>ARTWORK<br />IN PROGRESS</small></> : <img src={image} alt={`${p.name} portrait`} onError={() => setUnavailableArt((prev) => new Set(prev).add(p.id))} />}
+            </span>
             <span className="persona-drawer-name">{p.name}</span>
-            <span className="persona-drawer-sub">{inRoom ? "In room" : selected ? "Selected" : p.isCustom ? "Custom" : p.description}</span>
+            <span className="persona-drawer-sub">{inRoom ? "In room" : selected ? "Selected" : p.description}</span>
+            {p.specialty && <span className="persona-drawer-specialty">{p.specialty}</span>}
           </button>;
         })}
-        <button type="button" className="persona-drawer-tile persona-drawer-custom" onClick={() => setCustomOpen(true)} title="Create a custom AI persona"><span className="persona-drawer-plus">+</span><span className="persona-drawer-name">Custom</span><span className="persona-drawer-sub">Create persona</span></button>
+        <button type="button" data-persona-card className="persona-drawer-tile persona-drawer-custom" onClick={() => setCustomOpen(true)} title="Create a custom AI persona"><span className="persona-drawer-plus">+</span><span className="persona-drawer-name">Create your own</span><span className="persona-drawer-sub">Custom persona</span></button>
       </div>}
       {error && <div className="text-xs text-red-500 mt-2 px-1">{error}</div>}
     </div></div>
   </div>;
 
-  return <>{!embedded ? <div className="asset-drawer-shell"><div className="asset-drawer-container">{!hideHandle && <YSButton ref={handleRef} type="button" onClick={() => setOpen((v) => !v)} className="asset-drawer-handle" aria-expanded={open} aria-controls="persona-asset-drawer-panel" title="Personas">/=====\</YSButton>}{panel}</div></div> : panel}
+  return <>{!embedded ? <div className="asset-drawer-shell"><div className="asset-drawer-container">{!hideHandle && <YSButton type="button" onClick={() => setOpen((v) => !v)} className="asset-drawer-handle" aria-expanded={open} aria-controls="persona-asset-drawer-panel" title="Personas">/=====\</YSButton>}{panel}</div></div> : panel}
     {customOpen && <CustomPersonaModal onClose={() => setCustomOpen(false)} onCreated={(p) => { setPersonas((prev) => [...prev, p]); setCustomOpen(false); void choose(p); }} />}
   </>;
 }

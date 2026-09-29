@@ -58,11 +58,16 @@ function toRegistryRecord(persona: Persona, instructions?: string): PersonaRecor
 }
 
 export async function listPersonas(): Promise<Persona[]> {
-  const data = await apiGet<{ personas?: Persona[] }>("/api/personas");
-  const remotePersonas = Array.isArray(data.personas) ? data.personas : [];
-  const remoteIds = new Set(remotePersonas.map((persona) => persona.id));
-  const localPersonas = listRegisteredPersonas().filter((persona) => persona.kind === "custom" && !remoteIds.has(persona.id)).map(fromRegistryRecord);
-  const personas = [...remotePersonas, ...localPersonas];
+  let remotePersonas: Persona[] = [];
+  try {
+    const data = await apiGet<{ personas?: Persona[] }>("/api/personas");
+    remotePersonas = Array.isArray(data.personas) ? data.personas : [];
+  } catch {
+    // Keep the browser useful offline with the shared local registry.
+  }
+  const byId = new Map(listRegisteredPersonas().map((record) => [record.id, fromRegistryRecord(record)]));
+  for (const persona of remotePersonas) byId.set(persona.id, persona);
+  const personas = [...byId.values()];
   return Promise.all(personas.map(async (p) => {
     if (p.avatarPath || !p.hasCustomAvatar) return p;
     try {
