@@ -928,6 +928,8 @@ export default function DAW(_props: TabRendererProps) {
 	const loopScheduleNextCtxTimeRef = useRef(0);
 	const loopSchedulerBusyRef = useRef(false);
 	const transportPrimedRef = useRef(false);
+	const transportStartGenerationRef = useRef(0);
+	const transportStartPendingRef = useRef(false);
 	const lastVisualTransportPushRef = useRef(0);
 
 	const stopSourcesForClip = (clipId: string) => {
@@ -1499,7 +1501,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	// Playhead placement should use the element you clicked on (ruler or lanes)
 	const setPlayheadFromEvent = (e: React.PointerEvent) => {
-		setPlayheadPosBars(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, bars));
+		seekTransport(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, bars));
 	};
 
 	// --- RAW (no snap) bar conversion (needed for smooth drag when snap is off) ---
@@ -3969,6 +3971,8 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const stop = () => {
+		transportStartGenerationRef.current += 1;
+		transportStartPendingRef.current = false;
 		if (recordingSessionRef.current) finishMidiRecording();
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 		rafRef.current = null;
@@ -3977,6 +3981,8 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const start = async (loopOverride?: boolean, positionOverride?: number, leadOverride?: number) => {
+		const startGeneration = ++transportStartGenerationRef.current;
+		transportStartPendingRef.current = true;
 		window.dispatchEvent(new Event("ysong:daw-play-request"));
 		const loopOn = loopOverride ?? loopEnabled;
 		const activeLoopLen = Math.max(0.0001, loopR - loopL);
@@ -3989,6 +3995,7 @@ export default function DAW(_props: TabRendererProps) {
 			: (rawStart >= endBar - 0.0005 ? 1 : clamp(rawStart, 1, endBar));
 		const ctx = ensureAudioCtx();
 		await ctx.resume().catch(() => {});
+		if (startGeneration !== transportStartGenerationRef.current) return;
 		stopScheduledAudio();
 
 		// Cold-start preparation must finish BEFORE establishing the shared epoch.
@@ -3996,12 +4003,15 @@ export default function DAW(_props: TabRendererProps) {
 		// the last instrument wait behind every previous Bridge request.
 		const vstTracksToWarm = tracks.filter((t) => t.type === "instrument" && trackUsesNativeVst(t));
 		await Promise.allSettled(vstTracksToWarm.map((track) => ensureVstLoaded(track)));
+		if (startGeneration !== transportStartGenerationRef.current) return;
 		const hasGmMidi = clips.some((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && !!tracks.find((t) => t.id === c.trackId && t.type === "instrument" && !trackUsesNativeVst(t)));
 		if (hasGmMidi) {
 			try { await prepareGmSoundFont(ctx); } catch { /* scheduler reports/skips below */ }
 		}
+		if (startGeneration !== transportStartGenerationRef.current) return;
 		const audioClipsToWarm = clips.filter((c) => !!c.assetId && tracks.some((t) => t.id === c.trackId && t.type === "audio"));
 		await Promise.allSettled(audioClipsToWarm.map((clip) => ensurePlaybackBufferForClip(clip)));
+		if (startGeneration !== transportStartGenerationRef.current) return;
 
 		// The first ever play after cold project hydration can finish plugin/audio
 		// initialization on different device threads a few milliseconds apart. Give
@@ -4011,6 +4021,7 @@ export default function DAW(_props: TabRendererProps) {
 			await new Promise<void>((resolve) => window.setTimeout(resolve, 90));
 			transportPrimedRef.current = true;
 		}
+		if (startGeneration !== transportStartGenerationRef.current) return;
 
 		const bpmNow = Math.max(1, bpmRef.current);
 		const denNow = Math.max(1, sigDenRef.current);
@@ -4037,6 +4048,8 @@ export default function DAW(_props: TabRendererProps) {
 		setPlayheadPosBars(startPos);
 
 		await scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, startUnixMs: firstStartUnixMs, clearExisting: false }).catch(() => {});
+		if (startGeneration !== transportStartGenerationRef.current) return;
+		transportStartPendingRef.current = false;
 		setIsPlaying(true);
 		lastPosRef.current = startPos;
 
@@ -4139,8 +4152,15 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const togglePlay = () => {
-		if (isPlaying) stop();
+		if (isPlaying || transportStartPendingRef.current) stop();
 		else start();
+	};
+
+	const seekTransport = (position: number) => {
+		const next = clamp(position, 1, endBar);
+		setPlayheadPosBars(next);
+		lastPosRef.current = next;
+		if (isPlaying || transportStartPendingRef.current) void start(loopEnabled, next, 0.16);
 	};
 
 	const toggleLoopPlayback = () => {
@@ -4191,8 +4211,7 @@ export default function DAW(_props: TabRendererProps) {
 			const beatSeconds = (60 / Math.max(1, bpm)) * (4 / Math.max(1, sigDen));
 			const barSeconds = beatSeconds * Math.max(1, sigNum);
 			const nextBar = clamp(1 + Math.max(0, command.value) / Math.max(0.001, barSeconds), 1, endBar);
-			setPlayheadPosBars(nextBar);
-			lastPosRef.current = nextBar;
+			seekTransport(nextBar);
 		}
 		else if (command.type === "set-bpm") changeBpm(command.value);
 		else if (command.type === "select-track") { setSelectedTrackId(command.trackId); setSelectedClipId(null); }
@@ -4341,10 +4360,10 @@ export default function DAW(_props: TabRendererProps) {
 				togglePlay();
 			} else if (e.key === "Home") {
 				e.preventDefault();
-				setPlayheadPosBars(loopEnabled ? loopL : 1);
+				seekTransport(loopEnabled ? loopL : 1);
 			} else if (e.key === "End") {
 				e.preventDefault();
-				setPlayheadPosBars(endBar);
+				seekTransport(endBar);
 			}
 		};
 
@@ -6057,12 +6076,12 @@ export default function DAW(_props: TabRendererProps) {
 					ghostClips={midiGhostClips}
 					onChange={updateMidiEditorClip}
 					onPreview={previewMidiNote}
-					onSeekProjectBar={(bar) => { if (isPlaying) stop(); setPlayheadPosBars(clamp(bar, 1, endBar)); }}
-					onReturnStart={() => setPlayheadPosBars(1)}
+					onSeekProjectBar={(bar) => seekTransport(bar)}
+					onReturnStart={() => seekTransport(1)}
 					onStop={() => { stop(); setPlayheadPosBars(1); }}
 					onTogglePlay={togglePlay}
 					onToggleLoop={toggleLoopPlayback}
-					onJumpEnd={() => setPlayheadPosBars(endBar)}
+					onJumpEnd={() => seekTransport(endBar)}
 					onBpmChange={changeBpm}
 					onSignatureChange={changeSignature}
 					onClose={() => setMidiEditorClipId(null)}
