@@ -29,6 +29,7 @@ import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type Daw
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
+import { upsertGeneration } from "../lib/generationLibrary";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
 import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
@@ -3577,6 +3578,14 @@ export default function DAW(_props: TabRendererProps) {
 			createdAt: manifest.createdAt,
 			title: manifest.projectName || "Generated Song",
 			singers: manifest.singerRoster,
+		});
+		upsertGeneration({
+			id: sessionId,
+			status: "succeeded",
+			title: manifest.projectName || "Generated Song",
+			createdAt: manifest.createdAt,
+			source: { prompt: manifest.structuredCaption || "", origin: "create-song" },
+			artifacts: [{ id: `project:${activeProjectId}`, kind: "project", label: "Editable YSong project", projectId: activeProjectId }],
 		});
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));
