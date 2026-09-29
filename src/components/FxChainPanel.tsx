@@ -7,6 +7,7 @@ import { summarizeEffect, type FxChainPlan } from "../lib/fxChainPlanner";
 
 type Props = {
   trackName: string;
+  instrument?: { name: string; vendor?: string; presetHint?: string; hasSnapshot: boolean; stateStatus?: string; canCapture: boolean; capturePending: boolean; onCapture: () => void };
   effects: DawTrackEffect[];
   browserEffectsAvailable: boolean;
   onAddCompressor: () => void;
@@ -22,7 +23,7 @@ type Props = {
 
 const COMMON_INTENTS = ["Spacious lead vocal", "Subtle vocal polish", "Aggressive electronic vocal", "Wide synth", "Dark atmospheric pad", "Distorted lo-fi texture", "Punchier drums", "Cleaner mix"];
 
-export default function FxChainPanel({ trackName, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onPlan, onApplyPlan, onClose }: Props) {
+export default function FxChainPanel({ trackName, instrument, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onPlan, onApplyPlan, onClose }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [intent, setIntent] = useState("");
@@ -30,6 +31,7 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState("");
   const [editingPlanEffectId, setEditingPlanEffectId] = useState<string | null>(null);
+  const [collapsedEffects, setCollapsedEffects] = useState<Set<string>>(() => new Set());
   const ghostRef = useRef<HTMLElement | null>(null);
 
   const cleanupGhost = () => {
@@ -91,6 +93,19 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
         </div>
 
         <div className="px-4 pt-4 text-[11px] opacity-55">Signal flows from top to bottom. Drag or use the arrow buttons to change processing order.</div>
+        {instrument && <section className="mx-4 mt-3 rounded-xl border border-violet-300/20 bg-violet-400/[0.045] p-3" aria-label="Instrument device">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-violet-200/20 bg-violet-300/10 text-lg text-violet-100" aria-hidden="true">♫</div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[9px] uppercase tracking-[0.16em] text-violet-100/55">Instrument · track source</div>
+              <div className="truncate text-sm font-semibold" title={instrument.vendor ? `${instrument.vendor} · ${instrument.name}` : instrument.name}>{instrument.name}</div>
+              {instrument.vendor && <div className="truncate text-[10px] opacity-55">{instrument.vendor}</div>}
+              {instrument.presetHint && <div className="mt-1 truncate text-[10px] text-amber-100/75" title={instrument.presetHint}>Preset hint · {instrument.presetHint} <span className="opacity-50">(not loaded)</span></div>}
+              <div className="mt-1 text-[10px] opacity-50" title={instrument.stateStatus}>{instrument.stateStatus || (instrument.hasSnapshot ? "Saved instrument state · current sound unconfirmed" : "No saved instrument state")}</div>
+            </div>
+            <button type="button" disabled={!instrument.canCapture || instrument.capturePending} onClick={instrument.onCapture} className="shrink-0 rounded-lg border border-violet-200/20 px-2.5 py-2 text-[10px] hover:bg-violet-300/10 disabled:opacity-35" title="Capture the live instrument into a local Bridge snapshot">{instrument.capturePending ? "Saving…" : instrument.hasSnapshot ? "Update state" : "Save state"}</button>
+          </div>
+        </section>}
         {!browserEffectsAvailable && <div className="mx-4 mt-3 rounded-lg border border-amber-300/25 bg-amber-300/5 p-3 text-xs text-amber-100/80">Native VST audio supports Dynamics C•1 only. Browser effects saved on this track are unavailable during native playback and export.</div>}
         <div className="mx-4 mt-3 rounded-xl border border-fuchsia-300/20 bg-fuchsia-400/[0.04] p-3">
           <div className="text-[10px] uppercase tracking-[0.18em] text-fuchsia-100/65">YSong FX planner</div>
@@ -168,13 +183,17 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
                         <div className="text-[10px] opacity-45 truncate">{effect.type === "compressor" ? "YSong Compressor" : browserEffectsAvailable ? "Browser audio effect" : "Unavailable on native VST audio"}</div>
                       </button>
                       <button type="button" className={`w-10 h-10 rounded-lg border ${effect.enabled ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-200" : "border-white/10 bg-black/20 opacity-45"}`} onClick={() => onToggle(effect.id)} aria-label={effect.enabled ? "Bypass effect" : "Enable effect"}>⏻</button>
-                      <button type="button" disabled={effect.type !== "compressor" && !browserEffectsAvailable} className="w-10 h-10 rounded-lg border border-white/10 hover:bg-white/10 disabled:opacity-30" onClick={() => onOpen(effect.id)} aria-label="Open effect">↗</button>
+                      <button type="button" className="w-10 h-10 rounded-lg border border-white/10 hover:bg-white/10" onClick={() => setCollapsedEffects((current) => { const next = new Set(current); if (next.has(effect.id)) next.delete(effect.id); else next.add(effect.id); return next; })} aria-expanded={!collapsedEffects.has(effect.id)} aria-label={collapsedEffects.has(effect.id) ? "Expand effect" : "Collapse effect"}>{collapsedEffects.has(effect.id) ? "＋" : "−"}</button>
+                      <button type="button" disabled={effect.type !== "compressor" && !browserEffectsAvailable} className="w-10 h-10 rounded-lg border border-white/10 hover:bg-white/10 disabled:opacity-30" onClick={() => onOpen(effect.id)} aria-label="Open effect editor">↗</button>
                       <button type="button" className="w-9 h-9 rounded-lg border border-white/10 hover:bg-rose-400/10 hover:text-rose-200" onClick={() => onRemove(effect.id)} title="Remove effect">✕</button>
                     </div>
-                    <div className="mt-2 flex justify-end gap-1 opacity-35 group-hover:opacity-70">
+                    {!collapsedEffects.has(effect.id) && <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2">
+                      <div className="min-w-0 truncate text-[10px] text-cyan-100/60">{summarizeEffect(effect)}</div>
+                      <div className="flex shrink-0 gap-1">
                       <button type="button" disabled={index === 0} className="w-11 h-10 rounded border border-white/10 disabled:opacity-20" onClick={() => index > 0 && onReorder(index, index - 1)} aria-label="Move effect up">↑</button>
                       <button type="button" disabled={index === effects.length - 1} className="w-11 h-10 rounded border border-white/10 disabled:opacity-20" onClick={() => index < effects.length - 1 && onReorder(index, index + 1)} aria-label="Move effect down">↓</button>
-                    </div>
+                      </div>
+                    </div>}
                   </div>
                   <div className="mx-auto h-5 w-px bg-white/10" />
                 </div>

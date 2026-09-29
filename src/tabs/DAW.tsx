@@ -6092,6 +6092,16 @@ export default function DAW(_props: TabRendererProps) {
 			{fxChainTrack && createPortal(
 				<FxChainPanel
 					trackName={fxChainTrack.name}
+					instrument={fxChainTrack.type === "instrument" ? {
+						name: fxChainTrack.vst3PluginName ?? GM_PROGRAMS.find((program) => program.program === normalizeGmProgram(fxChainTrack.gmProgram ?? 0))?.label ?? "General MIDI instrument",
+						vendor: fxChainTrack.vst3PluginVendor,
+						presetHint: fxChainTrack.vstPresetHint,
+						hasSnapshot: !!fxChainTrack.vstSnapshot,
+						stateStatus: fxChainTrack.vst3PluginPath ? (vstSoundState[fxChainTrack.id] ?? undefined) : "General MIDI patch · state follows the project instrument assignment",
+						canCapture: !!fxChainTrack.vst3PluginPath && bridgeAvailable !== false && dawHydrated && hydratedProjectId === activeProjectId,
+						capturePending: !!capturePending[fxChainTrack.id],
+						onCapture: () => void captureVstSound(fxChainTrack),
+					} : undefined}
 					effects={fxChainTrack.effects ?? []}
 					browserEffectsAvailable={!trackUsesNativeVst(fxChainTrack)}
 					onAddCompressor={() => addDynamicsC1(fxChainTrack.id)}
