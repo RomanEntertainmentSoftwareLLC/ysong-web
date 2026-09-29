@@ -104,7 +104,7 @@ export default function UISidebar({ chats, activeId, setActiveId, newChat, meDis
     return () => { window.removeEventListener("resize", reposition); window.removeEventListener("scroll", reposition, true); window.removeEventListener("keydown", key); };
   }, []);
 
-  return <aside className="h-full min-h-0 flex flex-col bg-white/45 dark:bg-neutral-950/35">
+  return <aside className="ys-panel ys-sidebar h-full min-h-0 flex flex-col bg-white/45 dark:bg-neutral-950/35">
     <div className="shrink-0 px-3 py-3 border-b border-neutral-200/70 dark:border-white/10">
       <div className="flex items-center gap-2">
         <button type="button" onClick={() => onOpenModule?.("profile")} className="min-w-0 flex-1 flex items-center gap-3 rounded-xl px-1.5 py-1.5 text-left hover:bg-black/5 dark:hover:bg-white/5 transition" title="Open profile">

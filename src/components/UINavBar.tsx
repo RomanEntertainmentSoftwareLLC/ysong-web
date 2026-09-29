@@ -31,10 +31,9 @@ export default function UINavbar({ meEmail, onLogout, onToggleSidebar }: Props) 
 
 	return (
 		<header
-			className="fixed inset-x-0 top-0 z-50 border-b
+			className="ys-nav fixed inset-x-0 top-0 z-50 border-b
                  border-neutral-200/60 dark:border-neutral-800/60
-                 bg-white/70 dark:bg-neutral-950/60 backdrop-blur 
-                 supports-[backdrop-filter]:bg-white/60"
+				 backdrop-blur"
 		>
 			<nav className="mx-auto max-w-7xl h-16 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
 				{/* Left: logo (+ optional mobile sidebar toggle) */}
