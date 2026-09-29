@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
 import { browserEffectNames, type BrowserEffectType, type DawTrackEffect } from "../lib/dawEffects";
+import { normalizeTrackEffects } from "../lib/dawEffects";
+import BrowserEffectEditor from "./BrowserEffectEditor";
+import DynamicsC1Editor from "./DynamicsC1Editor";
 import { summarizeEffect, type FxChainPlan } from "../lib/fxChainPlanner";
 
 type Props = {
@@ -26,6 +29,7 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
   const [plan, setPlan] = useState<FxChainPlan | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState("");
+  const [editingPlanEffectId, setEditingPlanEffectId] = useState<string | null>(null);
   const ghostRef = useRef<HTMLElement | null>(null);
 
   const cleanupGhost = () => {
@@ -64,6 +68,16 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
     return { ...current, devices };
   });
 
+  const editingPlanEffect = plan?.devices.find(({ effect }) => effect.id === editingPlanEffectId)?.effect ?? null;
+  const updatePlanEffect = (id: string, patch: Partial<DawTrackEffect>) => setPlan((current) => {
+    if (!current) return current;
+    return { ...current, devices: current.devices.map((device) => {
+      if (device.effect.id !== id) return device;
+      const [effect] = normalizeTrackEffects([{ ...device.effect, ...patch, id }]);
+      return effect ? { ...device, effect } : device;
+    }) };
+  });
+
   return (
     <div className="fixed inset-0 z-[250] flex justify-end" role="dialog" aria-modal="true" aria-label={`${trackName} effects chain`}>
       <button className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} aria-label="Close effects chain" />
@@ -88,7 +102,7 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
             <div className="mt-1 text-[10px] opacity-60">{plan.summary}</div>
             <div className="mt-2 space-y-1.5">{plan.devices.map((device, index) => <div key={device.effect.id} className="rounded-lg border border-white/10 bg-white/[0.035] p-2">
               <div className="flex items-center gap-2"><span className="w-5 text-[9px] font-mono opacity-45">{String(index + 1).padStart(2, "0")}</span><b className="min-w-0 flex-1 truncate text-xs">{device.effect.name}</b><button type="button" className={`rounded border px-2 py-1 text-[9px] ${device.effect.enabled ? "border-emerald-300/25 text-emerald-200" : "border-white/10 opacity-45"}`} onClick={() => setPlan((current) => current ? { ...current, devices: current.devices.map((item) => item.effect.id === device.effect.id ? { ...item, effect: { ...item.effect, enabled: !item.effect.enabled } } : item) } : current)}>{device.effect.enabled ? "ON" : "BYPASS"}</button><button type="button" disabled={index === 0} className="px-1 disabled:opacity-20" onClick={() => movePlanDevice(index, -1)}>↑</button><button type="button" disabled={index === plan.devices.length - 1} className="px-1 disabled:opacity-20" onClick={() => movePlanDevice(index, 1)}>↓</button><button type="button" className="px-1 text-rose-200/70" onClick={() => setPlan((current) => current ? { ...current, devices: current.devices.filter((item) => item.effect.id !== device.effect.id) } : current)}>✕</button></div>
-              <div className="mt-1 text-[10px] text-cyan-100/65">{summarizeEffect(device.effect)}</div><div className="mt-1 text-[10px] opacity-50">{device.reason}</div>
+              <div className="mt-1 flex items-center justify-between gap-2"><div className="text-[10px] text-cyan-100/65">{summarizeEffect(device.effect)}</div><button type="button" className="rounded border border-cyan-200/20 px-2 py-1 text-[9px] text-cyan-100/80 hover:bg-cyan-300/10" onClick={() => setEditingPlanEffectId(device.effect.id)}>Edit parameters</button></div><div className="mt-1 text-[10px] opacity-50">{device.reason}</div>
             </div>)}</div>
             <div className="mt-3 flex justify-end gap-2"><button type="button" className="rounded-lg border border-white/10 px-3 py-1.5 text-xs" onClick={() => setPlan(null)}>Cancel</button><button type="button" disabled={!plan.devices.length} className="rounded-lg border border-emerald-300/25 bg-emerald-400/10 px-3 py-1.5 text-xs disabled:opacity-30" onClick={() => { onApplyPlan(plan); setPlan(null); }}>Apply proposal</button></div>
           </div>}
@@ -177,6 +191,8 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
           <div className="text-center text-[10px] tracking-[0.18em] text-cyan-100/55">TRACK OUTPUT</div>
         </div>
       </aside>
+      {editingPlanEffect?.type === "compressor" && <DynamicsC1Editor effect={editingPlanEffect} signal={0} gainReductionDb={0} onChange={(patch) => updatePlanEffect(editingPlanEffect.id, patch)} onClose={() => setEditingPlanEffectId(null)} />}
+      {editingPlanEffect && editingPlanEffect.type !== "compressor" && <BrowserEffectEditor effect={editingPlanEffect} onChange={(patch) => updatePlanEffect(editingPlanEffect.id, patch)} onClose={() => setEditingPlanEffectId(null)} />}
     </div>
   );
 }
