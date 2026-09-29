@@ -1,4 +1,5 @@
 import { AUTH_BASE, apiGet, apiPost } from "./authApi";
+import { listRegisteredPersonas, removeCustomPersona, saveCustomPersona, type PersonaRecord } from "./ysongPersonaRegistry";
 
 export type Persona = {
   id: string;
@@ -12,15 +13,56 @@ export type Persona = {
   isCustom: boolean;
   hasCustomAvatar: boolean;
   sortOrder: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   avatarUrl?: string;
 };
 
-export const DEFAULT_PERSONA_ID = "persona_surfer_v1";
+export { DEFAULT_PERSONA_ID } from "./ysongPersonaRegistry";
+
+function fromRegistryRecord(record: PersonaRecord): Persona {
+  return {
+    id: record.id,
+    name: record.display.name,
+    description: record.display.description,
+    specialty: record.display.specialty,
+    humorStyle: record.behavior.humorStyle,
+    socialEnergy: record.behavior.socialEnergy,
+    critiqueLevel: record.behavior.critiqueLevel,
+    avatarPath: record.assets.avatar || record.assets.portrait || "",
+    isCustom: record.kind === "custom",
+    hasCustomAvatar: Boolean(record.assets.avatar),
+    sortOrder: record.sortOrder,
+    metadata: { ...(record.metadata || {}), capabilities: record.capabilities, assets: record.assets, instructions: record.behavior.instructions },
+  };
+}
+
+function toRegistryRecord(persona: Persona, instructions?: string): PersonaRecord {
+  const metadata = persona.metadata || {};
+  const capabilities = metadata.capabilities as PersonaRecord["capabilities"] | undefined;
+  const assets = metadata.assets as PersonaRecord["assets"] | undefined;
+  return {
+    id: persona.id,
+    kind: "custom",
+    display: { name: persona.name, description: persona.description, specialty: persona.specialty },
+    behavior: {
+      humorStyle: persona.humorStyle,
+      instructions: instructions ?? (typeof metadata.instructions === "string" ? metadata.instructions : undefined),
+      socialEnergy: persona.socialEnergy,
+      critiqueLevel: persona.critiqueLevel,
+    },
+    capabilities: capabilities || { chat: true, rooms: true, daw: false, musicCreation: false },
+    assets: assets || { avatar: persona.avatarPath || undefined },
+    sortOrder: persona.sortOrder,
+    metadata,
+  };
+}
 
 export async function listPersonas(): Promise<Persona[]> {
   const data = await apiGet<{ personas?: Persona[] }>("/api/personas");
-  const personas = Array.isArray(data.personas) ? data.personas : [];
+  const remotePersonas = Array.isArray(data.personas) ? data.personas : [];
+  const remoteIds = new Set(remotePersonas.map((persona) => persona.id));
+  const localPersonas = listRegisteredPersonas().filter((persona) => persona.kind === "custom" && !remoteIds.has(persona.id)).map(fromRegistryRecord);
+  const personas = [...remotePersonas, ...localPersonas];
   return Promise.all(personas.map(async (p) => {
     if (p.avatarPath || !p.hasCustomAvatar) return p;
     try {
@@ -50,11 +92,15 @@ export async function createCustomPersona(input: {
   critiqueLevel?: number;
   avatarObjectKey?: string;
 }) {
-  return apiPost<{ persona: Persona }>("/api/personas/custom", input);
+  const result = await apiPost<{ persona: Persona }>("/api/personas/custom", input);
+  saveCustomPersona(toRegistryRecord(result.persona, input.instructions));
+  return result;
 }
 
 export async function deleteCustomPersona(personaId: string) {
-  return apiPost<{ ok: true }>(`/api/personas/${encodeURIComponent(personaId)}/delete`, {});
+  const result = await apiPost<{ ok: true }>(`/api/personas/${encodeURIComponent(personaId)}/delete`, {});
+  removeCustomPersona(personaId);
+  return result;
 }
 
 function token() {
