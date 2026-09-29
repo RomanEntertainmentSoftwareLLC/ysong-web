@@ -191,7 +191,7 @@ export default function FxChainPanel({ trackName, effects, browserEffectsAvailab
           <div className="text-center text-[10px] tracking-[0.18em] text-cyan-100/55">TRACK OUTPUT</div>
         </div>
       </aside>
-      {editingPlanEffect?.type === "compressor" && <DynamicsC1Editor effect={editingPlanEffect} signal={0} gainReductionDb={0} onChange={(patch) => updatePlanEffect(editingPlanEffect.id, patch)} onClose={() => setEditingPlanEffectId(null)} />}
+      {editingPlanEffect?.type === "compressor" && <DynamicsC1Editor effect={editingPlanEffect} signal={0} gainReductionDb={null} onChange={(patch) => updatePlanEffect(editingPlanEffect.id, patch)} onClose={() => setEditingPlanEffectId(null)} />}
       {editingPlanEffect && editingPlanEffect.type !== "compressor" && <BrowserEffectEditor effect={editingPlanEffect} onChange={(patch) => updatePlanEffect(editingPlanEffect.id, patch)} onClose={() => setEditingPlanEffectId(null)} />}
     </div>
   );

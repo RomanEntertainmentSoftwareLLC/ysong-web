@@ -4750,10 +4750,13 @@ export default function DAW(_props: TabRendererProps) {
 		? (fxChainTrack.effects ?? []).find((effect) => effect.id === fxEditorEffectId) ?? null
 		: null;
 	const fxEditorGainReductionDb = (() => {
-		if (!fxChainTrack || !fxEditorEffect || fxEditorEffect.type !== "compressor") return 0;
-		if (fxChainTrack.type === "instrument" && trackUsesNativeVst(fxChainTrack)) return Math.max(0, vstGainReductionRef.current[fxChainTrack.id] ?? 0);
+		if (!fxChainTrack || !fxEditorEffect || fxEditorEffect.type !== "compressor") return null;
+		if (fxChainTrack.type === "instrument" && trackUsesNativeVst(fxChainTrack)) {
+			const reduction = vstGainReductionRef.current[fxChainTrack.id];
+			return typeof reduction === "number" && Number.isFinite(reduction) ? Math.max(0, reduction) : null;
+		}
 		const compressor = trackAudioBusesRef.current.get(fxChainTrack.id)?.effectRuntimes.get(fxEditorEffect.id)?.compressor;
-		return compressor ? Math.max(0, -compressor.reduction) : 0;
+		return compressor && Number.isFinite(compressor.reduction) ? Math.max(0, -compressor.reduction) : null;
 	})();
 
 	const requestFxChainPlan = async (track: Track, intent: string): Promise<FxChainPlan> => {

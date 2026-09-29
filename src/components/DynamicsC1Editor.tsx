@@ -4,7 +4,7 @@ import type { DynamicsC1Effect } from "../lib/dawEffects";
 type Props = {
   effect: DynamicsC1Effect;
   signal: number;
-  gainReductionDb: number;
+  gainReductionDb: number | null;
   onChange: (patch: Partial<DynamicsC1Effect>) => void;
   onClose: () => void;
 };
@@ -83,12 +83,16 @@ function C1Knob({ label, value, min, max, step, unit = "", decimals = 1, onChang
   );
 }
 
-function AnalogMeter({ label, value, min = 0, max = 1, suffix = "" }: { label: string; value: number; min?: number; max?: number; suffix?: string }) {
+function AnalogMeter({ label, value, min = 0, max = 1, suffix = "", available = true, showAvailability = false }: { label: string; value: number; min?: number; max?: number; suffix?: string; available?: boolean; showAvailability?: boolean }) {
   const pct = clamp((value - min) / Math.max(0.000001, max - min), 0, 1);
   const angle = -48 + pct * 96;
   return (
     <div className="rounded-lg border border-black/80 bg-[#141414] p-1 shadow-[inset_0_0_0_1px_rgba(255,220,150,.08),0_5px_20px_rgba(0,0,0,.5)]">
       <div className="relative overflow-hidden rounded-md h-[122px]" style={{ background: "linear-gradient(#e7b862,#f1cb82 58%,#c89547)", boxShadow: "inset 0 0 28px rgba(85,40,0,.32)" }}>
+        {showAvailability && <div className={`absolute right-2 top-1.5 z-10 flex items-center gap-1 text-[8px] font-semibold tracking-wider ${available ? "text-emerald-950/70" : "text-amber-950/60"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${available ? "bg-emerald-800" : "bg-amber-900/45"}`} />
+          {available ? "LIVE" : "NO METER"}
+        </div>}
         <svg viewBox="0 0 300 140" className="absolute inset-0 w-full h-full" aria-label={label}>
           <path d="M38 108 A120 120 0 0 1 262 108" fill="none" stroke="rgba(54,30,12,.72)" strokeWidth="2" />
           {Array.from({ length: 11 }).map((_, i) => {
@@ -130,7 +134,15 @@ export default function DynamicsC1Editor({ effect, signal, gainReductionDb, onCh
               <div className="mt-2 text-[10px] tracking-[0.38em] text-amber-100/65">DYNAMICS C•1</div>
               <div className={`mt-3 w-2.5 h-2.5 rounded-full ${effect.enabled ? "bg-amber-300 shadow-[0_0_12px_rgba(252,211,77,.8)]" : "bg-neutral-700"}`} />
             </div>
-            <AnalogMeter label="GAIN REDUCTION" value={Math.min(20, Math.max(0, gainReductionDb))} min={0} max={20} suffix={`${gainReductionDb.toFixed(1)} dB`} />
+            <AnalogMeter
+              label="GAIN REDUCTION"
+              value={gainReductionDb == null || !Number.isFinite(gainReductionDb) ? 0 : clamp(gainReductionDb, 0, 20)}
+              min={0}
+              max={20}
+              suffix={gainReductionDb == null || !Number.isFinite(gainReductionDb) ? "—" : `${Math.max(0, gainReductionDb).toFixed(1)} dB`}
+              available={gainReductionDb != null && Number.isFinite(gainReductionDb)}
+              showAvailability
+            />
           </div>
 
           <div className="mt-5 border-t border-amber-100/10 pt-5 grid grid-cols-3 sm:grid-cols-6 gap-4 sm:gap-5">
