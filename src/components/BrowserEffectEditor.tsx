@@ -11,6 +11,20 @@ const parameters: Record<BrowserEffect["type"], Parameter[]> = {
   reverb: [common, { key: "decaySeconds", label: "Decay", min: 0.2, max: 8, step: 0.1, unit: "s" }],
 };
 
+const descriptions: Record<BrowserEffect["type"], string> = {
+  delay: "Repeats the input through a feedback echo.",
+  chorus: "Modulates a short delay for a layered, moving sound.",
+  flanger: "Sweeps a short, regenerative delay for a pronounced comb effect.",
+  phaser: "Sweeps four all-pass stages around the selected center frequency.",
+  bitcrusher: "Reduces the signal's bit depth.",
+  reverb: "Adds a generated room tail.",
+};
+
+const stepPrecision = (step: number) => {
+  const decimal = String(step).split(".")[1];
+  return decimal?.length ?? 0;
+};
+
 export default function BrowserEffectEditor({ effect, onChange, onClose }: {
   effect: BrowserEffect; onChange: (patch: Partial<BrowserEffect>) => void; onClose: () => void;
 }) {
@@ -18,13 +32,13 @@ export default function BrowserEffectEditor({ effect, onChange, onClose }: {
     <button className="absolute inset-0 bg-black/70" aria-label="Close effect" onClick={onClose} />
     <section className="relative w-[min(540px,96vw)] max-h-[90vh] overflow-y-auto rounded-2xl border border-cyan-200/20 bg-neutral-950 p-5 shadow-2xl">
       <header className="flex items-center justify-between gap-4">
-        <div><div className="text-xs uppercase tracking-widest text-cyan-200/60">YSong effect</div><h2 className="text-xl font-semibold">{effect.name}</h2></div>
+        <div><div className="text-xs uppercase tracking-widest text-cyan-200/60">YSong {effect.type === "delay" ? "echo" : effect.type === "chorus" || effect.type === "flanger" || effect.type === "phaser" ? "modulation" : "effect"}</div><h2 className="text-xl font-semibold">{effect.name}</h2><p className="mt-1 text-xs text-white/55">{descriptions[effect.type]}</p></div>
         <button type="button" className="min-w-11 min-h-11 rounded-lg bg-white/10" onClick={onClose} aria-label="Close">×</button>
       </header>
       <div className="mt-5 space-y-5">
         {parameters[effect.type].map(({ key, label, min, max, step, unit }) => {
           const value = Number(effect[key]);
-          const display = unit === "%" ? `${Math.round(value * 100)}%` : `${value.toFixed(step < 1 ? 1 : 0)} ${unit}`;
+          const display = unit === "%" ? `${Math.round(value * 100)}%` : `${value.toFixed(stepPrecision(step))} ${unit}`;
           return <label key={key} className="block">
             <span className="mb-2 flex justify-between text-sm"><span>{label}</span><output className="font-mono text-cyan-100">{display}</output></span>
             <input aria-label={label} type="range" min={min} max={max} step={step} value={value}

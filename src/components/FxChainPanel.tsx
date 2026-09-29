@@ -204,7 +204,7 @@ export default function FxChainPanel({ trackName, instrument, effects, browserEf
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button type="button" className="min-h-11 rounded-xl border border-cyan-200/20 bg-cyan-300/[0.04] text-sm" onClick={onAddCompressor}>+ Dynamics C•1</button>
-            {(Object.keys(browserEffectNames) as BrowserEffectType[]).map((type) => <button key={type} type="button" disabled={!browserEffectsAvailable} className="min-h-11 rounded-xl border border-cyan-200/20 bg-cyan-300/[0.04] text-sm disabled:opacity-30" onClick={() => onAddBrowserEffect(type)}>+ {browserEffectNames[type]}</button>)}
+            {(Object.keys(browserEffectNames) as BrowserEffectType[]).map((type) => <button key={type} type="button" disabled={!browserEffectsAvailable} title={!browserEffectsAvailable ? `${browserEffectNames[type]} is unavailable on native VST audio` : undefined} aria-label={!browserEffectsAvailable ? `Add ${browserEffectNames[type]} (unavailable on native VST audio)` : `Add ${browserEffectNames[type]}`} className="min-h-11 rounded-xl border border-cyan-200/20 bg-cyan-300/[0.04] text-sm disabled:opacity-30" onClick={() => onAddBrowserEffect(type)}>+ {browserEffectNames[type]}{!browserEffectsAvailable && <span className="ml-1 text-[10px] text-amber-100/65">Unavailable</span>}</button>)}
           </div>
           <div className="mx-auto my-2 h-5 w-px bg-gradient-to-b from-white/10 to-cyan-300/55" />
           <div className="text-center text-[10px] tracking-[0.18em] text-cyan-100/55">TRACK OUTPUT</div>
