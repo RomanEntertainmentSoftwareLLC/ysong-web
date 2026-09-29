@@ -687,6 +687,8 @@ export default function DAW(_props: TabRendererProps) {
 	const [vocalMidiPreview, setVocalMidiPreview] = useState<VocalMidiPreview | null>(null);
 	const [vocalMidiStatus, setVocalMidiStatus] = useState("");
 	const [vocalMidiBusy, setVocalMidiBusy] = useState(false);
+	const [vocalConfidence, setVocalConfidence] = useState(72);
+	const [vocalMinimumNoteMs, setVocalMinimumNoteMs] = useState(90);
 	const [onScreenKeyboardOpen, setOnScreenKeyboardOpen] = useState(false);
 	const [hardwareActiveNotes, setHardwareActiveNotes] = useState<Set<number>>(() => new Set());
 	type ClipContextMenuState = { x: number; y: number; clipId: string } | null;
@@ -3711,7 +3713,10 @@ export default function DAW(_props: TabRendererProps) {
 				for (let index = 0; index < frameCount; index++) mono[index] += (data[firstFrame + index] ?? 0) / source.numberOfChannels;
 			}
 			await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-			const transcription = transcribeMonophonicVocal(mono, source.sampleRate);
+			const transcription = transcribeMonophonicVocal(mono, source.sampleRate, {
+				confidenceThreshold: vocalConfidence / 100,
+				minimumNoteSeconds: vocalMinimumNoteMs / 1000,
+			});
 			if (!transcription.notes.length) throw new Error("No stable monophonic vocal melody was detected. Try a cleaner solo vocal or humming phrase.");
 			const secondsToBars = sourceClip.lengthBars / Math.max(0.001, sourceWindow.durationSec);
 			const notes: MidiNote[] = transcription.notes.map((note) => {
@@ -5040,7 +5045,12 @@ export default function DAW(_props: TabRendererProps) {
 			) : null}
 			{vocalMidiStatus && (
 				<div className="shrink-0 flex items-center gap-2 border-b border-cyan-300/15 bg-cyan-400/[0.06] px-3 py-1.5 text-[11px] text-cyan-50">
-					<span className="min-w-0 flex-1 truncate">{vocalMidiStatus}</span>
+					<div className="min-w-0 flex-1">
+						<div className="truncate">{vocalMidiStatus}</div>
+						{vocalMidiPreview && <div className="mt-1 flex h-7 items-end gap-px overflow-hidden rounded bg-black/20 px-1" role="img" aria-label={`Preview of ${vocalMidiPreview.notes.length} detected MIDI notes`}>
+							{vocalMidiPreview.notes.map((note) => <span key={note.id} title={`${NOTE_NAMES[note.pitch % 12]}${Math.floor(note.pitch / 12) - 1}`} className="min-w-[2px] rounded-t bg-cyan-300/80" style={{ height: `${Math.max(18, (note.pitch - Math.min(...vocalMidiPreview.notes.map((n) => n.pitch)) + 1) / Math.max(1, Math.max(...vocalMidiPreview.notes.map((n) => n.pitch)) - Math.min(...vocalMidiPreview.notes.map((n) => n.pitch)) + 1) * 80)}%`, flex: `${Math.max(0.15, note.lengthBars)}` }} />)}
+						</div>}
+					</div>
 					{vocalMidiPreview && <YSButton className="px-3 py-1 rounded-md text-[11px]" onClick={acceptVocalMidi}>Add editable MIDI</YSButton>}
 					{vocalMidiPreview && <button type="button" className="px-2 py-1 opacity-65 hover:opacity-100" onClick={() => { setVocalMidiPreview(null); setVocalMidiStatus(""); }}>Cancel</button>}
 				</div>
@@ -5332,6 +5342,10 @@ export default function DAW(_props: TabRendererProps) {
 							>
 								{vocalMidiBusy ? "Analyzing…" : "Vocal → MIDI"}
 							</YSButton>
+							<div className="ml-2 flex items-center gap-2 text-[10px] text-neutral-400" title="Adjust local pitch detection before analyzing">
+								<label className="flex items-center gap-1">Sensitivity <input aria-label="Pitch sensitivity" type="range" min="50" max="95" step="1" value={vocalConfidence} onChange={(event) => setVocalConfidence(Number(event.target.value))} className="w-14 accent-cyan-400" /><span className="w-7 text-right">{vocalConfidence}%</span></label>
+								<label className="flex items-center gap-1">Min note <select aria-label="Minimum note duration" value={vocalMinimumNoteMs} onChange={(event) => setVocalMinimumNoteMs(Number(event.target.value))} className="rounded border border-white/10 bg-neutral-900 px-1 py-0.5 text-neutral-200"><option value={50}>50 ms</option><option value={90}>90 ms</option><option value={140}>140 ms</option><option value={200}>200 ms</option></select></label>
+							</div>
 
 							<div className="ml-auto shrink-0 min-w-[170px] px-2 py-1 rounded-lg border border-neutral-200/10 dark:border-neutral-800 bg-neutral-950/25">
 								<div className="flex items-center justify-center gap-1.5">
