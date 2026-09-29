@@ -25,3 +25,21 @@ Audit snapshot: 2026-09-29. This note describes the existing frontend so new Ads
 ## Extension guidance
 
 Add promotion/paid-ad UI and API calls to the existing `src/tools/promotion` owners and extend their shared DTO/client contract. Keep public campaign routing and attribution on `/p/:slug` and its existing event/redirect flow. Reuse the linked Smart Link and track rather than introducing another release campaign owner. Keep paid Meta actions in the existing preflight and acknowledged publishing flow. Do not treat the general Analytics tab or playback ad scheduler as owners of paid campaign state. This audit does not inspect or prescribe backend implementation details or external product specifications.
+
+## YSong Ads product and IP guardrails
+
+Solve common music-marketing problems through YSong's own UI, terminology, code, and architecture. Build on the existing Promotion Center and linked Smart Link flow described above; do not create a parallel campaign owner. Treat official Meta APIs, Pexels APIs, and other explicitly authorized provider APIs as the source of truth for provider capabilities, assets, data, and integrations.
+
+Do not copy competitor source code, graphics, copy, proprietary data, distinctive branding, or pixel-for-pixel UI. Compete by delivering YSong's own product decisions and visual language.
+
+Preserve the Ads differentiators as the experience grows:
+
+- **Creative-first workflow:** start by helping artists make an effective ad from their music, then guide them through campaign setup.
+- **Universal destinations:** support the artist's chosen listening and campaign destinations through the linked Smart Link, rather than assuming one streaming service.
+- **Music intelligence:** use music-aware guidance to inform creative and campaign choices.
+- **Audio and release matching:** connect the selected recording and release to the right campaign and creative.
+- **Rights gate:** make rights readiness an explicit checkpoint before publishing or promoting audio.
+- **Reusable creatives:** let artists reuse approved creative work across campaigns.
+- **Destination variants:** support creative or campaign variants tailored to different destinations while preserving shared source music and attribution.
+
+Extend these capabilities within existing Promotion Center owners and API contracts. Keep provider-specific behavior grounded in authorized APIs and keep artist-facing concepts and interaction design native to YSong.
