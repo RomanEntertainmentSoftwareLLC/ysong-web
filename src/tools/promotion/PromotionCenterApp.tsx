@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import AdCampaignStudio from "./AdCampaignStudio";
+import AdsWizard from "./AdsWizard";
 import { promotionApi, publicPromotionUrl, type MetaConnection, type PromotionAnalytics, type PromotionCampaign, type PromotionCatalog, type PromotionDestination, type PromotionHealth, type PromotionRelease } from "./api";
 
 type Mode="campaigns"|"create"|"ads"|"meta";
@@ -44,7 +44,7 @@ export default function PromotionCenterApp({onBack}:{onBack:()=>void}){
       {message&&<div className="mt-4 rounded-xl border border-violet-500/25 bg-violet-500/10 px-4 py-3 text-sm text-violet-700 dark:text-violet-200">{message}</div>}
       <datalist id="promotion-platforms">{catalog?.platforms.map(platform=><option key={platform.id} value={platform.label}/>)}</datalist>
 
-      {mode==="ads"&&<AdCampaignStudio campaigns={campaigns} releases={releases} health={health} onMessage={setMessage} startNewToken={adStartToken}/>}
+      {mode==="ads"&&<AdsWizard campaigns={campaigns} releases={releases} health={health} onMessage={setMessage} startNewToken={adStartToken}/>}
 
       {mode==="create"&&<div className="mt-6 grid gap-5 lg:grid-cols-[1fr_.9fr]">
         <div className={panel}><h2 className="text-lg font-semibold">Campaign identity</h2><div className="mt-4 grid gap-3 sm:grid-cols-2">
