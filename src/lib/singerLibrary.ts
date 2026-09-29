@@ -1,4 +1,4 @@
-import { openCreativeLibraryDb, SINGER_STORE } from "./creativeLibraryDb";
+import { BAND_STORE, openCreativeLibraryDb, SINGER_STORE } from "./creativeLibraryDb";
 
 export type SingerCharacter = {
   id: string;
@@ -73,8 +73,15 @@ export async function deleteSingerCharacter(id: string): Promise<void> {
   const db = await openCreativeLibraryDb();
   try {
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(SINGER_STORE, "readwrite");
+      const transaction = db.transaction([SINGER_STORE, BAND_STORE], "readwrite");
       transaction.objectStore(SINGER_STORE).delete(id);
+      const bands = transaction.objectStore(BAND_STORE);
+      const request = bands.getAll();
+      request.onsuccess = () => {
+        for (const band of request.result as Array<{ id: string; singerIds?: string[] }>) {
+          if (band.singerIds?.includes(id)) bands.put({ ...band, singerIds: band.singerIds.filter((singerId) => singerId !== id) });
+        }
+      };
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
     });
