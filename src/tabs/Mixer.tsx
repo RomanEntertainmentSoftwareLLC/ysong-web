@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { TabRendererProps } from "./core";
 import { useTabManager } from "./core";
 import { YSButton } from "../components/YSButton";
 import {
@@ -39,7 +38,9 @@ function MiniKnob({ label, value, min, max, step, onChange, display }: {
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        className="relative mt-1 h-8 w-8 rounded-full border border-white/10 bg-[radial-gradient(circle_at_34%_28%,#555,#222_38%,#0c0c0c_72%)] shadow-[inset_0_1px_2px_rgba(255,255,255,.12),0_3px_8px_rgba(0,0,0,.45)] cursor-ns-resize outline-none focus:ring-1 focus:ring-cyan-300/60"
+        aria-valuetext={display ? display(value) : String(value)}
+        title={`${label}: ${display ? display(value) : value}`}
+        className="relative mt-1 h-8 w-8 rounded-full border border-white/10 bg-[radial-gradient(circle_at_34%_28%,#555,#222_38%,#0c0c0c_72%)] shadow-[inset_0_1px_2px_rgba(255,255,255,.12),0_3px_8px_rgba(0,0,0,.45)] cursor-ns-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/80"
         onPointerDown={(e) => {
           e.preventDefault();
           drag.current = { y: e.clientY, value, pointerId: e.pointerId };
@@ -52,7 +53,7 @@ function MiniKnob({ label, value, min, max, step, onChange, display }: {
         }}
         onPointerUp={(e) => {
           if (drag.current?.pointerId === e.pointerId) drag.current = null;
-          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+          try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* Capture can be released by the browser first. */ }
         }}
         onPointerCancel={() => { drag.current = null; }}
         onKeyDown={(e) => {
@@ -72,7 +73,7 @@ function MiniKnob({ label, value, min, max, step, onChange, display }: {
 
 function Toggle({ active, label, onClick, tone = "cyan" }: { active: boolean; label: string; onClick: () => void; tone?: "cyan" | "amber" | "rose" }) {
   const activeClass = tone === "amber" ? "bg-amber-300 text-black border-amber-100" : tone === "rose" ? "bg-rose-400 text-black border-rose-200" : "bg-cyan-300 text-black border-cyan-100";
-  return <button type="button" onClick={onClick} className={`h-5 min-w-7 px-1 rounded border text-[8px] font-semibold ${active ? activeClass : "border-white/10 bg-black/20 opacity-65 hover:opacity-100"}`}>{label}</button>;
+  return <button type="button" aria-pressed={active} onClick={onClick} className={`h-6 min-w-9 px-1.5 rounded border text-[8px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80 ${active ? activeClass : "border-white/10 bg-black/20 opacity-65 hover:opacity-100"}`}>{label}</button>;
 }
 
 function Section({ title, accent, children }: { title: string; accent: string; children: ReactNode }) {
@@ -162,9 +163,9 @@ function ChannelStrip({ track, onOpenFx }: { track: DawSessionTrackSnapshot; onO
       <Section title="SENDS" accent="#52c66d">
         <div className="grid grid-cols-4 gap-x-1 gap-y-1.5">
           {m.sends.map((send, index) => <div key={index} className="flex flex-col items-center">
-            <div className="text-[8px] font-bold">{index + 1}</div>
-            <MiniKnob label="LEVEL" value={send.level} min={0} max={100} step={1} onChange={(level) => patchSend(index, { level })} display={(v) => `${v.toFixed(0)}`} />
-            <button type="button" onClick={() => patchSend(index, { pre: !send.pre })} className={`mt-0.5 h-4 px-1 rounded text-[7px] border ${send.pre ? "bg-cyan-300 text-black border-cyan-100" : "border-white/10 opacity-55"}`}>{send.pre ? "PRE" : "POST"}</button>
+            <div className="text-[8px] font-bold text-emerald-200">AUX {index + 1}</div>
+            <MiniKnob label={`AUX ${index + 1} level`} value={send.level} min={0} max={100} step={1} onChange={(level) => patchSend(index, { level })} display={(v) => `${v.toFixed(0)}%`} />
+            <button type="button" aria-label={`Aux ${index + 1} ${send.pre ? "pre" : "post"} fader`} aria-pressed={send.pre} onClick={() => patchSend(index, { pre: !send.pre })} className={`mt-1 h-6 min-w-10 px-1 rounded text-[7px] font-bold border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80 ${send.pre ? "bg-cyan-300 text-black border-cyan-100" : "border-white/10 opacity-55 hover:opacity-100"}`}>{send.pre ? "PRE" : "POST"}</button>
           </div>)}
         </div>
       </Section>
@@ -175,12 +176,18 @@ function ChannelStrip({ track, onOpenFx }: { track: DawSessionTrackSnapshot; onO
           <MiniKnob label="PAN" value={m.pan} min={-1} max={1} step={0.01} onChange={(pan) => patch({ pan })} display={(v) => Math.abs(v) < .01 ? "C" : v < 0 ? `L${Math.round(-v*100)}` : `R${Math.round(v*100)}`} />
         </div>
         <div className="mt-1 flex justify-center gap-1"><Toggle active={track.mute} label="MUTE" onClick={() => sendDawSessionCommand({ type: "set-mute", trackId: track.id, value: !track.mute })} tone="amber" /><Toggle active={track.solo} label="SOLO" onClick={() => sendDawSessionCommand({ type: "set-solo", trackId: track.id, value: !track.solo })} /></div>
-        <div className="mt-2 grid grid-cols-[22px_1fr_28px] gap-2 h-[145px] items-stretch">
-          <div className="relative rounded bg-black/70 border border-white/5 overflow-hidden"><div className="absolute left-0 right-0 bottom-0 bg-gradient-to-t from-emerald-500 via-yellow-300 to-rose-400 transition-[height] duration-75" style={{ height: `${meterPct}%` }} /></div>
-          <input aria-label={`${track.name} volume`} type="range" min={0} max={127} step={1} value={track.level} onChange={(e) => sendDawSessionCommand({ type: "set-level", trackId: track.id, value: Number(e.target.value) })} className="m-auto h-[138px] accent-cyan-300" style={{ writingMode: "vertical-lr", direction: "rtl" }} />
+        <div className="mt-2 grid grid-cols-[30px_1fr_28px] gap-2 h-[160px] items-stretch">
+          <div role="meter" aria-label={`${track.name} output meter`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(meterPct)} className="relative rounded-sm bg-black/80 border border-white/10 overflow-hidden shadow-inner">
+            <div className="absolute inset-0 flex flex-col justify-between py-1.5 pointer-events-none opacity-30">{[0, 1, 2, 3, 4].map((tick) => <i key={tick} className="block h-px bg-white/70" />)}</div>
+            <div className="absolute left-0 right-0 bottom-0 bg-gradient-to-t from-emerald-500 via-yellow-300 to-rose-400 transition-[height] duration-75" style={{ height: `${meterPct}%` }} />
+          </div>
+          <div className="relative flex justify-center rounded-sm border border-white/10 bg-[linear-gradient(90deg,#090b0c,#25292b_48%,#0a0c0d)]">
+            <div className="absolute inset-x-2 top-2 bottom-2 rounded bg-black/60" />
+            <input aria-label={`${track.name} volume`} aria-valuetext={`${track.level} of 127`} type="range" min={0} max={127} step={1} value={track.level} onChange={(e) => sendDawSessionCommand({ type: "set-level", trackId: track.id, value: Number(e.target.value) })} className="relative z-10 m-auto h-[148px] w-6 cursor-ns-resize accent-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80" style={{ writingMode: "vertical-lr", direction: "rtl" }} />
+          </div>
           <div className="flex flex-col justify-between text-[8px] font-mono opacity-55 py-1"><span>+2</span><span>0</span><span>-12</span><span>-24</span><span>-∞</span></div>
         </div>
-        <div className="mt-1 text-center text-[9px] font-mono">{track.level}</div>
+        <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-mono"><span className="text-[7px] opacity-45">LEVEL</span><span className="rounded bg-black/40 px-1.5 py-0.5 tabular-nums">{track.level}</span></div>
       </Section>
 
       <div className="h-10 px-2 flex items-center bg-[#1f2428] border-t border-black text-[9px]"><span className="truncate flex-1">{track.name}</span><span className="opacity-40">{track.type === "audio" ? "A" : "I"}</span></div>
@@ -218,7 +225,7 @@ function FxMasterPanel({ snapshot }: { snapshot: DawSessionSnapshot }) {
   );
 }
 
-export default function MixerPane(_props: TabRendererProps) {
+export default function MixerPane() {
   const { tabs, activateTab } = useTabManager();
   const [snapshot, setSnapshot] = useState<DawSessionSnapshot | null>(() => getLatestDawSessionSnapshot());
   useEffect(() => subscribeDawSessionSnapshot(setSnapshot), []);
