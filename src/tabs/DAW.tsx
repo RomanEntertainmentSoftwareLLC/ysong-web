@@ -5855,8 +5855,9 @@ export default function DAW(_props: TabRendererProps) {
 
 							<div style={{ height: 80 }} />
 						</div>
-					</div>
 				</div>
+				<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
+			</div>
 			</div>
 
 			<InstrumentCatalogPanel
@@ -5893,7 +5894,6 @@ export default function DAW(_props: TabRendererProps) {
 				onAccept={acceptProgressiveStemProposal}
 			/>
 
-			<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
 			<AiComposerPanel
 				key={activeProjectId}
 				open={aiComposerOpen}
