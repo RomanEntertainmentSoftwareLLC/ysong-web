@@ -71,8 +71,8 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const dragDepthRef = useRef(0);
   const [dragActive, setDragActive] = useState(false);
+  const dropZoneRef = useRef<HTMLLabelElement | null>(null);
   const [aiCritique, setAiCritique] = useState<AiCritiqueSummary | null>(null);
   const [aiCritiqueState, setAiCritiqueState] = useState<"idle" | "writing" | "done" | "error">("idle");
   const [aiCritiqueError, setAiCritiqueError] = useState("");
@@ -99,11 +99,11 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     const preventWindowFileDrop = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
       event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
     };
     const clearWindowDrag = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
       event.preventDefault();
-      dragDepthRef.current = 0;
       setDragActive(false);
     };
     window.addEventListener("dragover", preventWindowFileDrop);
@@ -128,24 +128,32 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     selectFile(next);
   }
 
+  function isFileDrag(event: React.DragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
+  }
+
   function onDragEnter(event: React.DragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
     event.preventDefault(); event.stopPropagation();
-    if (!event.dataTransfer.types.includes("Files")) return;
-    dragDepthRef.current += 1;
     setDragActive(true);
   }
   function onDragOver(event: React.DragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
     event.preventDefault(); event.stopPropagation();
-    if (event.dataTransfer.types.includes("Files")) { event.dataTransfer.dropEffect = "copy"; setDragActive(true); }
+    event.dataTransfer.dropEffect = busy ? "none" : "copy";
+    if (!busy) setDragActive(true);
   }
   function onDragLeave(event: React.DragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
     event.preventDefault(); event.stopPropagation();
-    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-    if (dragDepthRef.current === 0) setDragActive(false);
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && dropZoneRef.current?.contains(nextTarget)) return;
+    setDragActive(false);
   }
   function onDrop(event: React.DragEvent<HTMLElement>) {
+    if (!isFileDrag(event)) return;
     event.preventDefault(); event.stopPropagation();
-    dragDepthRef.current = 0; setDragActive(false);
+    setDragActive(false);
     acceptDroppedFile(event.dataTransfer.files?.[0] || null);
   }
 
@@ -221,7 +229,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
         <div className="mt-7 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
           <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Source</div><h2 className="mt-1 text-lg font-semibold">Give YSong a finished mix</h2>
-            <label onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} className={`relative mt-4 block cursor-pointer rounded-xl border border-dashed p-5 transition ${dragActive ? "border-violet-400 bg-violet-500/10 shadow-[inset_0_0_36px_rgba(139,92,246,.08)]" : "border-neutral-300 dark:border-neutral-700 hover:border-violet-500/60"}`}><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" disabled={busy} onChange={e => { acceptDroppedFile(e.target.files?.[0] || null); e.currentTarget.value = ""; }} /><div className={`font-medium ${dragActive ? "text-violet-400" : ""}`}>{dragActive ? "Drop audio to analyze" : file?.name || "Drop/select an audio file"}</div><div className="mt-1 text-xs text-neutral-500">{dragActive ? "Release anywhere inside this box. The file stays local to YSong's analysis pipeline." : "YSong prepares a local 48 kHz analysis copy. Your original upload is retained."}</div></label>
+            <label ref={dropZoneRef} onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} className={`relative mt-4 block cursor-pointer rounded-xl border border-dashed p-5 transition ${dragActive ? "border-violet-400 bg-violet-500/10 shadow-[inset_0_0_36px_rgba(139,92,246,.08)]" : "border-neutral-300 dark:border-neutral-700 hover:border-violet-500/60"}`}><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" disabled={busy} onChange={e => { acceptDroppedFile(e.target.files?.[0] || null); e.currentTarget.value = ""; }} /><div className={`font-medium ${dragActive ? "text-violet-400" : ""}`}>{dragActive ? "Drop audio to analyze" : file?.name || "Drop/select an audio file"}</div><div className="mt-1 text-xs text-neutral-500">{dragActive ? "Release anywhere inside this box. The file stays local to YSong's analysis pipeline." : "YSong prepares a local 48 kHz analysis copy. Your original upload is retained."}</div></label>
             {file && !upload && <button type="button" disabled={busy || health !== "online"} onClick={prepare} className="mt-3 min-h-10 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white disabled:opacity-40">{stage === "uploading" ? "Preparing…" : "Prepare audio"}</button>}
             {upload && <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-neutral-500"><span>Asset <span className="font-mono text-neutral-700 dark:text-neutral-300">{upload.asset_id}</span></span><span className="text-emerald-500">Prepared</span>{onOpenStemRestore && <button type="button" onClick={() => onOpenStemRestore(upload)} className="text-violet-500 hover:text-violet-400">Open same source in Stem Restore →</button>}{onOpenMastering && <button type="button" onClick={() => onOpenMastering(upload)} className="text-violet-500 hover:text-violet-400">Open in Master / Remaster →</button>}{onOpenAudioIntelligence && <button type="button" onClick={() => onOpenAudioIntelligence(upload)} className="text-violet-500 hover:text-violet-400">Open in Audio Intelligence →</button>}</div>}
           </section>
