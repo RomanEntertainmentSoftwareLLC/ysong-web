@@ -211,6 +211,20 @@ export default function AIDetectorApp({ onBack }: Props) {
                 <div><div className="text-2xl font-semibold">{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{report.evidence_agreement.toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
               </div>
               <div className="mt-6 grid grid-cols-3 text-[10px] uppercase tracking-wide text-neutral-500"><span>Human-leaning</span><span className="text-center">Indeterminate</span><span className="text-right">AI-leaning</span></div>
+              <details className="mt-5 border-t border-neutral-200 pt-4 text-sm dark:border-neutral-800">
+                <summary className="cursor-pointer text-xs font-medium text-neutral-600 hover:text-violet-500 dark:text-neutral-300">Advanced calibration details</summary>
+                <p className="mt-2 text-[11px] leading-5 text-neutral-500">These are internal signal diagnostics, not probabilities or confirmation of who created the audio. Generic signal patterns can occur in both AI and human productions.</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {(["generic_ai_support", "human_counterevidence", "evidence_quality"] as const).map(key => {
+                    const value = report.measurements?.[key];
+                    return typeof value === "number" && Number.isFinite(value) ? <div key={key} className="flex items-center justify-between gap-3 rounded-lg bg-neutral-100/80 px-3 py-2 text-xs dark:bg-neutral-950/70"><span className="text-neutral-500">{metricLabels[key]}</span><strong className="tabular-nums">{formatMetric(key, value)}</strong></div> : null;
+                  })}
+                </div>
+                {report.layers?.length > 0 && <div className="mt-3">
+                  <div className="mb-2 text-[10px] uppercase tracking-wide text-neutral-500">Layer values</div>
+                  <div className="space-y-1.5">{report.layers.map(layer => <div key={layer.id} className="flex items-center justify-between gap-3 text-xs"><span className="min-w-0 truncate text-neutral-500">{layer.name}</span><span className="shrink-0 tabular-nums text-neutral-700 dark:text-neutral-300">Score {Number.isFinite(layer.score) ? layer.score.toFixed(1) : "—"}{Number.isFinite(layer.reliability) ? ` · reliability ${layer.reliability.toFixed(2)}` : ""}</span></div>)}</div>
+                </div>}
+              </details>
             </section>
 
             <section className="rounded-3xl border border-neutral-200 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-900/55 md:p-6">
