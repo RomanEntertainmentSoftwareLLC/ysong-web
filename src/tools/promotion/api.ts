@@ -115,6 +115,8 @@ export const promotionApi={
     return out;
   },
   patchCreative:(id:string,creativeId:string,body:Record<string,unknown>)=>request<{creative:AdCreative}>(`${ROOT}/ad-campaigns/${id}/creatives/${creativeId}`,{method:"PATCH",body:JSON.stringify(body)}),
+  /** Bind an existing reusable creative to another campaign and destination. This never queues a render. */
+  makeCreativeVariant:(creativeId:string,body:{adCampaignId:string;destinationId?:string|null;destinationUrl?:string|null;ctaLabel?:string;captionOverride?:string})=>request<{variant:AdCreativeDestinationVariant}>(`${ROOT}/creatives/${encodeURIComponent(creativeId)}/variants`,{method:"POST",body:JSON.stringify(body)}),
   retryCreative:(id:string,creativeId:string)=>request<{creative:AdCreative}>(`${ROOT}/ad-campaigns/${id}/creatives/${creativeId}/retry`,{method:"POST",body:"{}"}),
   backgrounds:()=>request<{backgroundVideos:BackgroundVideo[]}>(`${ROOT}/background-videos`),
   registerBackground:(objectKey:string,libraryId?:string|null)=>request<{backgroundVideo:BackgroundVideo}>(`${ROOT}/background-videos`,{method:"POST",body:JSON.stringify({objectKey,libraryId:libraryId||null})}),
