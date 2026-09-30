@@ -16,9 +16,10 @@ type Props = {
   sourceName?: string;
   initialResult?: AdsGenreResult | null;
   onResult: (result: AdsGenreResult) => void;
+  onTiming?: (timing: AdsGenreResult["tempo"]) => void;
 };
 
-export default function AdsGenreAnalysis({ file, trackId, sourceName, initialResult = null, onResult }: Props) {
+export default function AdsGenreAnalysis({ file, trackId, sourceName, initialResult = null, onResult, onTiming }: Props) {
   const [result, setResult] = useState<AdsGenreResult | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -61,6 +62,7 @@ export default function AdsGenreAnalysis({ file, trackId, sourceName, initialRes
       const report = finished.result?.report as AudioIntelligenceReport | undefined;
       if (!report?.genre?.candidates) throw new Error("Audio Intelligence completed without genre results.");
       const classified = genresFromAudioReport(report);
+      if (!current.signal.aborted) onTiming?.(classified.tempo);
       const labels = [classified.primary, classified.secondary, ...classified.related]
         .filter((value): value is string => Boolean(value));
       setProgress("Matching YSong genre Atlas");
