@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import WaveformPicker from "./WaveformPicker";
 import CreativeStudioPanel from "./CreativeStudioPanel";
 import ShortAdEditPlanner from "./ShortAdEditPlanner";
@@ -10,6 +10,9 @@ import PromotionIntelligence from "./PromotionIntelligence";
 import AdsGenreAnalysis from "./AdsGenreAnalysis";
 import { genreSearchSeeds, type AdsGenreResult } from "./adsGenreResult";
 import { promotionApi, type AdCampaign, type AdCreative, type AudioSnippet, type BackgroundVideo, type CreativeLibrary, type PromotionCampaign, type PromotionHealth, type PromotionRelease, type StockVideo } from "./api";
+import { buildAdsAssistantContext, type AdsAssistantContext } from "./adsSmartAssistantContract";
+import AdsSmartAssistantPanel, { type AdsStudioSelection } from "./AdsSmartAssistantPanel";
+import type { CreativeStudioProject } from "./creativeStudioProject";
 
 const panel="rounded-2xl border border-neutral-200 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-900/55";
 const input="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-950";
@@ -29,21 +32,40 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage,st
   const [genreResult,setGenreResult]=useState<AdsGenreResult|null>(null); const [editTiming,setEditTiming]=useState<AdsGenreResult["tempo"]>();
   const [pendingCuts,setPendingCuts]=useState<EditTiming[]>([]); const [snippetCuts,setSnippetCuts]=useState<Record<string,EditTiming[]>>({}); const [exportingId,setExportingId]=useState<string|null>(null);
   const [studioCreativeId,setStudioCreativeId]=useState<string|null>(null);
+  const [studioSelection,setStudioSelection]=useState<AdsStudioSelection>(null);
+  const [studioProjects,setStudioProjects]=useState<Record<string,CreativeStudioProject|null>>({});
 
   const selectedTrack=useMemo(()=>trackOf(releases,selected?.sourceTrackId||trackId),[releases,selected?.sourceTrackId,trackId]);
   const selectedSmart=campaigns.find(c=>c.id===(selected?.campaignId||smartId))||null;
-  const selectedRelease=releases.find(r=>r.id===releaseId)||selectedTrack?.release||null;
+  const selectedRelease=selected?.sourceTrackId?selectedTrack?.release||null:releases.find(r=>r.id===releaseId)||selectedTrack?.release||null;
+  const assistantContext=useMemo<AdsAssistantContext|null>(()=>{
+    if(!selected||!selectedSmart||!selectedRelease||!selectedTrack?.track)return null;
+    try{return buildAdsAssistantContext({ad:selected,smartLink:selectedSmart,release:selectedRelease,track:selectedTrack.track,snippets,creatives,genreEvidence:genreResult?{trackId:selected.sourceTrackId||selectedTrack.track.id,result:genreResult}:null,cutsBySnippet:snippetCuts,studioProjects});}
+    catch{return null;}
+  },[selected,selectedSmart,selectedRelease,selectedTrack,snippets,creatives,genreResult,snippetCuts,studioProjects]);
+  const onStudioSelectionChange=useCallback((selection:AdsStudioSelection)=>setStudioSelection(selection),[]);
   const renderReady=health?.render.available&&health.render.h264&&health.render.aac;
 
   async function loadBase(){try{const [a,b,l]=await Promise.all([promotionApi.adCampaigns(),promotionApi.backgrounds(),promotionApi.libraries()]);setAds(a.adCampaigns);setBackgrounds(b.backgroundVideos);setLibraries(l.libraries);}catch(e){onMessage(e instanceof Error?e.message:"Ad Campaign Studio could not load.");}}
   useEffect(()=>{void loadBase();},[]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function openAd(id:string,keepGenre=false){setBusy(true);setStudioCreativeId(null);if(!keepGenre){setGenreResult(null);setEditTiming(undefined);}try{const out=await promotionApi.adCampaign(id);setSelected(out.adCampaign);setSnippets(out.snippets);setCreatives(out.creatives);setChosenSnippets(out.snippets.map(s=>s.id));setNewMode(false);setStep("music");}catch(e){onMessage(e instanceof Error?e.message:"Could not load ad campaign.");}finally{setBusy(false);}}
+  async function openAd(id:string,keepGenre=false){setBusy(true);setStudioCreativeId(null);setStudioSelection(null);if(!keepGenre){setGenreResult(null);setEditTiming(undefined);}try{const out=await promotionApi.adCampaign(id);setSelected(out.adCampaign);setSnippets(out.snippets);setCreatives(out.creatives);setChosenSnippets(out.snippets.map(s=>s.id));setNewMode(false);setStep("music");}catch(e){onMessage(e instanceof Error?e.message:"Could not load ad campaign.");}finally{setBusy(false);}}
 
   useEffect(()=>{
     if(!selected)return; const found=trackOf(releases,selected.sourceTrackId); if(!found?.track.audioObjectKey){setAudioUrl("");return;} let cancelled=false;
     void promotionApi.signedUrl(found.track.audioObjectKey).then(r=>{if(!cancelled)setAudioUrl(r.url);}).catch(()=>{if(!cancelled)setAudioUrl("");}); return()=>{cancelled=true;};
   },[selected,releases]);
+
+  useEffect(()=>{
+    let active=true;
+    const candidates=creatives.filter(c=>c.selected&&c.stableCreativeId&&c.audioSnippets&&c.backgroundMedia);
+    if(!selected||!candidates.length){setStudioProjects({});return()=>{active=false;};}
+    void Promise.all(candidates.map(async creative=>{
+      try{return [creative.stableCreativeId!,await promotionApi.loadStudioProject({id:creative.stableCreativeId!,audioSnippets:creative.audioSnippets!,backgroundMedia:creative.backgroundMedia!,overlays:creative.overlays||[]})] as const;}
+      catch{return [creative.stableCreativeId!,null] as const;}
+    })).then(rows=>{if(active)setStudioProjects(Object.fromEntries(rows));});
+    return()=>{active=false;};
+  },[selected,creatives]);
 
   useEffect(()=>{
     if(!selected||!creatives.some(c=>c.status==="queued"||c.status==="rendering"))return;
@@ -170,7 +192,8 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage,st
         {step==="generate"&&<div className="mt-5"><div className="grid gap-3 md:grid-cols-3"><div className="rounded-xl border border-neutral-200 p-4 text-center dark:border-neutral-800"><div className="text-2xl font-semibold">{chosenSnippets.length}</div><div className="text-xs text-neutral-500">audio clips</div></div><div className="rounded-xl border border-neutral-200 p-4 text-center dark:border-neutral-800"><div className="text-2xl font-semibold">{chosenBackgrounds.length}</div><div className="text-xs text-neutral-500">backgrounds</div></div><div className="rounded-xl border border-violet-500/40 bg-violet-500/5 p-4 text-center"><div className="text-2xl font-semibold">{combinationCount}</div><div className="text-xs text-neutral-500">generated ads</div></div></div><button disabled={busy||!renderReady||combinationCount<1||combinationCount>15} onClick={()=>void render()} className="mt-4 w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">Generate {combinationCount||""} ad video{combinationCount===1?"":"s"}</button>
           <div className="mt-5 grid gap-4 lg:grid-cols-2">{creatives.map((c,i)=>{const urls=creativeUrls[c.id]||{};return <div key={c.id} className={`rounded-2xl border p-4 ${c.selected?"border-violet-500/45":"border-neutral-200 opacity-65 dark:border-neutral-800"}`}><div className="flex items-center justify-between"><div><div className="text-sm font-semibold">Creative {i+1}</div><div className="text-xs text-neutral-500">{c.status}{c.durationSeconds?` · ${c.durationSeconds.toFixed(1)}s`:""}</div></div><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={c.selected} onChange={()=>void toggleCreative(c)}/> Use in campaign</label></div>{(c.status==="ready"||!!c.stableCreativeId)?<div className="mt-3 grid grid-cols-[.56fr_1fr] gap-3"><div><div className="mb-1 text-[10px] uppercase text-neutral-500">9:16 Reels / Stories</div>{urls.vertical?<video className="aspect-[9/16] w-full rounded-lg bg-black object-contain" src={urls.vertical} controls preload="metadata"/>:<div className="aspect-[9/16] rounded-lg bg-black"/>}</div><div><div className="mb-1 text-[10px] uppercase text-neutral-500">4:3 Feed</div>{urls.feed?<video className="aspect-[4/3] w-full rounded-lg bg-black object-contain" src={urls.feed} controls preload="metadata"/>:<div className="aspect-[4/3] rounded-lg bg-black"/>}</div><button type="button" disabled={exportingId!==null||(!c.objectKey916&&!c.stableCreativeId)||!reelExportFormat()} onClick={()=>void exportCreative(c)} className="mt-3 rounded-lg border border-violet-500/50 px-3 py-2 text-xs font-semibold text-violet-600 disabled:opacity-40 dark:text-violet-300">{exportingId===c.id?"Exporting in real time…":`Export 9:16 reel (${reelExportFormat()?.extension.toUpperCase()||"unavailable"})`}</button><p className="mt-1 text-[10px] text-neutral-500">720×1280 · 30 fps · overlays and timing baked in · source manifest included</p></div>:c.status==="failed"?<div className="mt-3 rounded-lg bg-red-500/10 p-3 text-xs text-red-500">{c.renderError||"Render failed."}<button onClick={async()=>{if(selected){await promotionApi.retryCreative(selected.id,c.id);const out=await promotionApi.creatives(selected.id);setCreatives(out.creatives);}}} className="ml-2 underline">Retry</button></div>:<div className="mt-3 rounded-lg border border-dashed border-neutral-300 p-8 text-center text-xs text-neutral-500 dark:border-neutral-700">FFmpeg {c.status}…</div>}</div>;})}</div></div>}
 
-        {step==="generate"&&creatives.some(c=>c.stableCreativeId)&&<div className="mt-5 border-t border-neutral-200 pt-4 dark:border-neutral-800"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Creative Studio</h3><p className="text-xs text-neutral-500">Arrange and save the reusable creative's tracks.</p></div><select aria-label="Creative Studio source" className={`${input} max-w-60`} value={studioCreativeId||""} onChange={e=>setStudioCreativeId(e.target.value||null)}><option value="">Choose a creative</option>{creatives.filter(c=>c.stableCreativeId).map((c,i)=><option key={c.id} value={c.id}>Creative {i+1}</option>)}</select></div>{studioCreativeId&&creatives.filter(c=>c.id===studioCreativeId).map(c=><CreativeStudioPanel key={c.stableCreativeId} creative={c} mediaUrls={Object.fromEntries((c.backgroundMedia||[]).map(ref=>[ref.mediaId,backgroundUrls[backgrounds.find(b=>b.objectKey===ref.objectKey)?.id||""]||""]))} audioUrl={audioUrl}/>)}</div>}
+        {step==="generate"&&creatives.some(c=>c.stableCreativeId)&&<div className="mt-5 border-t border-neutral-200 pt-4 dark:border-neutral-800"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-sm font-semibold">Creative Studio</h3><p className="text-xs text-neutral-500">Arrange and save the reusable creative's tracks.</p></div><select aria-label="Creative Studio source" className={`${input} max-w-60`} value={studioCreativeId||""} onChange={e=>{setStudioCreativeId(e.target.value||null);setStudioSelection(null);}}><option value="">Choose a creative</option>{creatives.filter(c=>c.stableCreativeId).map((c,i)=><option key={c.id} value={c.id}>Creative {i+1}</option>)}</select></div>{studioCreativeId&&creatives.filter(c=>c.id===studioCreativeId).map(c=><CreativeStudioPanel key={c.stableCreativeId} creative={c} mediaUrls={Object.fromEntries((c.backgroundMedia||[]).map(ref=>[ref.mediaId,backgroundUrls[backgrounds.find(b=>b.objectKey===ref.objectKey)?.id||""]||""]))} audioUrl={audioUrl} onSelectionChange={onStudioSelectionChange}/>)}</div>}
+        {selected&&<div className="mt-5"><AdsSmartAssistantPanel context={assistantContext} selection={step==="generate"?studioSelection:null} onNavigate={target=>setStep(target)}/></div>}
         {step==="setup"&&selected&&<AudienceCampaignSetup ad={selected} smartLink={selectedSmart} health={health} creatives={creatives} creativeUrls={creativeUrls} interestSeeds={[...genreSearchSeeds(genreResult),selected.genre,selectedTrack?.track.genre||"",selectedTrack?.release.genre||"",...(Array.isArray(selectedTrack?.track.tags)?selectedTrack.track.tags.filter((x):x is string=>typeof x==="string"):[])].filter(Boolean)} onSaved={(next)=>{setSelected(next);setAds(v=>v.map(x=>x.id===next.id?next:x));}} onMessage={onMessage}/>}
         {step==="analytics"&&selected&&<AdCampaignAnalytics ad={selected} onMessage={onMessage}/>}
         {step==="intelligence"&&selected&&<PromotionIntelligence ad={selected} onMessage={onMessage}/>}

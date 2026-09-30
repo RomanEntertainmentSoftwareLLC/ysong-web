@@ -6,7 +6,7 @@ import { studioSources } from "./creativeStudioTracks";
 import CreativeStudioTimeline from "./CreativeStudioTimeline";
 
 /** Edits the reusable creative; campaign renders remain derived bindings. */
-export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: { creative: AdCreative; mediaUrls: Record<string, string>; audioUrl: string }) {
+export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, onSelectionChange }: { creative: AdCreative; mediaUrls: Record<string, string>; audioUrl: string; onSelectionChange?: (selection: { kind: "audio" | "visual" | "text"; label: string; startSeconds: number; durationSeconds: number; text?: string } | null) => void }) {
   const [project, setProject] = useState<CreativeStudioProject | null>(null);
   const [baseline, setBaseline] = useState<CreativeStudioProject | null>(null);
   const [history, setHistory] = useState<StudioHistory | null>(null);
@@ -78,6 +78,6 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: {
   }}>
     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><label className="flex items-center gap-2 font-medium">Social aspect<select aria-label="Social aspect ratio" value={aspect} disabled={saving} onChange={event => setAspect(event.target.value as StudioAspectRatio)} className="rounded border bg-transparent p-2"><option value="9:16">9:16 Vertical</option><option value="1:1">1:1 Square</option><option value="16:9">16:9 Landscape</option></select></label><span className="text-neutral-500">Each layout keeps its own crop and overlay positions.</span><span className="text-neutral-500">{project ? `Revision ${project.revision}` : "New timeline from creative assets"}</span><button type="button" disabled={!history.past.length || saving} onClick={() => setHistory(value => value && undoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Undo</button><button type="button" disabled={!history.future.length || saving} onClick={() => setHistory(value => value && redoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Redo</button><button type="button" disabled={!dirty || saving} onClick={() => void save()} className="rounded border border-violet-500 px-3 py-2 font-semibold text-violet-600 disabled:opacity-40">{saving ? "Saving…" : "Save timeline"}</button><button type="button" disabled={!dirty || saving} onClick={() => setHistory(createStudioHistory(baseline))} className="rounded border px-3 py-2 disabled:opacity-40">Discard edits</button>{dirty && <span>Unsaved changes</span>}</div>
     {error && <p role="alert" className="mb-2 text-xs text-amber-600">{error}</p>}{notice && <p role="status" className="mb-2 text-xs text-emerald-600">{notice}</p>}
-    <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={mediaUrls} audioUrl={audioUrl} /></div>
+    <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={mediaUrls} audioUrl={audioUrl} onSelectionChange={onSelectionChange} /></div>
   </div>;
 }

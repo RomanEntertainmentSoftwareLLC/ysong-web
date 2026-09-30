@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import type { CreativeStudioProject, StudioAudioClip, StudioTrack, StudioTransition, StudioTransitionKind, StudioVisualClip } from "./creativeStudioProject";
 import type { ReusableAdCreative } from "./api";
@@ -22,12 +22,13 @@ function timelineFrameAt(clientX: number, rectLeft: number, scrollLeft: number, 
 }
 
 /** The project is owned by the reusable creative. This view only changes local timeline UI state. */
-export default function CreativeStudioTimeline({ creative, project, onChange, mediaUrls = {}, audioUrl = "" }: {
+export default function CreativeStudioTimeline({ creative, project, onChange, mediaUrls = {}, audioUrl = "", onSelectionChange }: {
   creative: Pick<ReusableAdCreative,"name"|"audioSnippets"|"backgroundMedia"|"overlays"|"caption"|"cta">;
   project: CreativeStudioProject;
   onChange: (project: CreativeStudioProject, group?: string) => void;
   mediaUrls?: Record<string, string>;
   audioUrl?: string;
+  onSelectionChange?: (selection: { kind: "audio" | "visual" | "text"; label: string; startSeconds: number; durationSeconds: number; text?: string } | null) => void;
 }) {
   const [zoom, setZoom] = useState(80);
   const [snap, setSnap] = useState(true);
@@ -51,6 +52,14 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   const selectedAudioTrack = selection ? project.tracks.find((track): track is Extract<StudioTrack, { kind: "audio" }> => track.id === selection.trackId && track.kind === "audio") : undefined;
   const selectedAudioClip = selectedAudioTrack?.clips.find(clip => clip.id === selection?.clipId);
   const selectedSnippet = selectedAudioClip && creative.audioSnippets.find(item => item.snippetId === selectedAudioClip.snippetId);
+  useEffect(() => {
+    if (!selection) { onSelectionChange?.(null); return; }
+    const track = project.tracks.find(item => item.id === selection.trackId);
+    const clip = track?.clips.find(item => item.id === selection.clipId);
+    if (!track || !clip) { onSelectionChange?.(null); return; }
+    const text = track.kind === "text" && "text" in clip ? clip.text : undefined;
+    onSelectionChange?.({ kind: track.kind, label: text || (track.kind === "audio" ? "Audio clip" : track.kind === "visual" ? "Visual clip" : "Text overlay"), startSeconds: clip.startFrame / fps, durationSeconds: clip.durationFrames / fps, ...(text ? { text } : {}) });
+  }, [selection, project, fps, onSelectionChange]);
   const syncAudioPreview = (element: HTMLAudioElement) => {
     if (!selectedAudioClip || !selectedAudioTrack || !selectedSnippet) return;
     const localSeconds = element.currentTime - selectedSnippet.startSeconds - selectedAudioClip.sourceInSeconds;
