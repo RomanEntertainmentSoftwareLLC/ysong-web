@@ -56,6 +56,7 @@ import {
 	type VisualSecondaryDynamic,
 } from "../lib/visualsScene";
 import { deterministicCameraShake, resolveVisualProgramCamera, sampleVisualProgramCamera } from "../lib/visualsCamera";
+import { pickVisibleEditorObject } from "../lib/visualsEditorPicking";
 import { isCurrentVisualMaterialTexture, type MaterialTextureKey } from "../lib/visualMaterialUpload";
 import { activeVisualAnimationClips, animationLayerAllowsTarget, sampleIKWeight } from "../lib/visualsPerformance";
 import {
@@ -1896,7 +1897,7 @@ export default function VisualOutput() {
 				window.location.origin,
 			);
 		};
-		const onEditorClick = () => {
+		const onEditorClick = (event: MouseEvent) => {
 			if (suppressEditorClick) {
 				suppressEditorClick = false;
 				return;
@@ -1907,6 +1908,7 @@ export default function VisualOutput() {
 				document.exitPointerLock();
 				return;
 			}
+			updateEditorPick(event);
 			if (hoveredSelectableId) {
 				window.parent.postMessage(
 					{ type: "ysong-visual-select", id: hoveredSelectableId },
@@ -1930,6 +1932,7 @@ export default function VisualOutput() {
 				document.exitPointerLock();
 				return;
 			}
+			updateEditorPick(event);
 			if (!hoveredSelectableId) return;
 			window.parent.postMessage(
 				{
@@ -2700,43 +2703,28 @@ export default function VisualOutput() {
 		canvas.addEventListener("click", onModelPlacementClick, true);
 		canvas.addEventListener("dragover", onViewportDragOver);
 		canvas.addEventListener("drop", onViewportDrop);
-		const resolveSelectable = (object: THREE.Object3D | null) => {
-			let current = object;
-			while (current) {
-				const id = current.userData.ysongSelectableId as string | undefined;
-				if (id) return id;
-				current = current.parent;
-			}
-			return "";
-		};
-		const onEditorHover = (event: MouseEvent) => {
+		const updateEditorPick = (event: MouseEvent) => {
 			if (!editorFreeRoam || placementState || document.pointerLockElement === canvas) return;
 			const rect = canvas.getBoundingClientRect();
 			pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
 			pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 			raycaster.setFromCamera(pointer, camera);
-			const hits = raycaster.intersectObjects(
-				[...selectableRoots.values(), ...cameraHelpers.values()].map((value) =>
-					"root" in value ? value.root : value,
-				),
-				true,
+			const activeLayerIds = new Set(sceneRef.current.layers.map((layer) => layer.id));
+			const roots: Array<readonly [string, THREE.Object3D]> = [...selectableRoots].filter(([id]) =>
+				activeLayerIds.has(id),
 			);
-			// A fresh 3D project places Program Camera 1 at the same transform as the
-			// editor camera. The editor was therefore raycasting *from inside its camera
-			// helper*, treating every empty-space click as "select camera" and never
-			// requesting pointer lock. Ignore camera helpers that are effectively sitting
-			// on top of the editor camera so empty-space click can enter free roam.
-			const selectableHit = hits.find((hit) => {
-				const id = resolveSelectable(hit.object);
-				if (!id) return false;
-				const helper = cameraHelpers.get(id);
-				return !helper || camera.position.distanceTo(helper.root.position) > 1.05;
-			});
-			hoveredSelectableId = selectableHit ? resolveSelectable(selectableHit.object) : "";
+			// Camera gizmos are editor-only and cannot claim hits while their parent is hidden.
+			if (cameraHelperRoot.visible) {
+				const activeCameraIds = new Set(sceneRef.current.cameras.map((programCamera) => programCamera.id));
+				for (const [id, helper] of cameraHelpers)
+					if (activeCameraIds.has(id) && camera.position.distanceTo(helper.root.position) > 1.05)
+						roots.push([id, helper.root]);
+			}
+			hoveredSelectableId = pickVisibleEditorObject(raycaster, threeScene, roots);
 			canvas.style.cursor = hoveredSelectableId ? "pointer" : "crosshair";
 			// No hover bounding box: cursor/hierarchy feedback only.
 		};
-		if (editorFreeRoam) canvas.addEventListener("mousemove", onEditorHover);
+		if (editorFreeRoam) canvas.addEventListener("mousemove", updateEditorPick);
 
 		const ambient = new THREE.HemisphereLight(0x8d9dff, 0x190d2a, 0.85);
 		threeScene.add(ambient);
@@ -6737,7 +6725,7 @@ export default function VisualOutput() {
 				canvas.removeEventListener("wheel", onEditorWheel);
 				canvas.removeEventListener("click", onEditorClick);
 				canvas.removeEventListener("contextmenu", onEditorContextMenu);
-				canvas.removeEventListener("mousemove", onEditorHover);
+				canvas.removeEventListener("mousemove", updateEditorPick);
 				if (document.pointerLockElement === canvas) document.exitPointerLock();
 			}
 			for (const helper of cameraHelpers.values()) {
