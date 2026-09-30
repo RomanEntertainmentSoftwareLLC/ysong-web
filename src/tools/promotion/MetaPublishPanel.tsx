@@ -17,6 +17,8 @@ const EMPTY_ACKS:Acks={settingsCorrect:false,rightsConfirmed:false,metaBilling:f
 function money(minor:number,currency:string){try{return new Intl.NumberFormat(undefined,{style:"currency",currency}).format(minor/100);}catch{return `${currency} ${(minor/100).toFixed(2)}`;}}
 function remoteState(remote:MetaRemoteStatus|null){return String(remote?.campaign?.effective_status||remote?.campaign?.status||"").toUpperCase();}
 function errText(error:unknown,fallback:string){return error instanceof Error?error.message:fallback;}
+function rightsSummary(result:Record<string,unknown>|null|undefined){return result?String(result.summary||result.message||result.reason||result.decision||result.status||"Check completed; see details below."):"No result was returned for this check.";}
+function isStrongUnrelatedMatch(result:Record<string,unknown>|null|undefined){if(!result)return false;const status=String(result.status||result.decision||"").toLowerCase().replace(/[ -]/g,"_");const summary=String(result.summary||result.message||result.reason||"").toLowerCase();const strong=result.strong===true||result.isStrong===true||result.confidence==="strong"||Number(result.confidence)>=0.9||Number(result.score)>=0.9;const unrelated=/unrelated|different recording|different track/.test(`${status} ${summary}`);return unrelated&&(Boolean(strong)||/mismatch|non_match|no_match|unrelated/.test(status));}
 
 export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Props){
   const [preflight,setPreflight]=useState<MetaPublishPreflight|null>(null);
@@ -33,6 +35,9 @@ export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Prop
 
   const hasRemote=!!ad.metaCampaignId;
   const allAcknowledged=Object.values(acks).every(Boolean);
+  const rightsGate=preflight?.contentRightsGate||preflight?.rightsVerification?.contentRightsGate||null;
+  const releaseMatch=preflight?.releaseMatch||preflight?.rightsVerification?.releaseMatch||null;
+  const strongMismatch=isStrongUnrelatedMatch(releaseMatch);
   const lastError=useMemo(()=>{
     const v=ad.metaLastError||{};
     return typeof v.message==="string"?v.message:"";
@@ -75,6 +80,7 @@ export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Prop
     try{
       const fresh=(await promotionApi.metaPaidPreflight(ad.id,{dsaBeneficiary,dsaPayor})).preflight;
       setPreflight(fresh);
+      if(isStrongUnrelatedMatch(fresh.releaseMatch||fresh.rightsVerification?.releaseMatch||null)){onMessage("A strong unrelated-recording match blocks launch. Correct the selected audio or request review before publishing.");return;}
       if(!fresh.ready){onMessage("Meta preflight found blocking issues. Fix them before publishing.");return;}
       if(fresh.requiresSmartLinkActivation&&!activateSmartLink){onMessage("Approve Smart Link activation before publishing paid traffic to it.");return;}
       const out=await promotionApi.metaPaidPublish(ad.id,{
@@ -129,6 +135,7 @@ export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Prop
         <div className={`mt-4 rounded-xl border p-3 text-sm ${preflight.ready?"border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300":"border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300"}`}><b>{preflight.ready?"Ready for Meta creation":"Not ready to publish"}</b><div className="mt-1 text-xs opacity-80">{preflight.summary.selectedCreativeCount} creative(s) · {preflight.summary.countries} countries · {preflight.summary.placements} placements · {money(preflight.summary.dailyBudgetMinor,preflight.summary.currency)}/day</div></div>
         {!!preflight.errors.length&&<div className="mt-3 space-y-2">{preflight.errors.map(x=><div key={x.code} className="rounded-lg border border-red-500/20 bg-red-500/5 p-2.5 text-xs text-red-700 dark:text-red-300"><b>{x.code.replaceAll("_"," ")}:</b> {x.message}</div>)}</div>}
         {!!preflight.warnings.length&&<div className="mt-3 space-y-2">{preflight.warnings.map(x=><div key={x.code} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-300"><b>{x.code.replaceAll("_"," ")}:</b> {x.message}</div>)}</div>}
+        <div className="mt-4 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800"><h4 className="text-sm font-semibold">Rights verification signals</h4><p className="mt-1 text-xs text-neutral-500">These automated checks can flag risk or a possible recording mismatch. They do not establish legal ownership or permission.</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><RightsResult title="Content Rights Gate" result={rightsGate}/><RightsResult title="Release match" result={releaseMatch} blocked={strongMismatch}/></div>{strongMismatch&&<div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300"><b>Launch blocked:</b> the selected audio strongly matches an unrelated recording. Correct the audio selection or request review before continuing.</div>}</div>
       </>}
     </div>
 
@@ -136,14 +143,15 @@ export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Prop
 
     <div className={box}><h4 className="font-semibold">Explicit authorization</h4><p className="mt-1 text-xs text-neutral-500">YSong will never infer consent to spend. Confirm each item before creating the campaign in Meta.</p><div className="mt-3 space-y-2 text-sm">
       <Ack checked={acks.settingsCorrect} onChange={v=>setAcks(a=>({...a,settingsCorrect:v}))}>I reviewed the campaign settings, audience, placements, creatives, Smart Link, and daily budget.</Ack>
-      <Ack checked={acks.rightsConfirmed} onChange={v=>setAcks(a=>({...a,rightsConfirmed:v}))}>I have the rights/permission needed to advertise the music, artwork, uploaded video, and other selected media.</Ack>
+      <Ack checked={acks.rightsConfirmed} onChange={v=>setAcks(a=>({...a,rightsConfirmed:v}))}>I confirm that I have permission to use and promote the audio, artwork, video, and every other selected creative in this ad. I understand YSong’s automated rights and release-match checks do not prove ownership or grant permission.</Ack>
       <Ack checked={acks.metaBilling} onChange={v=>setAcks(a=>({...a,metaBilling:v}))}>I understand Meta bills the payment method attached to the selected Meta Ad Account; YSong is not the ad-billing provider.</Ack>
       <Ack checked={acks.spendAuthorized} onChange={v=>setAcks(a=>({...a,spendAuthorized:v}))}>I authorize the configured daily budget and understand an active campaign can spend until paused or its schedule ends.</Ack>
       {preflight?.requiresSmartLinkActivation&&<Ack checked={activateSmartLink} onChange={setActivateSmartLink}>Activate the currently-draft YSong Smart Link as part of publishing so the ad has a live destination.</Ack>}
     </div></div>
 
-    <div className={box}><h4 className="font-semibold">Create campaign</h4><p className="mt-1 text-xs text-neutral-500">YSong creates Campaign → Ad Set → Creative(s) → Ad(s) in Meta <b>PAUSED first</b>. “Publish & submit” only activates them after all required objects were created successfully.</p><div className="mt-4 grid gap-3 lg:grid-cols-2"><button disabled={busy||!preflight?.ready||!allAcknowledged||(!!preflight?.requiresSmartLinkActivation&&!activateSmartLink)} onClick={()=>void publish("paused")} className="rounded-xl border border-violet-500 px-4 py-3 text-sm font-semibold text-violet-600 disabled:opacity-40 dark:text-violet-300">{busy?"Working…":"Create in Meta — PAUSED"}</button><div><input className={input} value={publishText} onChange={e=>setPublishText(e.target.value)} placeholder="Type PUBLISH"/><button disabled={busy||!preflight?.ready||!allAcknowledged||publishText.trim().toUpperCase()!=="PUBLISH"||(!!preflight?.requiresSmartLinkActivation&&!activateSmartLink)} onClick={()=>void publish("active")} className="mt-2 w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">{busy?"Publishing…":"Publish & submit for Meta review"}</button></div></div></div>
+    <div className={box}><h4 className="font-semibold">Create campaign</h4><p className="mt-1 text-xs text-neutral-500">YSong creates Campaign → Ad Set → Creative(s) → Ad(s) in Meta <b>PAUSED first</b>. “Publish & submit” only activates them after all required objects were created successfully.</p><div className="mt-4 grid gap-3 lg:grid-cols-2"><button disabled={busy||!preflight?.ready||!allAcknowledged||strongMismatch||(!!preflight?.requiresSmartLinkActivation&&!activateSmartLink)} onClick={()=>void publish("paused")} className="rounded-xl border border-violet-500 px-4 py-3 text-sm font-semibold text-violet-600 disabled:opacity-40 dark:text-violet-300">{busy?"Working…":"Create in Meta — PAUSED"}</button><div><input className={input} value={publishText} onChange={e=>setPublishText(e.target.value)} placeholder="Type PUBLISH"/><button disabled={busy||!preflight?.ready||!allAcknowledged||strongMismatch||publishText.trim().toUpperCase()!=="PUBLISH"||(!!preflight?.requiresSmartLinkActivation&&!activateSmartLink)} onClick={()=>void publish("active")} className="mt-2 w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">{busy?"Publishing…":"Publish & submit for Meta review"}</button></div></div></div>
   </div>;
 }
 
 function Ack({checked,onChange,children}:{checked:boolean;onChange:(v:boolean)=>void;children:React.ReactNode}){return <label className="flex items-start gap-3 rounded-xl border border-neutral-200 p-3 dark:border-neutral-800"><input className="mt-0.5" type="checkbox" checked={checked} onChange={e=>onChange(e.target.checked)}/><span>{children}</span></label>;}
+function RightsResult({title,result,blocked=false}:{title:string;result:Record<string,unknown>|null|undefined;blocked?:boolean}){return <div className={`rounded-lg border p-3 text-xs ${blocked?"border-red-500/30 bg-red-500/5 text-red-700 dark:text-red-300":"border-neutral-200 text-neutral-700 dark:border-neutral-800 dark:text-neutral-300"}`}><div className="font-semibold">{title}</div><div className="mt-1">{rightsSummary(result)}</div>{result&&<details className="mt-2"><summary className="cursor-pointer text-neutral-500">Check details</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] text-neutral-500">{JSON.stringify(result,null,2)}</pre></details>}</div>;}
