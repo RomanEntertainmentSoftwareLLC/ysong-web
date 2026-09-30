@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { promotionApi, type AdCampaign, type PaidAdAnalytics, type PaidCreativeAnalytics } from "./api";
+import { interpretAdsPerformance } from "./adsPerformanceInterpretation";
 
 const panel="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800";
 const input="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-950";
@@ -12,6 +13,7 @@ function creativeName(c:PaidCreativeAnalytics,index:number){return c.snippetLabe
 
 export default function AdCampaignAnalytics({ad,onMessage}:{ad:AdCampaign;onMessage:(value:string)=>void}){
   const [data,setData]=useState<PaidAdAnalytics|null>(null); const [busy,setBusy]=useState(false);
+  const [assistantOpen,setAssistantOpen]=useState(false);
   const today=useMemo(()=>new Date().toISOString().slice(0,10),[]); const defaultSince=useMemo(()=>ad.metaPublishedAt?String(ad.metaPublishedAt).slice(0,10):new Date(Date.now()-29*86400000).toISOString().slice(0,10),[ad.metaPublishedAt]);
   const [since,setSince]=useState(defaultSince); const [until,setUntil]=useState(today);
   async function load(refresh=false){setBusy(true);try{const out=await promotionApi.paidAnalytics(ad.id,{since,until,refresh});setData(out);if(refresh)onMessage("Meta Insights refreshed. YSong attribution is live.");}catch(e){onMessage(e instanceof Error?e.message:"Could not load paid-ad analytics.");}finally{setBusy(false);}}
@@ -26,6 +28,7 @@ export default function AdCampaignAnalytics({ad,onMessage}:{ad:AdCampaign;onMess
     ["Fan emails",n(y?.emailCaptures)],
   ] as const;
   const maxDaily=Math.max(1,...(data?.meta.daily||[]).map(x=>n(x.outboundClicks||x.linkClicks)));
+  const interpretation=useMemo(()=>data?interpretAdsPerformance(data):null,[data]);
 
   if(!ad.metaCampaignId&&!data?.ysong.totals.views)return <div className="mt-5 rounded-2xl border border-dashed border-neutral-300 p-10 text-center dark:border-neutral-700"><div className="text-lg font-semibold">No paid traffic yet</div><p className="mt-2 text-sm text-neutral-500">Publish this campaign to Meta first. Once tagged traffic reaches the YSong Smart Link, this screen joins Meta spend/impressions with YSong destination clicks.</p></div>;
 
@@ -34,6 +37,14 @@ export default function AdCampaignAnalytics({ad,onMessage}:{ad:AdCampaign;onMess
 
     {data?.warnings.length?<div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">{data.warnings.map((w,i)=><div key={`${w.code}-${i}`}>{w.message}</div>)}</div>:null}
     {data?.stale&&<div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">Meta refresh failed, so YSong is showing the last cached Meta snapshot. Smart Link activity below is still current.</div>}
+
+    {interpretation&&<section aria-label="Post-launch performance assistant" className={`${panel} border-violet-500/25 bg-violet-500/[0.035]`}>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-[10px] uppercase tracking-wider text-violet-600 dark:text-violet-300">Ads Smart Assistant · post-launch</div><h4 className="mt-1 font-semibold">Performance interpretation</h4></div><button type="button" aria-expanded={assistantOpen} onClick={()=>setAssistantOpen(value=>!value)} className="rounded-xl border border-violet-500/40 px-3 py-2 text-xs font-medium text-violet-700 dark:text-violet-300">{assistantOpen?"Hide interpretation":"Explain this report"}</button></div>
+      {assistantOpen&&<div className="mt-4 space-y-4 text-sm"><p className="text-neutral-700 dark:text-neutral-300">{interpretation.summary}</p>
+        {([ ["Observed in the report",interpretation.observed], ["Creative and destination comparisons",interpretation.comparisons], ["Possible explanations to test",interpretation.hypotheses], ["Next experiments",interpretation.experiments], ["Limits of this reading",interpretation.limits] ] as const).map(([heading,items])=>items.length>0&&<div key={heading}><h5 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">{heading}</h5><ul className="mt-2 list-disc space-y-1.5 pl-5 text-xs leading-5 text-neutral-700 dark:text-neutral-300">{items.map((item,index)=><li key={index}>{item}</li>)}</ul></div>)}
+        <p className="text-[11px] text-neutral-500">Ideas are advisory. Review creative and campaign changes in the existing Ads workflow.</p>
+      </div>}
+    </section>}
 
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {[["Spend",money(d?.spend,currency)],["Impressions",num(meta.impressions)],["Reach",num(meta.reach)],["Meta outbound",num(meta.outboundClicks||meta.linkClicks)],["Smart Link visits",num(y?.views)],["Platform clicks",num(y?.clicks)],["Meta CTR",`${n(meta.ctr).toFixed(2)}%`],["Cost / platform click",money(d?.costPerPlatformClick,currency)]].map(([label,value])=><div key={String(label)} className={panel}><div className="text-[10px] uppercase tracking-wider text-neutral-500">{label}</div><div className="mt-1 text-2xl font-semibold">{value}</div></div>)}

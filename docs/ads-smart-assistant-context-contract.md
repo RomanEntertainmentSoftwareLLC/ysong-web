@@ -11,3 +11,7 @@ Model output must conform to `AdsAssistantResponse` and pass `validateAdsAssista
 This contract does not add a model endpoint or automatic campaign action. A backend integration must enforce the same version, field limits, identity checks, and response allowlist at its trust boundary.
 
 Audience discovery derives short search terms from the verified campaign/release genre context and optional in-session genre analysis, filtering sensitive-trait labels. The artist starts live discovery; the existing Meta interest-search endpoint supplies all displayed interest IDs and names. Selecting a returned chip adds that interest to the local setup draft for review and explicit saving. Search terms alone never become targeting interests.
+
+## Post-launch report mode
+
+The paid analytics screen has a separate, deterministic performance interpretation mode. It reads the same normalized `PaidAdAnalytics` response and selected date range as the report; it does not send data to a model or create campaign actions. `interpretAdsPerformance` separates observed totals and within-range daily Meta click changes from possible explanations, descriptive creative and destination comparisons, and suggested experiments. It never treats a leading creative or destination as a causal winner. Missing daily or breakdown data, stale Meta snapshots, service warnings, and low traffic are stated as limits. Meta delivery and YSong Smart Link activity remain distinct measurement steps. Refreshing or changing the report range rebuilds the interpretation from the new response.
