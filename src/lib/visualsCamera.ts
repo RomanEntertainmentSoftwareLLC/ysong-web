@@ -249,8 +249,7 @@ export function sampleVisualProgramCamera(camera: VisualProgramCamera, positionS
 	};
 }
 
-export function resolveVisualProgramCamera(scene: VisualSceneState, positionSeconds: number, forcedCameraId = "") {
-	if (forcedCameraId) return scene.cameras.find(candidate => candidate.id === forcedCameraId) || scene.cameras[0];
+export function resolveVisualProgramCamera(scene: VisualSceneState, positionSeconds: number) {
 	let cameraId = scene.activeCameraId || scene.cameras[0]?.id || "";
 	for (const cut of [...scene.cameraCuts].sort((a, b) => a.time - b.time)) {
 		if (cut.time <= positionSeconds + 0.0001) cameraId = cut.cameraId;

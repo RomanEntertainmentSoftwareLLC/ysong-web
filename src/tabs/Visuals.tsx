@@ -47,7 +47,7 @@ import {
 	type VisualAiDirectorScope,
 	type VisualSpectrumMode,
 } from "../lib/visualsScene";
-import { buildVisualCameraShots, sampleVisualProgramCamera } from "../lib/visualsCamera";
+import { buildVisualCameraShots, resolveVisualProgramCamera, sampleVisualProgramCamera } from "../lib/visualsCamera";
 import { syncVisualSceneToFrames } from "../lib/visualsViewportSync";
 import { createVisualSceneWriter } from "../lib/visualSceneWriter";
 import { applyVisualMaterialUpload, createVisualMaterialUploadTracker } from "../lib/visualMaterialUpload";
@@ -90,6 +90,7 @@ type SceneClipboard =
 	| { kind:"layer"; layer:VisualLayer; primitive?:VisualPrimitiveObject; shape?:VisualShape2D; secondary?:VisualSecondaryDynamic };
 
 const VISUAL_SCENE_BACKUP_KEY = "ysong.visuals.scene.backup.v1";
+const visualSceneWriter = createVisualSceneWriter<VisualSceneState>(next=>bridgeApi.setVisualScene(next));
 
 function readVisualSceneBackup(): VisualSceneState | null {
 	if (typeof window === "undefined") return null;
@@ -98,13 +99,13 @@ function readVisualSceneBackup(): VisualSceneState | null {
 		if (!raw) return null;
 		const parsed = JSON.parse(raw);
 		if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.layers)) return null;
-		return normalizeVisualScene(parsed);
+		return {...normalizeVisualScene(parsed),updatedAt:Number.isFinite(parsed.updatedAt)?parsed.updatedAt:0};
 	} catch { return null; }
 }
 
-function writeVisualSceneBackup(scene: VisualSceneState) {
+function writeVisualSceneBackup(scene: VisualSceneState, updatedAt = Date.now()) {
 	if (typeof window === "undefined") return;
-	try { window.localStorage.setItem(VISUAL_SCENE_BACKUP_KEY, JSON.stringify(scene)); } catch { /* best effort */ }
+	try { window.localStorage.setItem(VISUAL_SCENE_BACKUP_KEY, JSON.stringify({...scene,updatedAt})); } catch { /* best effort */ }
 }
 
 export default function VisualsPane() {
@@ -112,6 +113,8 @@ export default function VisualsPane() {
 	const [scene,setScene]=useState<VisualSceneState>(()=>readVisualSceneBackup() ?? createBlankVisualScene("hybrid","Untitled Visual"));
 	const sceneRef=useRef(scene);
 	sceneRef.current=scene;
+	const initialSceneRef=useRef(scene);
+	const hydratedSceneRef=useRef<VisualSceneState|null>(null);
 	const [selectedId,setSelectedId]=useState("");
 	const [audio,setAudio]=useState<VisualAudioFrame>(ZERO_AUDIO);
 	const [audioConnected,setAudioConnected]=useState(false);
@@ -151,8 +154,9 @@ export default function VisualsPane() {
 	const viewportHostRef=useRef<HTMLDivElement|null>(null);
 	const importModelPackageRef=useRef<((files:File[],placement?:ModelDropPlacement)=>Promise<void>)|null>(null);
 	const sceneReadyRef=useRef(false);
+	const sceneDirtyRef=useRef(false);
 	const sceneSaveGenerationRef=useRef(0);
-	const sceneWriterRef=useRef(createVisualSceneWriter<VisualSceneState>(next=>bridgeApi.setVisualScene(next)));
+	const sceneWriterRef=useRef(visualSceneWriter);
 	const materialUploadTrackerRef=useRef(createVisualMaterialUploadTracker());
 	const reserveMaterialUpload=materialUploadTrackerRef.current;
 	const commitAssetScene=useCallback((update:(current:VisualSceneState)=>VisualSceneState)=>{
@@ -172,13 +176,16 @@ export default function VisualsPane() {
 		let cancelled=false;
 		void bridgeApi.getVisualScene<VisualSceneState>().then(payload=>{
 			if(cancelled)return;
+			if(sceneRef.current!==initialSceneRef.current){sceneReadyRef.current=true;sceneDirtyRef.current=true;writeVisualSceneBackup(sceneRef.current);syncViewportScene();sceneWriterRef.current({...sceneRef.current,updatedAt:Date.now()});return;}
 			const remote = payload?.scene as VisualSceneState | undefined;
 			const remoteValid = !!remote && typeof remote === "object" && Array.isArray(remote.layers);
 			const backup = readVisualSceneBackup();
-			const next = remoteValid ? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
-			setScene(next); sceneReadyRef.current=true; writeVisualSceneBackup(next);
-			if(!next.layers.some(l=>l.id===selectedId)&&!next.cameras.some(c=>c.id===selectedId)&&selectedId!=="editor-camera")setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");
-			if(!remoteValid || remote.version!==26) sceneWriterRef.current({...next,updatedAt:Date.now()});
+			const next = remoteValid && (!backup || (remote.updatedAt || 0) >= (backup.updatedAt || 0))
+				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
+			hydratedSceneRef.current=next;
+			setScene(next); sceneReadyRef.current=true; writeVisualSceneBackup(next,next.updatedAt);
+			setSelectedId(current=>next.layers.some(l=>l.id===current)||next.cameras.some(c=>c.id===current)||current==="editor-camera"?current:next.layers[0]?.id||next.cameras[0]?.id||"");
+			if(!remoteValid || remote.version!==26 || next===backup) sceneWriterRef.current({...next,updatedAt:Date.now()});
 			if(!remoteValid && backup) setNotice("Recovered the last local Visuals scene because Bridge returned no valid scene. YSong did not replace it with demo content.");
 		}).catch(()=>{
 			if(cancelled)return;
@@ -192,15 +199,20 @@ export default function VisualsPane() {
 	},[]);
 	useEffect(()=>{
 		if(!sceneReadyRef.current)return;
-		writeVisualSceneBackup(scene);
 		// The embedded Scene viewport is a local editor and should reflect React state
 		// immediately. Bridge remains the durable/OBS authority, but waiting for its
 		// round-trip caused materials and Sky Sphere updates to appear seconds later.
 		syncViewportScene();
+		if(scene===hydratedSceneRef.current)return;
+		sceneDirtyRef.current=true;
+		writeVisualSceneBackup(scene);
 		const generation=++sceneSaveGenerationRef.current;
 		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)sceneWriterRef.current({...scene,updatedAt:Date.now()})},90);
 		return()=>clearTimeout(t);
 	},[scene,syncViewportScene]);
+	useEffect(()=>()=>{
+		if(sceneReadyRef.current&&sceneDirtyRef.current)sceneWriterRef.current({...sceneRef.current,updatedAt:Date.now()});
+	},[]);
 	useEffect(()=>{
 		const host=viewportHostRef.current;if(!host)return;
 		const update=()=>{const rect=host.getBoundingClientRect();setViewportBounds(prev=>Math.abs(prev.width-rect.width)<.5&&Math.abs(prev.height-rect.height)<.5?prev:{width:rect.width,height:rect.height})};
@@ -285,6 +297,7 @@ export default function VisualsPane() {
 	const positionSeconds=worldIsCurrent?(worldClockMatches?worldClock.positionSeconds:worldFallbackPosition):dawSeconds;
 	const durationSeconds=worldIsCurrent?Math.max(1,worldClockMatches&&worldClock.durationSeconds>0?worldClock.durationSeconds:(world.current?.durationSeconds||transport.durationSeconds||scene.timeline.durationSeconds||1)):Math.max(1,dawDuration>0?dawDuration:(scene.timeline.durationSeconds||1));
 	const playing=worldIsCurrent?(worldClockMatches?worldClock.playing:transport.playing):!!session?.playing;
+	const previewCamera=resolveVisualProgramCamera(scene,positionSeconds);
 
 	const directorSongContext:VisualDirectorSongContext={
 		title:worldIsCurrent?(world.current?.title||transport.title||"YSong World"):(session?.projectName||"Untitled DAW Song"),
@@ -562,7 +575,7 @@ export default function VisualsPane() {
 						</div>
 					</div>
 					{!previewProgramCamera?<div className="absolute right-3 top-3 z-40"><ViewCompass rotation={editorCamera.rotation} onSnap={view=>viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-view-orientation",view},window.location.origin)} onOrbit={(dx,dy)=>viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-view-orbit",dx,dy},window.location.origin)}/></div>:null}
-					{!previewProgramCamera&&activeCamera?<div className="pointer-events-none absolute bottom-3 right-3 z-40 w-[260px] max-w-[42%] overflow-hidden rounded-md border border-cyan-300/25 bg-black shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 bg-black/85 px-2 py-1 text-[8px] font-bold uppercase tracking-[.14em] text-neutral-400"><span>Program Camera</span><span className="max-w-[140px] truncate text-cyan-300/80">{activeCamera.name}</span></div><div className="relative aspect-video"><iframe ref={monitorFrameRef} onLoad={()=>syncViewportScene(monitorFrameRef.current)} tabIndex={-1} aria-hidden="true" title="Program camera preview" src={`/visual-output?embedded=1&program=1&monitor=1&cameraId=${encodeURIComponent(activeCamera.id)}`} className="absolute inset-0 h-full w-full border-0"/></div></div>:null}
+					{!previewProgramCamera&&previewCamera?<div className="pointer-events-none absolute bottom-3 right-3 z-40 w-[260px] max-w-[42%] overflow-hidden rounded-md border border-cyan-300/25 bg-black shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 bg-black/85 px-2 py-1 text-[8px] font-bold uppercase tracking-[.14em] text-neutral-400"><span>Program Camera</span><span className="max-w-[140px] truncate text-cyan-300/80">{previewCamera.name}</span></div><div className="relative aspect-video"><iframe ref={monitorFrameRef} onLoad={()=>syncViewportScene(monitorFrameRef.current)} tabIndex={-1} aria-hidden="true" title="Program camera preview" src="/visual-output?embedded=1&program=1&monitor=1" className="absolute inset-0 h-full w-full border-0"/></div></div>:null}
 				</div>
 				{showAudioMeters?<div className="absolute bottom-5 left-6 right-6 z-50 flex items-end gap-2"><AudioMeter label="BASS" value={audio.bass}/><AudioMeter label="MIDS" value={audio.mids}/><AudioMeter label="HIGHS" value={audio.highs}/><AudioMeter label="ENERGY" value={audio.energy}/><AudioMeter label="KICK" value={audio.kick}/></div>:null}
 			</main>

@@ -1167,7 +1167,6 @@ export default function VisualOutput() {
 	const embedded = query.get("embedded") === "1";
 	const programPreview = embedded && query.get("program") === "1";
 	const monitorMode = embedded && query.get("monitor") === "1";
-	const forcedCameraId = query.get("cameraId") || "";
 	const editorFreeRoam = embedded && !programPreview;
 	const editorFxPreview = editorFreeRoam && query.get("fx") !== "0";
 	const obsMode = query.get("obs") === "1";
@@ -1782,7 +1781,6 @@ export default function VisualOutput() {
 			const active = resolveVisualProgramCamera(
 				state,
 				extrapolatedTransportPosition(transportRef.current),
-				forcedCameraId,
 			);
 			if (!active) return;
 			const sampled = sampleVisualProgramCamera(active, extrapolatedTransportPosition(transportRef.current));
@@ -5286,7 +5284,6 @@ export default function VisualOutput() {
 			const activeProgramCamera = resolveVisualProgramCamera(
 				currentScene,
 				currentTransportPosition,
-				forcedCameraId,
 			);
 			let cameraLensResponse = activeProgramCamera?.lensFlare ?? 1;
 			let cameraExposure = 1;
@@ -6804,7 +6801,7 @@ export default function VisualOutput() {
 		embedded,
 		editorFreeRoam,
 		editorFxPreview,
-		forcedCameraId,
+		monitorMode,
 		obsMode,
 		programPreview,
 		renderHeight,
