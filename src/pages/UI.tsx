@@ -112,7 +112,7 @@ function BootTabs({
 						settings: "Settings",
 						daw: "DAW",
 						mixer: "Mixer",
-						visuals: "Visuals",
+						visuals: "YSong Visualizers",
 						createSong: "Create Song",
 						band: "Band Creation",
 						singers: "Singer Studio",
@@ -507,7 +507,7 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 				const chatId = requested === "chat" ? (url.searchParams.get("chat") || "") : "";
 				const existing = tabs.find(tab => tab.type === requested && (requested !== "chat" || String(tab.payload?.chatId || "") === chatId));
 				if (existing) { activateTab(existing.id, "replace"); return; }
-				const titles: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"Visuals", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
+				const titles: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"YSong Visualizers", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
 				openTab({ type:requested, title:titles[requested], ...(requested === "chat" && chatId ? {payload:{chatId}} : {}) }, "replace");
 				return;
 			}
@@ -638,7 +638,7 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 				settings: "Settings",
 				daw: "DAW",
 				mixer: "Mixer",
-				visuals: "Visuals",
+				visuals: "YSong Visualizers",
 				createSong: "Create Song",
 				band: "Band Creation",
 				singers: "Singer Studio",

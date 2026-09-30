@@ -33,7 +33,7 @@ const navItems: { label: string; type: ModuleType; icon: string }[] = [
   { label: "Rooms", type: "rooms", icon: "rooms" },
   { label: "DAW", type: "daw", icon: "wave" },
   { label: "Mixer", type: "mixer", icon: "sliders" },
-  { label: "Visuals", type: "visuals", icon: "visuals" },
+  { label: "YSong Visualizers", type: "visuals", icon: "visuals" },
   { label: "Create Song", type: "createSong", icon: "spark" },
   { label: "Band Creation", type: "band", icon: "users" },
   { label: "Singer Studio", type: "singers", icon: "mic" },

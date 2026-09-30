@@ -17,7 +17,7 @@ import { YSButton } from "../components/YSButton";
 export type TabType = "chat" | "profile" | "settings" | "daw" | "mixer" | "visuals" | "createSong" | "band" | "singers" | "analytics" | "flashback" | "tools" | "artwork" | "library" | "achievements" | "rooms" | "market" | "world" | "radio" | "bridge" | "upload";
 
 const TAB_TYPES = new Set<TabType>(["chat","profile","settings","daw","mixer","visuals","createSong","band","singers","analytics","flashback","tools","artwork","library","achievements","rooms","market","world","radio","bridge","upload"]);
-const DEFAULT_TAB_TITLES: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"Visuals", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
+const DEFAULT_TAB_TITLES: Record<TabType,string> = { chat:"Chat", profile:"Profile", settings:"Settings", daw:"DAW", mixer:"Mixer", visuals:"YSong Visualizers", createSong:"Create Song", band:"Band Studio", singers:"Singer Studio", analytics:"Analytics", flashback:"Flashback", tools:"Tools", artwork:"Artwork Studio", library:"Library", achievements:"Achievements", rooms:"Rooms", market:"Marketplace", world:"YSong World", radio:"YSong Radio", bridge:"Bridge", upload:"Upload Music" };
 
 function workspaceLocationShape() {
 	const url = new URL(window.location.href);
