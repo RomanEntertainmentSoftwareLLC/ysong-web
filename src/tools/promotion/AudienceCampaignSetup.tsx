@@ -146,6 +146,8 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
   const placementsForPlatform=(platform:"facebook"|"instagram")=>PLACEMENTS.filter(p=>p.platform===platform&&targeting.placementTargets.includes(p.id));
   const connections=health?.meta.connections||[];
   const chosenConnection=connections.find(c=>c.id===connectionId)||null;
+  const supportsFacebook=!!chosenConnection?.pageId;
+  const supportsInstagram=!!chosenConnection?.instagramUserId;
   const chosenAdAccount=adAccounts.find(a=>a.id===adAccountId)||null;
   const chosenPixel=pixels.find(p=>p.id===pixelId)||null;
   const chosenCountries=catalog?.countries.filter(c=>targeting.countries.includes(c.code))||targeting.countries.map(code=>({code,name:code}));
@@ -163,12 +165,25 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
 
   function toggleCountry(code:string){setTargeting(v=>({...v,countries:v.countries.includes(code)?v.countries.filter(x=>x!==code):[...v.countries,code],countryPreset:"custom"}));}
   function togglePlacement(id:AdPlacementTarget){setTargeting(v=>{const next=v.placementTargets.includes(id)?v.placementTargets.filter(x=>x!==id):[...v.placementTargets,id];return {...v,placementTargets:next};});}
+  function togglePlatform(platform:"facebook"|"instagram"){
+    const supported=platform==="facebook"?supportsFacebook:supportsInstagram;
+    setTargeting(v=>{
+      const platformPlacements=PLACEMENTS.filter(p=>p.platform===platform).map(p=>p.id);
+      const enabled=platformPlacements.some(id=>v.placementTargets.includes(id));
+      if(!supported&&!enabled)return v;
+      const placementTargets=enabled?v.placementTargets.filter(id=>!platformPlacements.includes(id)):[...v.placementTargets,...platformPlacements];
+      return {...v,placementTargets};
+    });
+  }
   function addResolvedInterest(item:MetaInterest){setTargeting(v=>({...v,interests:[...v.interests.filter(x=>x.id!==item.id),{id:item.id,name:item.name,audienceSizeLower:item.audienceSizeLower,audienceSizeUpper:item.audienceSizeUpper,path:item.path}].slice(0,200),interestKeywords:v.interestKeywords.filter(k=>k.toLowerCase()!==item.name.toLowerCase())}));setInterestQuery("");setInterestResults([]);}
   useEffect(()=>{if(!assistantInterest)return;addResolvedInterest(assistantInterest);onAssistantInterestConsumed?.();},[assistantInterest]); // eslint-disable-line react-hooks/exhaustive-deps
   function searchSuggestion(seed:string){setInterestQuery(seed);}
   async function uploadCover(files:FileList|null){const file=files?.[0];if(!file)return;setBusy(true);try{const out=await promotionApi.upload(file);setCoverArtObjectKey(out.objectKey);onMessage("Custom campaign cover art uploaded. Save settings to attach it to this draft.");}catch(e){onMessage(e instanceof Error?e.message:"Cover art upload failed.");}finally{setBusy(false);}}
   async function save(){
     if(!targeting.placementTargets.length){onMessage("Choose at least one Facebook or Instagram placement.");return;}
+    const selectedPlatforms=unique(targeting.placementTargets.map(id=>PLACEMENTS.find(p=>p.id===id)?.platform).filter((x):x is "facebook"|"instagram"=>!!x));
+    if(selectedPlatforms.includes("facebook")&&!supportsFacebook){onMessage("Facebook placements need a connected Facebook Page. Choose a connection with a Page or remove Facebook placements.");return;}
+    if(selectedPlatforms.includes("instagram")&&!supportsInstagram){onMessage("Instagram placements need a connected Instagram account. Choose a connection with an Instagram account or remove Instagram placements.");return;}
     if(!targeting.countries.length){onMessage("Choose at least one target country before saving the audience.");return;}
     if(targeting.ageMin>targeting.ageMax){onMessage("Minimum age cannot be greater than maximum age.");return;}
     if(scheduleMode==="scheduled"&&(!startLocal||!endLocal)){onMessage("Scheduled campaigns need both a start and end time.");return;}
@@ -202,6 +217,8 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
       <div className="mb-4 flex flex-wrap gap-2">{(["audience","budget","ad","accounts","summary"] as SetupView[]).map(k=><button key={k} onClick={()=>setView(k)} className={`${chip} ${view===k?"border-violet-500 bg-violet-500/10 text-violet-500":""}`}>{({audience:"Audience",budget:"Budget & Schedule",ad:"Ad Settings",accounts:"Connected assets",summary:"Confirmation"} as Record<SetupView,string>)[k]}</button>)}</div>
 
       {view==="audience"&&<div className="space-y-4">
+        <section className={panel}><h3 className="text-lg font-semibold">Where your ad appears</h3><p className="mt-1 text-xs text-neutral-500">Choose Facebook, Instagram, or both. Both are selected by default.</p><div className="mt-3 grid gap-2 sm:grid-cols-2">{(["facebook","instagram"] as const).map(platform=>{const supported=platform==="facebook"?supportsFacebook:supportsInstagram;const selected=PLACEMENTS.some(p=>p.platform===platform&&targeting.placementTargets.includes(p.id));return <label key={platform} className={`flex items-center gap-3 rounded-xl border p-3 ${selected?"border-violet-500 bg-violet-500/5":"border-neutral-200 dark:border-neutral-800"} ${!supported?"opacity-60":""}`}><input type="checkbox" checked={selected} disabled={!supported&&!selected} onChange={()=>togglePlatform(platform)}/><span><span className="block text-sm font-medium">{platform==="facebook"?"Facebook":"Instagram"}</span><span className="block text-xs text-neutral-500">{supported?"Available for this connected account":"Not available with this connection"}</span></span></label>;})}</div></section>
+
         <section className={panel}><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Location</h3><p className="text-xs text-neutral-500">Choose the countries where you want this ad to reach people.</p></div><span className={chip}>{targeting.countries.length} selected</span></div>
           <input className={`${input} mt-4`} value={countryQuery} onChange={e=>setCountryQuery(e.target.value)} placeholder="Search any country…"/>
           <div className="mt-3 max-h-52 overflow-auto rounded-xl border border-neutral-200 p-2 dark:border-neutral-800"><div className="grid gap-1 sm:grid-cols-2">{countryMatches.map(c=><label key={c.code} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800"><input type="checkbox" checked={targeting.countries.includes(c.code)} onChange={()=>toggleCountry(c.code)}/><span>{c.name}</span><span className="ml-auto text-neutral-400">{c.code}</span></label>)}</div></div>
@@ -211,7 +228,7 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
         <section className={panel}><h3 className="text-lg font-semibold">Age & gender</h3><p className="mt-1 text-xs text-neutral-500">Set an age range and who should see your ad.</p><div className="mt-4 grid gap-3 sm:grid-cols-3"><label className="text-xs text-neutral-500">From<select className={`${input} mt-1`} value={targeting.ageMin} onChange={e=>setTargeting(v=>({...v,ageMin:Number(e.target.value)}))}>{Array.from({length:48},(_,i)=>i+18).map(n=><option key={n} value={n}>{n===65?"65+":n}</option>)}</select></label><label className="text-xs text-neutral-500">To<select className={`${input} mt-1`} value={targeting.ageMax} onChange={e=>setTargeting(v=>({...v,ageMax:Number(e.target.value)}))}>{Array.from({length:48},(_,i)=>i+18).map(n=><option key={n} value={n}>{n===65?"65+":n}</option>)}</select></label><label className="text-xs text-neutral-500">Gender<select className={`${input} mt-1`} value={targeting.gender} onChange={e=>setTargeting(v=>({...v,gender:e.target.value as AdTargeting["gender"]}))}><option value="all">All</option><option value="female">Women</option><option value="male">Men</option></select></label></div>
         </section>
 
-        <details className={`${panel} group`}><summary className="cursor-pointer list-none text-lg font-semibold">Advanced settings <span className="ml-2 text-xs font-normal text-neutral-500">Interests and placements</span></summary><p className="mt-2 text-xs text-neutral-500">Fine tune interests and placements. Detailed exclusions and custom audiences are managed in Meta.</p>
+        <details className={`${panel} group`}><summary className="cursor-pointer list-none text-lg font-semibold">Advanced settings <span className="ml-2 text-xs font-normal text-neutral-500">Interests and placement details</span></summary><p className="mt-2 text-xs text-neutral-500">Fine tune interests and individual placements. Detailed exclusions and custom audiences are managed in Meta.</p>
           <div className="mt-5 text-sm font-semibold">Ad placements</div><p className="mt-1 text-xs text-neutral-500">Choose exactly where creatives are eligible to run. Feed placements use the 4:3 render; Reels/Stories use 9:16.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{PLACEMENTS.map(p=><label key={p.id} className={`rounded-xl border p-3 text-sm ${targeting.placementTargets.includes(p.id)?"border-violet-500 bg-violet-500/5":"border-neutral-200 dark:border-neutral-800"}`}><input className="mr-2" type="checkbox" checked={targeting.placementTargets.includes(p.id)} onChange={()=>togglePlacement(p.id)}/>{p.label}<div className="ml-5 mt-1 text-[10px] uppercase text-neutral-400">{p.format==="vertical"?"9:16":"4:3"}</div></label>)}</div>
 
         <section className="rounded-xl border border-neutral-200 px-4 py-3 dark:border-neutral-800" aria-live="polite"><div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1"><h3 className="text-sm font-semibold">Estimated audience</h3><span className="text-sm font-semibold tabular-nums">{audienceEstimate.value}</span></div><p className="mt-1 text-xs text-neutral-500">{audienceEstimate.detail}</p></section>
