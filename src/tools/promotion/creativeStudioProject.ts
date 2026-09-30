@@ -1,6 +1,6 @@
 /** Ads Creative Studio edit data belongs to a reusable creative, not a campaign render. */
 export type StudioTimebase = { framesPerSecond: { numerator: number; denominator: number } };
-export type StudioTransform = { x: number; y: number; scale: number; rotationDegrees: number; opacity: number };
+export type StudioTransform = { x: number; y: number; scale: number; rotationDegrees: number; opacity: number; fit?: "cover" | "contain" | "fill"; anchorX?: number; anchorY?: number };
 export type StudioKeyframe = { frame: number; property: keyof StudioTransform | "volume"; value: number; interpolation: "hold" | "linear" };
 export type StudioTransition = { kind: "cut" | "fade" | "dissolve"; durationFrames: number };
 export type StudioClipBase = {
@@ -94,6 +94,8 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
     number(t.x, `${path}.x`, -Infinity); number(t.y, `${path}.y`, -Infinity);
     number(t.scale, `${path}.scale`, 0); number(t.rotationDegrees, `${path}.rotationDegrees`, -Infinity);
     const opacity = number(t.opacity, `${path}.opacity`, 0); if (opacity > 1) fail(`${path}.opacity`);
+    if (t.fit !== undefined) choice(t.fit, ["cover", "contain", "fill"], `${path}.fit`);
+    for (const axis of ["anchorX", "anchorY"] as const) if (t[axis] !== undefined) { const anchor = number(t[axis], `${path}.${axis}`, 0); if (anchor > 1) fail(`${path}.${axis}`); }
   };
   for (const trackValue of tracks) {
     const track = record(trackValue, "track"); unique(track.id, "track.id");

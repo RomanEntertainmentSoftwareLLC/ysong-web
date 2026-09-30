@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import type { CreativeStudioProject, StudioTrack } from "./creativeStudioProject";
+import type { CreativeStudioProject, StudioTrack, StudioVisualClip } from "./creativeStudioProject";
 import type { ReusableAdCreative } from "./api";
 import useAudioWaveform from "./useAudioWaveform";
 import { addStudioSource, deleteStudioClip, moveStudioTrack, splitStudioClip, studioSources, trimStudioClip } from "./creativeStudioTracks";
@@ -47,6 +47,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   const availableSources = sources.filter(source => !project.tracks.some(track => track.id === source.id || track.clips.some(clip => source.track.clips.some(item => item.id === clip.id))));
   const sourceFor = (track: StudioTrack, clip: StudioTrack["clips"][number]) => sources.find(source => source.track.kind === track.kind && source.track.clips.some(item => item.id === clip.id || ("mediaId" in item && "mediaId" in clip && item.mediaId === clip.mediaId) || ("snippetId" in item && "snippetId" in clip && item.snippetId === clip.snippetId) || ("overlayId" in item && "overlayId" in clip && item.overlayId === clip.overlayId) || ("source" in item && "source" in clip && item.source !== "text" && item.source === clip.source)));
   const updateTrack = (trackId: string, change: Partial<StudioTrack>) => onChange({ ...project, tracks: project.tracks.map(track => track.id === trackId ? { ...track, ...change } as StudioTrack : track) });
+  const updateVisualTransform = (trackId: string, clipId: string, patch: Partial<StudioVisualClip["transform"]>) => onChange({ ...project, tracks: project.tracks.map(track => track.id !== trackId || track.kind !== "visual" ? track : { ...track, clips: track.clips.map(clip => clip.id === clipId ? { ...clip, transform: { ...clip.transform, ...patch } } : clip) }) });
   const trackName = (track: StudioTrack) => track.kind === "visual" ? "Video" : track.kind === "audio" ? "Audio" : "Text";
   const clipName = (track: StudioTrack, clip: StudioTrack["clips"][number]) => {
     if (track.kind === "text" && "text" in clip) return clip.text;
@@ -110,7 +111,24 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
       const locked = !!track.locked;
       const clipEnd = clip.startFrame + clip.durationFrames;
       const hasSourceRange = "sourceInSeconds" in clip;
+      const visualClip = track.kind === "visual" ? clip as StudioVisualClip : null;
+      const previewUrl = visualClip?.mediaId ? mediaUrls[visualClip.mediaId] : undefined;
+      const previewMedia = visualClip?.mediaId ? creative.backgroundMedia.find(item => item.mediaId === visualClip.mediaId) : undefined;
       return <div className="flex flex-wrap items-center gap-2 border-t border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800">
+        {visualClip && <div className="flex w-full flex-wrap items-start gap-4 border-b border-neutral-200 py-3 dark:border-neutral-800">
+          <div className="w-36 shrink-0"><div aria-label="9 by 16 clip preview" className="relative aspect-[9/16] w-full overflow-hidden rounded-lg bg-black" style={{ backgroundColor: project.render.backgroundColor }}>
+            {previewUrl && (previewMedia?.mediaType === "video" ? <video src={previewUrl} muted playsInline preload="metadata" className="absolute inset-0 h-full w-full" style={{ objectFit: visualClip.transform.fit || "cover", objectPosition: `${(visualClip.transform.anchorX ?? .5) * 100}% ${(visualClip.transform.anchorY ?? .5) * 100}%`, transformOrigin: `${(visualClip.transform.anchorX ?? .5) * 100}% ${(visualClip.transform.anchorY ?? .5) * 100}%`, transform: `translate(${(visualClip.transform.x - .5) * 100}%, ${(visualClip.transform.y - .5) * 100}%) scale(${visualClip.transform.scale}) rotate(${visualClip.transform.rotationDegrees}deg)`, opacity: visualClip.transform.opacity }} /> : <img src={previewUrl} alt="" className="absolute inset-0 h-full w-full" style={{ objectFit: visualClip.transform.fit || "cover", objectPosition: `${(visualClip.transform.anchorX ?? .5) * 100}% ${(visualClip.transform.anchorY ?? .5) * 100}%`, transformOrigin: `${(visualClip.transform.anchorX ?? .5) * 100}% ${(visualClip.transform.anchorY ?? .5) * 100}%`, transform: `translate(${(visualClip.transform.x - .5) * 100}%, ${(visualClip.transform.y - .5) * 100}%) scale(${visualClip.transform.scale}) rotate(${visualClip.transform.rotationDegrees}deg)`, opacity: visualClip.transform.opacity }} />)}
+            {!previewUrl && <span className="absolute inset-0 grid place-items-center px-2 text-center text-[10px] text-white/70">Preview unavailable</span>}
+          </div><p className="mt-1 text-center text-[10px] text-neutral-500">9:16 ad preview</p></div>
+          <div className="grid min-w-[220px] flex-1 grid-cols-2 gap-x-4 gap-y-2">
+            <label className="grid gap-1">Position X <input aria-label="Clip position X" type="range" min="0" max="1" step="0.01" value={visualClip.transform.x} disabled={locked} onChange={event => updateVisualTransform(track.id, clip.id, { x: Number(event.target.value) })} /></label>
+            <label className="grid gap-1">Position Y <input aria-label="Clip position Y" type="range" min="0" max="1" step="0.01" value={visualClip.transform.y} disabled={locked} onChange={event => updateVisualTransform(track.id, clip.id, { y: Number(event.target.value) })} /></label>
+            <label className="grid gap-1">Scale <input aria-label="Clip scale" type="range" min="0.25" max="3" step="0.01" value={Math.max(.25, Math.min(3, visualClip.transform.scale))} disabled={locked} onChange={event => updateVisualTransform(track.id, clip.id, { scale: Number(event.target.value) })} /></label>
+            <label className="grid gap-1">Rotation <input aria-label="Clip rotation" type="range" min="-180" max="180" step="1" value={Math.max(-180, Math.min(180, visualClip.transform.rotationDegrees))} disabled={locked} onChange={event => updateVisualTransform(track.id, clip.id, { rotationDegrees: Number(event.target.value) })} /></label>
+            <label className="grid gap-1">Crop / fit <select aria-label="Clip crop fit" value={visualClip.transform.fit || "cover"} disabled={locked} onChange={event => updateVisualTransform(track.id, clip.id, { fit: event.target.value as "cover" | "contain" | "fill" })} className="rounded border bg-transparent p-1"><option value="cover">Fill frame (crop)</option><option value="contain">Fit whole image</option><option value="fill">Stretch to frame</option></select></label>
+            <label className="grid gap-1">Anchor <select aria-label="Clip anchor" value={`${visualClip.transform.anchorX ?? .5},${visualClip.transform.anchorY ?? .5}`} disabled={locked} onChange={event => { const [anchorX, anchorY] = event.target.value.split(",").map(Number); updateVisualTransform(track.id, clip.id, { anchorX, anchorY }); }} className="rounded border bg-transparent p-1"><option value="0,0">Top left</option><option value="0.5,0">Top center</option><option value="1,0">Top right</option><option value="0,0.5">Center left</option><option value="0.5,0.5">Center</option><option value="1,0.5">Center right</option><option value="0,1">Bottom left</option><option value="0.5,1">Bottom center</option><option value="1,1">Bottom right</option></select></label>
+          </div>
+        </div>}
         <span className="mr-1 font-medium">Edit clip</span>
         <button type="button" disabled={locked || playhead <= clip.startFrame || playhead >= clipEnd} onClick={() => onChange(splitStudioClip(project, track.id, clip.id, snapFrames ? Math.round(playhead / snapFrames) * snapFrames : playhead))} className="rounded border px-3 py-2 disabled:opacity-40">Split at playhead</button>
         <button type="button" disabled={locked || playhead <= clip.startFrame || playhead >= clipEnd} onClick={() => onChange(trimStudioClip(project, track.id, clip.id, "start", snapFrames ? Math.round(playhead / snapFrames) * snapFrames : playhead))} className="rounded border px-3 py-2 disabled:opacity-40">Trim start to playhead</button>
