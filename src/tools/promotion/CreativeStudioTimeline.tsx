@@ -3,7 +3,7 @@ import type { PointerEvent } from "react";
 import type { CreativeStudioProject, StudioTrack } from "./creativeStudioProject";
 import type { ReusableAdCreative } from "./api";
 import useAudioWaveform from "./useAudioWaveform";
-import { addStudioSource, moveStudioTrack, studioSources } from "./creativeStudioTracks";
+import { addStudioSource, deleteStudioClip, moveStudioTrack, splitStudioClip, studioSources, trimStudioClip } from "./creativeStudioTracks";
 
 const ROW = 56;
 const MIN_ZOOM = 24;
@@ -32,6 +32,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   const [playhead, setPlayhead] = useState(0);
   const [selection, setSelection] = useState<{ trackId: string; clipId: string } | null>(null);
   const [sourceId, setSourceId] = useState("");
+  const [rippleDelete, setRippleDelete] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const drag = useRef<number | null>(null);
   const waveform = useAudioWaveform(audioUrl);
@@ -102,6 +103,24 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-3 p-3 text-xs text-neutral-500">{selection ? <span>Selected: {project.tracks.flatMap(track => track.clips.map(clip => ({ track, clip }))).filter(item => item.track.id === selection.trackId && item.clip.id === selection.clipId).map(item => `${clipName(item.track, item.clip)} · ${clock(item.clip.startFrame / fps)}–${clock((item.clip.startFrame + item.clip.durationFrames) / fps)}`)[0]}</span> : <span>Select a clip or tap the ruler to seek.</span>}{audioUrl && <audio controls preload="none" src={audioUrl} className="ml-auto h-9 max-w-full" />}</div>
-    {selection && project.tracks.find(track => track.id === selection.trackId) && <div className="border-t border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"><button type="button" disabled={project.tracks.find(track => track.id === selection.trackId)?.locked} onClick={() => { onChange({ ...project, tracks: project.tracks.filter(track => track.id !== selection.trackId) }); setSelection(null); }} className="rounded border px-3 py-2 disabled:opacity-40">Remove selected track</button><span className="ml-2 text-neutral-500">{project.tracks.find(track => track.id === selection.trackId)?.locked ? "Unlock this track to remove it." : "Remove from this timeline only; the source asset stays on the creative."}</span></div>}
+    {selection && (() => {
+      const track = project.tracks.find(item => item.id === selection.trackId);
+      const clip = track?.clips.find(item => item.id === selection.clipId);
+      if (!track || !clip) return null;
+      const locked = !!track.locked;
+      const clipEnd = clip.startFrame + clip.durationFrames;
+      const hasSourceRange = "sourceInSeconds" in clip;
+      return <div className="flex flex-wrap items-center gap-2 border-t border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800">
+        <span className="mr-1 font-medium">Edit clip</span>
+        <button type="button" disabled={locked || playhead <= clip.startFrame || playhead >= clipEnd} onClick={() => onChange(splitStudioClip(project, track.id, clip.id, snapFrames ? Math.round(playhead / snapFrames) * snapFrames : playhead))} className="rounded border px-3 py-2 disabled:opacity-40">Split at playhead</button>
+        <button type="button" disabled={locked || playhead <= clip.startFrame || playhead >= clipEnd} onClick={() => onChange(trimStudioClip(project, track.id, clip.id, "start", snapFrames ? Math.round(playhead / snapFrames) * snapFrames : playhead))} className="rounded border px-3 py-2 disabled:opacity-40">Trim start to playhead</button>
+        <button type="button" disabled={locked || playhead <= clip.startFrame || playhead >= clipEnd} onClick={() => onChange(trimStudioClip(project, track.id, clip.id, "end", snapFrames ? Math.round(playhead / snapFrames) * snapFrames : playhead))} className="rounded border px-3 py-2 disabled:opacity-40">Trim end to playhead</button>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={rippleDelete} onChange={event => setRippleDelete(event.target.checked)} disabled={locked} />Ripple later clips on this track</label>
+        <button type="button" disabled={locked} onClick={() => { onChange(deleteStudioClip(project, track.id, clip.id, rippleDelete)); setSelection(null); }} className="rounded border border-rose-300 px-3 py-2 text-rose-700 disabled:opacity-40 dark:text-rose-300">Delete clip</button>
+        <button type="button" disabled={locked} onClick={() => { onChange({ ...project, tracks: project.tracks.filter(item => item.id !== track.id) }); setSelection(null); }} className="rounded border px-3 py-2 disabled:opacity-40">Remove track</button>
+        {hasSourceRange && <span className="text-neutral-500">Source {clip.sourceInSeconds.toFixed(2)}–{clip.sourceOutSeconds.toFixed(2)}s</span>}
+        <span className="text-neutral-500">{locked ? "Unlock this track to edit clips." : "Source media stays intact. Ripple only closes the gap on this track; project length stays fixed."}</span>
+      </div>;
+    })()}
   </section>;
 }

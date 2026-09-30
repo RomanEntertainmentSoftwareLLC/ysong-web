@@ -48,3 +48,76 @@ export function moveStudioTrack(project: CreativeStudioProject, trackId: string,
   [tracks[index], tracks[target]] = [tracks[target], tracks[index]];
   return { ...project, tracks };
 }
+
+/** Clip edits keep their source range attached to the timeline range. */
+export function trimStudioClip(project: CreativeStudioProject, trackId: string, clipId: string, edge: "start" | "end", frame: number): CreativeStudioProject {
+  const track = project.tracks.find(item => item.id === trackId);
+  const clip = track?.clips.find(item => item.id === clipId);
+  if (!track || !clip || track.locked) return project;
+  const boundary = Math.max(0, Math.min(project.durationFrames, Math.round(frame)));
+  const oldEnd = clip.startFrame + clip.durationFrames;
+  const nextStart = edge === "start" ? Math.min(boundary, oldEnd - 1) : clip.startFrame;
+  const nextEnd = edge === "end" ? Math.max(boundary, clip.startFrame + 1) : oldEnd;
+  const sourceSpan = "sourceInSeconds" in clip ? clip.sourceOutSeconds - clip.sourceInSeconds : 0;
+  const sourcePerFrame = sourceSpan / clip.durationFrames;
+  const removedStart = nextStart - clip.startFrame;
+  const durationFrames = nextEnd - nextStart;
+  const transitionInFrames = Math.min(clip.transitionIn?.durationFrames ?? 0, durationFrames);
+  const transitionOutFrames = Math.min(clip.transitionOut?.durationFrames ?? 0, durationFrames - transitionInFrames);
+  const trimmed = {
+    ...clip,
+    startFrame: nextStart,
+    durationFrames,
+    ...(clip.transitionIn ? { transitionIn: { ...clip.transitionIn, durationFrames: transitionInFrames } } : {}),
+    ...(clip.transitionOut ? { transitionOut: { ...clip.transitionOut, durationFrames: transitionOutFrames } } : {}),
+    keyframes: clip.keyframes.flatMap(key => {
+      const localFrame = key.frame - removedStart;
+      return localFrame >= 0 && localFrame < durationFrames ? [{ ...key, frame: localFrame }] : [];
+    }),
+    ...( "sourceInSeconds" in clip ? {
+      sourceInSeconds: clip.sourceInSeconds + removedStart * sourcePerFrame,
+      sourceOutSeconds: clip.sourceOutSeconds - (oldEnd - nextEnd) * sourcePerFrame,
+    } : {}),
+  } as typeof clip;
+  return { ...project, tracks: project.tracks.map(item => item.id === trackId ? { ...item, clips: item.clips.map(value => value.id === clipId ? trimmed : value) } as StudioTrack : item) };
+}
+
+export function splitStudioClip(project: CreativeStudioProject, trackId: string, clipId: string, frame: number): CreativeStudioProject {
+  const track = project.tracks.find(item => item.id === trackId);
+  const clip = track?.clips.find(item => item.id === clipId);
+  const splitFrame = Math.round(frame);
+  if (!track || !clip || track.locked || splitFrame <= clip.startFrame || splitFrame >= clip.startFrame + clip.durationFrames) return project;
+  const leftLength = splitFrame - clip.startFrame;
+  const rightLength = clip.durationFrames - leftLength;
+  const ratio = leftLength / clip.durationFrames;
+  const rightId = `clip:${crypto.randomUUID()}`;
+  const makeHalf = (startFrame: number, durationFrames: number, offset: number, left: boolean) => ({
+    ...clip,
+    id: left ? clip.id : rightId,
+    startFrame,
+    durationFrames,
+    keyframes: clip.keyframes.flatMap(key => {
+      const localFrame = key.frame - offset;
+      return localFrame >= 0 && localFrame < durationFrames ? [{ ...key, frame: localFrame }] : [];
+    }),
+    ...( "sourceInSeconds" in clip ? {
+      sourceInSeconds: left ? clip.sourceInSeconds : clip.sourceInSeconds + (clip.sourceOutSeconds - clip.sourceInSeconds) * ratio,
+      sourceOutSeconds: left ? clip.sourceInSeconds + (clip.sourceOutSeconds - clip.sourceInSeconds) * ratio : clip.sourceOutSeconds,
+    } : {}),
+    transitionIn: left && clip.transitionIn ? { ...clip.transitionIn, durationFrames: Math.min(clip.transitionIn.durationFrames, durationFrames) } : undefined,
+    transitionOut: !left && clip.transitionOut ? { ...clip.transitionOut, durationFrames: Math.min(clip.transitionOut.durationFrames, durationFrames) } : undefined,
+  });
+  const halves = [makeHalf(clip.startFrame, leftLength, 0, true), makeHalf(splitFrame, rightLength, leftLength, false)] as typeof track.clips;
+  const clips = track.clips.flatMap(value => value.id === clipId ? halves : [value]);
+  return { ...project, tracks: project.tracks.map(item => item.id === trackId ? { ...item, clips } as StudioTrack : item) };
+}
+
+/** Ripple is intentionally bounded to later clips on the same track and never changes project duration. */
+export function deleteStudioClip(project: CreativeStudioProject, trackId: string, clipId: string, ripple: boolean): CreativeStudioProject {
+  const track = project.tracks.find(item => item.id === trackId);
+  const clip = track?.clips.find(item => item.id === clipId);
+  if (!track || !clip || track.locked) return project;
+  const end = clip.startFrame + clip.durationFrames;
+  const clips = track.clips.filter(item => item.id !== clipId).map(item => ripple && item.startFrame >= end ? { ...item, startFrame: Math.max(0, item.startFrame - clip.durationFrames) } : item);
+  return { ...project, tracks: project.tracks.map(item => item.id === trackId ? { ...item, clips } as StudioTrack : item) };
+}
