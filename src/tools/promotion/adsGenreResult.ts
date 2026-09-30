@@ -6,6 +6,7 @@ export type AdsGenreResult = {
   related: string[];
   family: string | null;
   engine: string;
+  energy?: { label: string; confidence: number } | null;
   tempo?: { bpm: number | null; confidence: number; onsetsSeconds?: number[] };
 };
 
@@ -21,6 +22,7 @@ export function genresFromAudioReport(report: AudioIntelligenceReport): AdsGenre
     related: unique.slice(1, 7),
     family: report.genre.primary_genre,
     engine: report.engine,
+    energy: report.energy?.primary?.label ? { label: report.energy.primary.label, confidence: report.energy.primary.relative_confidence ?? report.energy.primary.relative_strength ?? 0 } : null,
     tempo: { bpm: report.tempo?.estimated_bpm ?? null, confidence: report.tempo?.confidence ?? 0,
       onsetsSeconds: (report as AudioIntelligenceReport & { rhythm?: { onsets_seconds?: number[] } }).rhythm?.onsets_seconds },
   };
