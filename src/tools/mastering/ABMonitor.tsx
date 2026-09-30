@@ -216,9 +216,9 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
     const originalGainDb = matched ? match.originalDb : 0;
     const masterGainDb = matched ? match.masterDb : 0;
     const targets = {
-      original: nextMode === "original" ? dbToGain(originalGainDb) : 0,
-      master: nextMode === "master" ? dbToGain(masterGainDb) : 0,
-      difference: nextMode === "difference" ? 1 : 0,
+      original: nextMode === "original" ? Math.min(dbToGain(originalGainDb), dbToGain(-1)) : 0,
+      master: nextMode === "master" ? Math.min(dbToGain(masterGainDb), dbToGain(-1)) : 0,
+      difference: nextMode === "difference" ? dbToGain(-1) : 0,
     };
     (Object.keys(targets) as Mode[]).forEach(key => {
       const node = gains[key];
@@ -291,8 +291,8 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
       const difference = differenceRef.current;
       if (!original || !master || !difference || original.paused) return;
       const clock = original.currentTime;
-      if (master.readyState >= 2 && Math.abs(master.currentTime - clock) > 0.035) master.currentTime = clock;
-      if (difference.readyState >= 2 && Math.abs(difference.currentTime - clock) > 0.035) difference.currentTime = clock;
+      if (master.readyState >= 2 && Math.abs(master.currentTime - clock) > 0.02) master.currentTime = clock;
+      if (difference.readyState >= 2 && Math.abs(difference.currentTime - clock) > 0.02) difference.currentTime = clock;
       if (stamp - lastUiTickRef.current > 80) {
         setCurrentTime(clock);
         lastUiTickRef.current = stamp;
@@ -329,6 +329,8 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
     [original, master, difference].forEach(element => { if (Math.abs(element.currentTime - t) > 0.01) element.currentTime = t; });
     try {
       await Promise.all([original.play(), master.play(), difference.play()]);
+      const startAt = original.currentTime;
+      [master, difference].forEach(element => { if (Math.abs(element.currentTime - startAt) > 0.005) element.currentTime = startAt; });
       setPlaying(true);
       startSyncLoop();
     } catch {
@@ -360,11 +362,11 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
         <div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Synchronized A/B verification</div>
-        <h2 className="mt-1 text-lg font-semibold">Both versions run. You choose what reaches your ears.</h2>
-        <p className="mt-1 max-w-3xl text-xs text-neutral-500">Original and Remaster share one transport and stay sample-time aligned for instant switching. Both spectrum analyzers remain live even while one side is muted.</p>
+        <h2 className="mt-1 text-lg font-semibold">Synchronized audition</h2>
+        <p className="mt-1 max-w-3xl text-xs text-neutral-500">All three streams follow one transport. Original and Remaster stay closely time-aligned; decoder and browser scheduling can still introduce a small offset. Switching is gain-ramped to avoid clicks.</p>
       </div>
       <div className="flex flex-wrap gap-2">
-        {([['original', 'A · Original'], ['master', 'B · Remaster'], ['difference', 'Δ · Difference']] as const).map(([key, label]) => <button key={key} type="button" onClick={() => selectMode(key)} className={`rounded-lg border px-3 py-2 text-xs ${mode === key ? "border-violet-500/50 bg-violet-500/10 text-violet-500" : "border-neutral-300 dark:border-neutral-700"}`}>{label}</button>)}
+        {([['original', 'A · Original'], ['master', 'B · Remaster'], ['difference', 'Δ · Difference']] as const).map(([key, label]) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => selectMode(key)} className={`rounded-lg border px-3 py-2 text-xs ${mode === key ? "border-violet-500/50 bg-violet-500/10 text-violet-500" : "border-neutral-300 dark:border-neutral-700"}`}>{label}</button>)}
       </div>
     </div>
 
@@ -397,7 +399,7 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
 
     <div className="mt-5 rounded-xl border border-emerald-500/20 bg-emerald-500/[.035] p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><div className="text-[10px] uppercase tracking-[.16em] text-emerald-500">Non-destructive export</div><div className="mt-1 text-sm font-medium">Your exact upload remains available.</div><div className="mt-1 text-xs text-neutral-500">Package the original, 24-bit remaster, difference signal and report together so the processed copy can never become your only copy by accident.</div></div>
+        <div><div className="text-[10px] uppercase tracking-[.16em] text-emerald-500">Non-destructive export</div><div className="mt-1 text-sm font-medium">Your exact upload remains available.</div><div className="mt-1 text-xs text-neutral-500">Exports are fixed files: audition selection and Loudness Match affect monitoring only. Difference WAV is the rendered difference signal. The package contains the remaster, difference signal and report, plus the exact original when selected.</div></div>
         <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={includeOriginal} onChange={e => setIncludeOriginal(e.target.checked)} className="h-4 w-4 accent-emerald-500"/><span>Include exact original</span></label>
       </div>
       <div className="mt-3 flex flex-wrap gap-3 text-xs">
