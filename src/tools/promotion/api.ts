@@ -94,14 +94,14 @@ export const promotionApi={
   deleteSnippet:(id:string,snippetId:string)=>request<{ok:boolean}>(`${ROOT}/ad-campaigns/${id}/snippets/${snippetId}`,{method:"DELETE"}),
   renderBatch:(id:string,body:{snippetIds:string[];backgroundVideoIds:string[];libraryId?:string|null;backgroundFit?:"crop"|"fit"})=>request<{queued:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/render`,{method:"POST",body:JSON.stringify(body)}),
   creatives:(id:string)=>request<{creatives:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/creatives`),
-  loadStudioProject:async(creative:Pick<ReusableAdCreative,"id"|"audioSnippets"|"backgroundMedia">)=>{
+  loadStudioProject:async(creative:Pick<ReusableAdCreative,"id"|"audioSnippets"|"backgroundMedia"|"overlays">)=>{
     const out=await request<{project:CreativeStudioProject|null}>(`${ROOT}/creatives/${encodeURIComponent(creative.id)}/studio-project`);
-    if(out.project!==null)validateCreativeStudioProject(out.project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId)});
+    if(out.project!==null)validateCreativeStudioProject(out.project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId),overlayIds:creative.overlays.map(x=>x.id)});
     return out.project;
   },
   /** The reusable creative owns this edit; the server must compare expectedRevision atomically. */
-  saveStudioProject:async(creative:ReusableAdCreative, project:CreativeStudioProject)=>{
-    validateCreativeStudioProject(project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId)});
+  saveStudioProject:async(creative:Pick<ReusableAdCreative,"id"|"audioSnippets"|"backgroundMedia"|"overlays">, project:CreativeStudioProject)=>{
+    validateCreativeStudioProject(project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId),overlayIds:creative.overlays.map(x=>x.id)});
     if(project.edit.parentRevision!==project.revision)throw new Error("Studio edit parent revision must match the saved revision.");
     const out=await request<{creative:ReusableAdCreative}>(`${ROOT}/creatives/${encodeURIComponent(creative.id)}/studio-project`,{
       method:"PUT",body:JSON.stringify({expectedRevision:project.revision,project}),
@@ -110,7 +110,7 @@ export const promotionApi={
       throw error;
     });
     if(out.creative.id!==creative.id||!out.creative.studioProject)throw new Error("Studio save response is missing the project.");
-    validateCreativeStudioProject(out.creative.studioProject,{audioSnippetIds:out.creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:out.creative.backgroundMedia.map(x=>x.mediaId)});
+    validateCreativeStudioProject(out.creative.studioProject,{audioSnippetIds:out.creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:out.creative.backgroundMedia.map(x=>x.mediaId),overlayIds:out.creative.overlays.map(x=>x.id)});
     if(out.creative.studioProject.revision!==project.revision+1)throw new Error("Studio save response has an unexpected revision.");
     return out;
   },

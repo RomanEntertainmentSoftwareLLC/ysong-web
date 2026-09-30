@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateCreativeStudioProject } from "../src/tools/promotion/creativeStudioProject.ts";
+import { addStudioSource, moveStudioTrack, studioSources } from "../src/tools/promotion/creativeStudioTracks.ts";
 
 const refs = { audioSnippetIds: ["snippet-1"], backgroundMediaIds: ["media-1"] };
 const transform = { x: 0.5, y: 0.5, scale: 1, rotationDegrees: 0, opacity: 1 };
@@ -36,4 +37,25 @@ test("rejects unsafe versions, frames, and transition lengths", () => {
   assert.throws(() => validateCreativeStudioProject(frame, refs), /clip.startFrame/);
   const transition = project(); transition.tracks[0].clips[0].transitionIn.durationFrames = 451;
   assert.throws(() => validateCreativeStudioProject(transition, refs), /transitionIn/);
+});
+
+test("source-backed tracks preserve identity and reject invalid controls", () => {
+  const creative = {
+    backgroundMedia: [{ mediaId: "media-1", objectKey: "private/video", mediaType: "video", source: "stock", attribution: { provider: "Pexels" } }],
+    audioSnippets: [{ snippetId: "snippet-1", sourceTrackId: "song-1", sourceObjectKey: "private/audio", startSeconds: 2, durationSeconds: 8, label: "Hook" }],
+    overlays: [{ id: "meme-1", kind: "sticker", assetObjectKey: "private/meme", startSeconds: 1, endSeconds: 5 }, { id: "text-1", kind: "text", text: "New release", startSeconds: 0, endSeconds: 4 }],
+    caption: { text: "Hear the song" }, cta: { label: "Listen now" },
+  };
+  const sources = studioSources(creative, 450, 30);
+  assert.equal(sources.length, 6);
+  assert.match(sources[0].identity, /Stock · Pexels · media-1/);
+  assert.equal(sources[1].track.clips[0].overlayId, "meme-1");
+  const edit = project(); edit.tracks = [];
+  const withSource = sources.reduce(addStudioSource, edit);
+  assert.doesNotThrow(() => validateCreativeStudioProject(withSource, { ...refs, overlayIds: ["meme-1", "text-1"] }));
+  assert.equal(addStudioSource(withSource, sources[0]), withSource);
+  withSource.tracks[0].locked = true;
+  assert.equal(moveStudioTrack(withSource, withSource.tracks[0].id, 1), withSource);
+  withSource.tracks[1].muted = true;
+  assert.throws(() => validateCreativeStudioProject(withSource, { ...refs, overlayIds: ["meme-1", "text-1"] }), /track.muted/);
 });

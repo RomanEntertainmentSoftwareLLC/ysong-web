@@ -12,7 +12,8 @@ export type StudioClipBase = {
   transitionOut?: StudioTransition;
 };
 export type StudioVisualClip = StudioClipBase & {
-  mediaId: string; // Resolves against ReusableAdCreative.backgroundMedia.
+  mediaId?: string; // Resolves against ReusableAdCreative.backgroundMedia.
+  overlayId?: string; // Resolves against ReusableAdCreative.overlays for image/sticker/logo assets.
   sourceInSeconds: number; sourceOutSeconds: number;
   transform: StudioTransform;
 };
@@ -23,12 +24,14 @@ export type StudioAudioClip = StudioClipBase & {
 };
 export type StudioTextClip = StudioClipBase & {
   text: string; transform: StudioTransform;
+  overlayId?: string; // Existing text overlay, when this clip comes from one.
+  source?: "text" | "caption" | "cta";
   style: { fontFamily?: string; fontSize: number; color: string; fontWeight?: number };
 };
 export type StudioTrack =
-  | { id: string; kind: "visual"; clips: StudioVisualClip[] }
-  | { id: string; kind: "audio"; clips: StudioAudioClip[] }
-  | { id: string; kind: "text"; clips: StudioTextClip[] };
+  | { id: string; kind: "visual"; visible?: boolean; locked?: boolean; clips: StudioVisualClip[] }
+  | { id: string; kind: "audio"; muted?: boolean; locked?: boolean; clips: StudioAudioClip[] }
+  | { id: string; kind: "text"; visible?: boolean; locked?: boolean; clips: StudioTextClip[] };
 
 /** Arrays are ordered bottom-to-top for visuals/text and top-to-bottom for audio. */
 export type CreativeStudioProject = {
@@ -48,7 +51,7 @@ export type CreativeStudioProject = {
   };
 };
 
-export type StudioMediaRefs = { audioSnippetIds: readonly string[]; backgroundMediaIds: readonly string[] };
+export type StudioMediaRefs = { audioSnippetIds: readonly string[]; backgroundMediaIds: readonly string[]; overlayIds?: readonly string[] };
 
 /** Validate untrusted persisted/API JSON before opening or saving an edit. Never repair it silently. */
 export function validateCreativeStudioProject(value: unknown, refs: StudioMediaRefs): asserts value is CreativeStudioProject {
@@ -95,6 +98,9 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
   for (const trackValue of tracks) {
     const track = record(trackValue, "track"); unique(track.id, "track.id");
     choice(track.kind, ["visual", "audio", "text"], "track.kind");
+    if (track.locked !== undefined && typeof track.locked !== "boolean") fail("track.locked");
+    if (track.visible !== undefined && (track.kind === "audio" || typeof track.visible !== "boolean")) fail("track.visible");
+    if (track.muted !== undefined && (track.kind !== "audio" || typeof track.muted !== "boolean")) fail("track.muted");
     const clips = array(track.clips, "track.clips");
     if (clips.length > 200) fail("too many clips");
     let previousStart = -1;
@@ -132,10 +138,18 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
       }
       if (track.kind === "text") {
         string(clip.text, "clip.text"); checkTransform(clip.transform, "clip.transform");
+        if (clip.overlayId !== undefined && !refs.overlayIds?.includes(string(clip.overlayId, "clip.overlayId"))) fail("unknown overlayId");
+        if (clip.source !== undefined) choice(clip.source, ["text", "caption", "cta"], "clip.source");
         const style = record(clip.style, "clip.style");
         number(style.fontSize, "fontSize", 1); string(style.color, "color");
         if (style.fontFamily !== undefined) string(style.fontFamily, "fontFamily");
         if (style.fontWeight !== undefined) number(style.fontWeight, "fontWeight", 1);
+      } else if (track.kind === "visual" && clip.overlayId !== undefined) {
+        if (clip.mediaId !== undefined) fail("visual clip has multiple sources");
+        if (!refs.overlayIds?.includes(string(clip.overlayId, "clip.overlayId"))) fail("unknown overlayId");
+        const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
+        if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
+        checkTransform(clip.transform, "clip.transform");
       } else {
         const idKey = track.kind === "audio" ? "snippetId" : "mediaId";
         const ref = string(clip[idKey], `clip.${idKey}`);
