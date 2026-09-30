@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { promotionApi, type AdCreative, type ReusableAdCreative } from "./api";
 import type { CreativeStudioProject, StudioAspectRatio } from "./creativeStudioProject";
 import { createStudioHistory, editStudioHistory, redoStudioHistory, undoStudioHistory, type StudioHistory } from "./creativeStudioHistory";
-import { studioSources } from "./creativeStudioTracks";
+import { insertGeneratedStudioVideo, studioSources } from "./creativeStudioTracks";
+import { generatedVideoSource, type CompletedVideoJob } from "./generatedVideoJobs";
 import CreativeStudioTimeline from "./CreativeStudioTimeline";
 import CreativeStudioVideoJobs from "./CreativeStudioVideoJobs";
 import { previewStudioEditProposal, type StudioEditProposal } from "./studioEditProposals";
@@ -20,12 +21,21 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
   const [saving, setSaving] = useState(false);
   const [aspect, setAspect] = useState<StudioAspectRatio>("9:16");
   const [selection, setSelection] = useState<AdsStudioSelection>(null);
+  const [playheadFrame, setPlayheadFrame] = useState(0);
+  const [generatedUrls, setGeneratedUrls] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<{ source: CreativeStudioProject; aspect: StudioAspectRatio; proposal: StudioEditProposal; before: string; after: string } | null>(null);
   const [proposalError, setProposalError] = useState("");
   const handleSelectionChange = useCallback((value: AdsStudioSelection) => {
     setSelection(previous => previous?.trackId === value?.trackId && previous?.clipId === value?.clipId && previous?.startSeconds === value?.startSeconds && previous?.durationSeconds === value?.durationSeconds ? previous : value);
     onSelectionChange?.(value);
   }, [onSelectionChange]);
+  useEffect(() => {
+    const clips = history?.present.variants?.[aspect]?.tracks.flatMap(track => track.kind === "visual" ? track.clips : []) || [];
+    const sources = [...new Map(clips.flatMap(clip => clip.generatedVideo ? [[clip.generatedVideo.jobId, clip.generatedVideo.objectKey] as const] : []))];
+    let active = true;
+    sources.forEach(([id, key]) => { void promotionApi.signedUrl(key).then(result => { if (active) setGeneratedUrls(previous => ({ ...previous, [`generated:${id}`]: result.url })); }).catch(() => {}); });
+    return () => { active = false; };
+  }, [history, aspect]);
   const owner = creative.stableCreativeId && creative.audioSnippets && creative.backgroundMedia
     ? { id: creative.stableCreativeId, name: `Creative ${creative.stableCreativeId.slice(0, 8)}`, audioSnippets: creative.audioSnippets, backgroundMedia: creative.backgroundMedia, overlays: creative.overlays || [], caption: creative.caption || { text: "" }, cta: creative.cta || { label: "" } } satisfies Pick<ReusableAdCreative,"id"|"name"|"audioSnippets"|"backgroundMedia"|"overlays"|"caption"|"cta">
     : null;
@@ -109,6 +119,15 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
   function updateAspectProject(next: CreativeStudioProject, group?: string) {
     setHistory(value => value && editStudioHistory(value, { ...current, variants: { ...current.variants, [aspect]: { width: next.render.width, height: next.render.height, tracks: next.tracks } } }, group));
   }
+  function insertVideo(job: CompletedVideoJob, range: boolean) {
+    if (saving) return;
+    const startFrame = range && selection ? Math.round(selection.startSeconds * fps) : playheadFrame;
+    const rangeFrames = range && selection ? Math.round(selection.durationSeconds * fps) : undefined;
+    const next = insertGeneratedStudioVideo(editingProject, generatedVideoSource(job), startFrame, rangeFrames);
+    if (next === editingProject) { setNotice("Video cannot fit here, has already been inserted, or the timeline has 12 tracks."); return; }
+    updateAspectProject(next);
+    setNotice("Generated video inserted. Save the timeline to keep it; Undo removes this insertion.");
+  }
   async function save() {
     if (!owner) return;
     setSaving(true); setError(""); setNotice("");
@@ -136,7 +155,7 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
       {proposalError && <p role="alert" className="mt-2 text-amber-600">{proposalError}</p>}
       {pending && <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3"><div className="font-medium">Proposed change · {aspect}</div><div className="mt-1 text-neutral-500">Before: {pending.before}</div><div className="mt-1">After: {pending.after}</div><div className="mt-2 flex gap-2"><button type="button" disabled={saving || pending.source !== current || pending.aspect !== aspect} onClick={applyProposal} className="rounded bg-violet-600 px-3 py-1.5 font-medium text-white disabled:opacity-40">Apply edit</button><button type="button" onClick={() => setPending(null)} className="rounded border px-3 py-1.5">Dismiss</button></div>{(pending.source !== current || pending.aspect !== aspect) && <p className="mt-1 text-amber-600">Timeline changed. Preview the proposal again.</p>}</div>}
     </section>
-    <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={mediaUrls} audioUrl={audioUrl} onSelectionChange={handleSelectionChange} /></div>
-    <CreativeStudioVideoJobs creative={creative} selection={selection} />
+    <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={{ ...mediaUrls, ...generatedUrls }} audioUrl={audioUrl} onSelectionChange={handleSelectionChange} onPlayheadChange={setPlayheadFrame} /></div>
+    <CreativeStudioVideoJobs creative={creative} selection={selection} onInsert={insertVideo} canInsert={!saving && editingProject.tracks.length < 12} playheadSeconds={playheadFrame / fps} />
   </div>;
 }

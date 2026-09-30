@@ -34,8 +34,8 @@ export function studioRenderPlan(project: CreativeStudioProject, creative: Pick<
       const visualClip = clip as StudioVisualClip;
       const overlay = visualClip.overlayId && creative.overlays.find(item => item.id === visualClip.overlayId);
       const media = visualClip.mediaId ? creative.backgroundMedia.find(item => item.mediaId === visualClip.mediaId) : undefined;
-      const mediaType = media?.mediaType || (overlay ? "image" : undefined);
-      const url = urls[visualClip.mediaId ? `media:${visualClip.mediaId}` : `overlay:${visualClip.overlayId}`];
+      const mediaType = media?.mediaType || (visualClip.generatedVideo ? "video" : overlay ? "image" : undefined);
+      const url = urls[visualClip.mediaId ? `media:${visualClip.mediaId}` : visualClip.generatedVideo ? `generated:${visualClip.generatedVideo.jobId}` : `overlay:${visualClip.overlayId}`];
       if (!mediaType || !url) throw new Error(`Visual clip ${clip.id}: source asset is unavailable.`);
       if (mediaType === "image" && visualClip.speed && visualClip.speed !== 1) throw new Error(`Visual clip ${clip.id}: image speed is unsupported.`);
       if (Math.abs((visualClip.sourceOutSeconds - visualClip.sourceInSeconds) / (visualClip.speed || 1) - visualClip.durationFrames / fps) > 1 / fps + .002 && mediaType === "video") throw new Error(`Visual clip ${clip.id}: trim, speed, and timeline duration disagree.`);

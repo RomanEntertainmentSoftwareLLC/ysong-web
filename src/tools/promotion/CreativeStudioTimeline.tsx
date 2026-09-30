@@ -22,13 +22,14 @@ function timelineFrameAt(clientX: number, rectLeft: number, scrollLeft: number, 
 }
 
 /** The project is owned by the reusable creative. This view only changes local timeline UI state. */
-export default function CreativeStudioTimeline({ creative, project, onChange, mediaUrls = {}, audioUrl = "", onSelectionChange }: {
+export default function CreativeStudioTimeline({ creative, project, onChange, mediaUrls = {}, audioUrl = "", onSelectionChange, onPlayheadChange }: {
   creative: Pick<ReusableAdCreative,"name"|"audioSnippets"|"backgroundMedia"|"overlays"|"caption"|"cta">;
   project: CreativeStudioProject;
   onChange: (project: CreativeStudioProject, group?: string) => void;
   mediaUrls?: Record<string, string>;
   audioUrl?: string;
   onSelectionChange?: (selection: { kind: "audio" | "visual" | "text"; trackId: string; clipId: string; label: string; startSeconds: number; durationSeconds: number; text?: string } | null) => void;
+  onPlayheadChange?: (frame: number) => void;
 }) {
   const [zoom, setZoom] = useState(80);
   const [snap, setSnap] = useState(true);
@@ -42,6 +43,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   const drag = useRef<number | null>(null);
   const waveform = useAudioWaveform(audioUrl);
   const fps = project.timebase.framesPerSecond.numerator / project.timebase.framesPerSecond.denominator;
+  useEffect(() => { onPlayheadChange?.(playhead); }, [playhead, onPlayheadChange]);
   const seconds = project.durationFrames / fps;
   const width = Math.max(320, seconds * zoom);
   const majorSeconds = zoom >= 100 ? 1 : zoom >= 48 ? 2 : 5;
@@ -96,6 +98,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
     if (track.kind === "text" && "text" in clip) return clip.text;
     if (track.kind === "audio" && "snippetId" in clip) return creative.audioSnippets.find(item => item.snippetId === clip.snippetId)?.label || "Audio clip";
     if ("overlayId" in clip && clip.overlayId) return creative.overlays.find(item => item.id === clip.overlayId)?.kind === "sticker" ? "Meme / sticker" : "Overlay asset";
+    if ("generatedVideo" in clip && clip.generatedVideo) return `AI video · ${clip.generatedVideo.provider}`;
     if ("mediaId" in clip) return sources.find(item => item.id === `media:${clip.mediaId}`)?.label || "Visual asset";
     return "Clip";
   };
@@ -134,7 +137,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
             {track.clips.map(clip => {
               const selected = selection?.trackId === track.id && selection.clipId === clip.id;
               const name = clipName(track, clip);
-              const media = "mediaId" in clip && clip.mediaId ? mediaUrls[clip.mediaId] : undefined;
+              const media = "mediaId" in clip && clip.mediaId ? mediaUrls[clip.mediaId] : "generatedVideo" in clip && clip.generatedVideo ? mediaUrls[`generated:${clip.generatedVideo.jobId}`] : undefined;
               return <div key={clip.id}><button type="button" aria-label={`${name}, ${sourceFor(track, clip)?.identity || clip.id}, ${clock(clip.startFrame / fps)} to ${clock((clip.startFrame + clip.durationFrames) / fps)}`} aria-pressed={selected} onClick={() => { setSelection({ trackId: track.id, clipId: clip.id }); setKeySelection(null); }} className={`absolute top-1.5 h-11 min-w-0 overflow-hidden rounded-md border text-left shadow-sm focus-visible:outline-2 focus-visible:outline-violet-500 ${selected ? "border-violet-300 ring-2 ring-violet-500" : "border-white/25"} ${track.kind === "audio" ? "bg-emerald-700 text-white" : track.kind === "text" ? "bg-fuchsia-700 text-white" : "bg-indigo-700 text-white"}`} style={{ left: frameToPx(clip.startFrame), width: Math.max(2, frameToPx(clip.durationFrames)) }}>
                 {media && ("mediaId" in clip && creative.backgroundMedia.find(item => item.mediaId === clip.mediaId)?.mediaType === "image" ? <img src={media} alt="" className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40" /> : <video src={media} muted playsInline preload="metadata" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40" />)}
                 {track.kind === "audio" && track.waveformVisible !== false && "sourceInSeconds" in clip && waveform.duration > 0 && <svg aria-hidden="true" viewBox="0 0 100 40" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full opacity-40">{Array.from({ length: 72 }, (_, index) => { const sourceTime = clip.sourceInSeconds + (clip.sourceOutSeconds - clip.sourceInSeconds) * index / 72; const peak = waveform.peaks[Math.min(waveform.peaks.length - 1, Math.max(0, Math.floor(sourceTime / waveform.duration * waveform.peaks.length)))] || 0; const height = Math.max(2, peak * 36); return <rect key={index} x={index / 72 * 100} y={(40 - height) / 2} width={.9} height={height} fill="currentColor" />; })}</svg>}
@@ -155,8 +158,8 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
       const clipEnd = clip.startFrame + clip.durationFrames;
       const hasSourceRange = "sourceInSeconds" in clip;
       const visualClip = track.kind === "visual" ? clip as StudioVisualClip : null;
-      const previewUrl = visualClip?.mediaId ? mediaUrls[visualClip.mediaId] : undefined;
-      const previewMedia = visualClip?.mediaId ? creative.backgroundMedia.find(item => item.mediaId === visualClip.mediaId) : undefined;
+      const previewUrl = visualClip?.mediaId ? mediaUrls[visualClip.mediaId] : visualClip?.generatedVideo ? mediaUrls[`generated:${visualClip.generatedVideo.jobId}`] : undefined;
+      const previewMedia = visualClip?.mediaId ? creative.backgroundMedia.find(item => item.mediaId === visualClip.mediaId) : visualClip?.generatedVideo ? { mediaType: "video" as const } : undefined;
       const localFrame = Math.max(0, Math.min(clip.durationFrames - 1, playhead - clip.startFrame));
       const animatedTransform = studioTransformAt(clip, localFrame);
       const color = visualClip?.color || { brightness: 100, contrast: 100, saturation: 100, temperature: 0, tint: 0 };

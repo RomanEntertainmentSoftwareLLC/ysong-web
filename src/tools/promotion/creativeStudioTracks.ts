@@ -1,5 +1,5 @@
 import type { ReusableAdCreative } from "./api";
-import type { CreativeStudioProject, StudioTrack, StudioTransform } from "./creativeStudioProject";
+import type { CreativeStudioProject, StudioTrack, StudioTransform, StudioVisualClip } from "./creativeStudioProject";
 
 export type StudioSource = { id: string; kind: StudioTrack["kind"]; label: string; identity: string; track: StudioTrack };
 export const STUDIO_VIDEO_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -39,6 +39,20 @@ export function studioSources(creative: Pick<ReusableAdCreative, "audioSnippets"
 export function addStudioSource(project: CreativeStudioProject, source: StudioSource): CreativeStudioProject {
   if (project.tracks.some(track => track.id === source.id) || project.tracks.length >= 12) return project;
   return { ...project, tracks: [...project.tracks, source.track] };
+}
+
+/** Insert a completed provider artifact as a normal visual clip on its own editable track. */
+export function insertGeneratedStudioVideo(project: CreativeStudioProject, generatedVideo: NonNullable<StudioVisualClip["generatedVideo"]>, startFrame: number, rangeFrames?: number): CreativeStudioProject {
+  if (project.tracks.length >= 12 || !Number.isFinite(startFrame) || !Number.isFinite(generatedVideo.durationSeconds) || generatedVideo.durationSeconds <= 0 || !generatedVideo.objectKey || !generatedVideo.jobId || !generatedVideo.provider || !generatedVideo.providerJobId || !generatedVideo.prompt) return project;
+  if (project.tracks.some(track => track.clips.some(clip => "generatedVideo" in clip && clip.generatedVideo?.jobId === generatedVideo.jobId))) return project;
+  const fps = project.timebase.framesPerSecond.numerator / project.timebase.framesPerSecond.denominator;
+  const start = Math.max(0, Math.round(startFrame));
+  const available = project.durationFrames - start;
+  const durationFrames = Math.min(available, Math.round(generatedVideo.durationSeconds * fps), rangeFrames === undefined ? Infinity : Math.round(rangeFrames));
+  if (durationFrames < 1) return project;
+  const id = crypto.randomUUID();
+  const clip: StudioVisualClip = { id: `clip:generated:${id}`, startFrame: start, durationFrames, keyframes: [], generatedVideo, sourceInSeconds: 0, sourceOutSeconds: durationFrames / fps, transform: { ...transform } };
+  return { ...project, tracks: [...project.tracks, { id: `generated:${id}`, kind: "visual", clips: [clip] }] };
 }
 
 /** Changes source playback speed and recalculates timeline length from the unchanged source range. */

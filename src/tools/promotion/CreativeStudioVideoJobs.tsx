@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AdCreative } from "./api";
 import type { AdsStudioSelection } from "./AdsSmartAssistantPanel";
 import type { StudioAspectRatio } from "./creativeStudioProject";
+import { completedVideoJobs, type CompletedVideoJob } from "./generatedVideoJobs";
 
 type VideoJob = {
   id: string;
@@ -17,7 +18,7 @@ type VideoJob = {
   createdAt: string;
 };
 
-export default function CreativeStudioVideoJobs({ creative, selection }: { creative: AdCreative; selection: AdsStudioSelection }) {
+export default function CreativeStudioVideoJobs({ creative, selection, onInsert, canInsert, playheadSeconds }: { creative: AdCreative; selection: AdsStudioSelection; onInsert: (job: CompletedVideoJob, range: boolean) => void; canInsert: boolean; playheadSeconds: number }) {
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(10);
   const [ratio, setRatio] = useState<StudioAspectRatio>("9:16");
@@ -25,6 +26,7 @@ export default function CreativeStudioVideoJobs({ creative, selection }: { creat
   const [jobs, setJobs] = useState<VideoJob[]>([]);
   const song = selection?.kind === "audio" ? selection.label : creative.audioSnippets?.[0]?.label || null;
   const hasValidReference = !reference || reference.type.startsWith("image/") || reference.type.startsWith("video/");
+  const completed = completedVideoJobs(creative);
 
   function createJob() {
     const job: VideoJob = {
@@ -41,6 +43,7 @@ export default function CreativeStudioVideoJobs({ creative, selection }: { creat
       <div><div className="text-[10px] uppercase tracking-[.18em] text-cyan-600">AI video</div><h3 className="mt-1 font-semibold">Build a generation job</h3><p className="mt-1 max-w-2xl text-xs text-neutral-500">Describe a video and connect it to this ad’s song and timeline. Jobs stay drafts until an authorized provider is configured.</p></div>
       <span className="rounded-full border border-amber-500/30 px-2.5 py-1 text-xs text-amber-700 dark:text-amber-300">Provider unavailable · no generation service connected</span>
     </div>
+    {completed.length > 0 && <div className="mt-4 space-y-2"><h4 className="text-sm font-semibold">Completed authorized videos</h4>{completed.map(job => <article key={job.id} className="rounded-xl border p-3 text-xs"><div className="font-medium">{job.provider} · {job.artifact.durationSeconds.toFixed(1)}s</div><p className="mt-1 whitespace-pre-wrap">{job.prompt}</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={!canInsert} onClick={() => onInsert(job, false)} className="rounded border px-2 py-1 disabled:opacity-40">Insert at playhead ({playheadSeconds.toFixed(1)}s)</button>{selection && <button type="button" disabled={!canInsert} onClick={() => onInsert(job, true)} className="rounded border px-2 py-1 disabled:opacity-40">Insert in selected range</button>}</div></article>)}</div>}
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <label className="grid gap-1 text-xs sm:col-span-2">Video prompt<textarea aria-label="Video generation prompt" value={prompt} onChange={event => setPrompt(event.target.value)} maxLength={2000} rows={3} placeholder="Describe the scene, movement, lighting, and visual style…" className="rounded-lg border bg-transparent p-2.5" /></label>
       <label className="grid gap-1 text-xs">Duration<select aria-label="Video duration" value={duration} onChange={event => setDuration(Number(event.target.value))} className="rounded-lg border bg-transparent p-2"><option value={5}>5 seconds</option><option value={10}>10 seconds</option><option value={15}>15 seconds</option><option value={30}>30 seconds</option></select></label>

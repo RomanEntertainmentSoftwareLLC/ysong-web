@@ -16,6 +16,7 @@ export type StudioClipBase = {
 export type StudioVisualClip = StudioClipBase & {
   mediaId?: string; // Resolves against ReusableAdCreative.backgroundMedia.
   overlayId?: string; // Resolves against ReusableAdCreative.overlays for image/sticker/logo assets.
+  generatedVideo?: { jobId: string; provider: string; providerJobId: string; prompt: string; objectKey: string; durationSeconds: number; artifactMetadata: Record<string, unknown> };
   sourceInSeconds: number; sourceOutSeconds: number;
   /** Source video playback multiplier. Audio embedded in video remains muted in Studio preview. */
   speed?: 0.5 | 0.75 | 1 | 1.25 | 1.5 | 2;
@@ -175,6 +176,17 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         number(style.fontSize, "fontSize", 1); string(style.color, "color");
         if (style.fontFamily !== undefined) string(style.fontFamily, "fontFamily");
         if (style.fontWeight !== undefined) number(style.fontWeight, "fontWeight", 1);
+      } else if (track.kind === "visual" && clip.generatedVideo !== undefined) {
+        if (clip.mediaId !== undefined || clip.overlayId !== undefined) fail("visual clip has multiple sources");
+        const generated = record(clip.generatedVideo, "clip.generatedVideo");
+        for (const key of ["jobId", "provider", "providerJobId", "prompt", "objectKey"] as const) string(generated[key], `generatedVideo.${key}`);
+        number(generated.durationSeconds, "generatedVideo.durationSeconds", 0);
+        record(generated.artifactMetadata, "generatedVideo.artifactMetadata");
+        const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
+        if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn || Number(clip.sourceOutSeconds) > Number(generated.durationSeconds) + .001) fail("source range");
+        if (clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
+        if (clip.color !== undefined) checkColor(clip.color);
+        checkTransform(clip.transform, "clip.transform");
       } else if (track.kind === "visual" && clip.overlayId !== undefined) {
         if (clip.mediaId !== undefined) fail("visual clip has multiple sources");
         if (!refs.overlayIds?.includes(string(clip.overlayId, "clip.overlayId"))) fail("unknown overlayId");

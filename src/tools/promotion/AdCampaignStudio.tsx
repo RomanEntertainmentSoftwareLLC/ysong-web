@@ -125,7 +125,8 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage,st
         if(project){
           const variant=project.variants?.["9:16"];
           const reelProject=variant?{...project,tracks:variant.tracks,render:{...project.render,width:variant.width,height:variant.height},variants:undefined}:project;
-          const refs=[...owner.backgroundMedia.map(ref=>[`media:${ref.mediaId}`,ref.objectKey] as const),...owner.overlays.filter(ref=>ref.assetObjectKey).map(ref=>[`overlay:${ref.id}`,ref.assetObjectKey!] as const),...owner.audioSnippets.map(ref=>[`audio:${ref.snippetId}`,ref.sourceObjectKey] as const)];
+          const generatedRefs=reelProject.tracks.flatMap(track=>track.kind==="visual"?track.clips.flatMap(clip=>clip.generatedVideo?[[`generated:${clip.generatedVideo.jobId}`,clip.generatedVideo.objectKey] as const]:[]):[]);
+          const refs=[...owner.backgroundMedia.map(ref=>[`media:${ref.mediaId}`,ref.objectKey] as const),...owner.overlays.filter(ref=>ref.assetObjectKey).map(ref=>[`overlay:${ref.id}`,ref.assetObjectKey!] as const),...owner.audioSnippets.map(ref=>[`audio:${ref.snippetId}`,ref.sourceObjectKey] as const),...generatedRefs];
           const signed=await Promise.all(refs.map(async([id,key])=>[id,(await promotionApi.signedUrl(key)).url] as const));
           const result=await exportStudioReel(reelProject,owner,Object.fromEntries(signed));
           const base=`ysong-reel-${c.id}`;
