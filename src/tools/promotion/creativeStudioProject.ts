@@ -1,7 +1,8 @@
 /** Ads Creative Studio edit data belongs to a reusable creative, not a campaign render. */
 export type StudioTimebase = { framesPerSecond: { numerator: number; denominator: number } };
 export type StudioTransform = { x: number; y: number; scale: number; rotationDegrees: number; opacity: number; fit?: "cover" | "contain" | "fill"; anchorX?: number; anchorY?: number };
-export type StudioKeyframe = { frame: number; property: keyof StudioTransform | "volume"; value: number; interpolation: "hold" | "linear" };
+export type StudioKeyframeProperty = "x" | "y" | "scale" | "rotationDegrees" | "opacity" | "volume";
+export type StudioKeyframe = { frame: number; property: StudioKeyframeProperty; value: number; interpolation: "hold" | "linear" };
 export type StudioTransition = { kind: "cut" | "fade" | "dissolve"; durationFrames: number };
 export type StudioClipBase = {
   id: string;
@@ -131,8 +132,9 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         choice(key.property, ["x", "y", "scale", "rotationDegrees", "opacity", "volume"], "keyframe.property");
         choice(key.interpolation, ["hold", "linear"], "keyframe.interpolation");
         number(key.value, "keyframe.value", -Infinity);
-        if ((key.property === "opacity" || key.property === "volume") && (Number(key.value) < 0 || Number(key.value) > 1)) fail("keyframe.value");
-        if (key.property === "scale" && Number(key.value) < 0) fail("keyframe.value");
+        const bounds: Record<StudioKeyframeProperty, [number, number]> = { x: [-1, 2], y: [-1, 2], scale: [0, 3], rotationDegrees: [-180, 180], opacity: [0, 1], volume: [0, 1] };
+        const [min, max] = bounds[key.property as StudioKeyframeProperty];
+        if (Number(key.value) < min || Number(key.value) > max) fail("keyframe.value");
         if ((track.kind === "audio") !== (key.property === "volume")) fail("keyframe.property incompatible with track");
         const coordinate = `${key.property}:${key.frame}`;
         if (keyed.has(coordinate)) fail("duplicate keyframe");

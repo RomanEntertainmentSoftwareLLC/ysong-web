@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateCreativeStudioProject } from "../src/tools/promotion/creativeStudioProject.ts";
 import { addStudioSource, moveStudioTrack, studioSources } from "../src/tools/promotion/creativeStudioTracks.ts";
+import { editStudioKeyframe, studioPropertyValue, studioTransformAt } from "../src/tools/promotion/creativeStudioKeyframes.ts";
 
 const refs = { audioSnippetIds: ["snippet-1"], backgroundMediaIds: ["media-1"] };
 const transform = { x: 0.5, y: 0.5, scale: 1, rotationDegrees: 0, opacity: 1 };
@@ -58,4 +59,31 @@ test("source-backed tracks preserve identity and reject invalid controls", () =>
   assert.equal(moveStudioTrack(withSource, withSource.tracks[0].id, 1), withSource);
   withSource.tracks[1].muted = true;
   assert.throws(() => validateCreativeStudioProject(withSource, { ...refs, overlayIds: ["meme-1", "text-1"] }), /track.muted/);
+});
+
+test("bounded keys interpolate deterministically and support move and delete", () => {
+  let edit = project();
+  edit = editStudioKeyframe(edit, "visual", "visual-1", "x", null, { frame: 30, property: "x", value: 1, interpolation: "linear" });
+  edit = editStudioKeyframe(edit, "visual", "visual-1", "x", null, { frame: 60, property: "x", value: 0, interpolation: "hold" });
+  const clip = edit.tracks[0].clips[0];
+  assert.equal(studioPropertyValue(clip, "x", 15), .75);
+  assert.equal(studioPropertyValue(clip, "x", 45), .5);
+  assert.equal(studioPropertyValue(clip, "x", 90), 0);
+  assert.equal(studioTransformAt(clip, 45).x, .5);
+  const duplicate = editStudioKeyframe(edit, "visual", "visual-1", "x", 30, { frame: 60, property: "x", value: 1, interpolation: "linear" });
+  assert.equal(duplicate, edit);
+  assert.equal(editStudioKeyframe(edit, "visual", "visual-1", "x", null, { frame: 80, property: "x", value: 3, interpolation: "linear" }), edit);
+  edit = editStudioKeyframe(edit, "visual", "visual-1", "x", 30, { frame: 40, property: "x", value: 1, interpolation: "linear" });
+  assert.equal(edit.tracks[0].clips[0].keyframes.some(key => key.property === "x" && key.frame === 40), true);
+  edit = editStudioKeyframe(edit, "visual", "visual-1", "x", 40, null);
+  assert.equal(edit.tracks[0].clips[0].keyframes.some(key => key.property === "x" && key.frame === 40), false);
+  edit.tracks[0].locked = true;
+  assert.equal(editStudioKeyframe(edit, "visual", "visual-1", "x", null, { frame: 70, property: "x", value: 1, interpolation: "linear" }), edit);
+  assert.doesNotThrow(() => validateCreativeStudioProject(edit, refs));
+});
+
+test("rejects out of range motion keys", () => {
+  const edit = project();
+  edit.tracks[0].clips[0].keyframes.push({ frame: 15, property: "scale", value: 4, interpolation: "linear" });
+  assert.throws(() => validateCreativeStudioProject(edit, refs), /keyframe.value/);
 });
