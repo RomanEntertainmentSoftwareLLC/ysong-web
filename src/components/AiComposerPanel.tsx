@@ -42,12 +42,13 @@ function PianoPreview({proposal}:{proposal:ComposerProposal}){
 }
 
 export default function AiComposerPanel({
-  open,onClose,project,bpm,sigNum,sigDen,totalBars,playheadBar,selectedPart,onAccept,onArrangementApproved,
+  open,onClose,project,bpm,sigNum,sigDen,totalBars,playheadBar,selectedPart,onAccept,onArrangementApproved,initialSuggestion,
 }:{
   open:boolean; onClose:()=>void; project:ComposerProjectContext; bpm:number; sigNum:number; sigDen:number; totalBars:number; playheadBar:number;
   selectedPart:{clipId:string;name:string;type:'audio'|'instrument'}|null;
   onAccept:(proposal:ComposerProposal,targetTrackId?:string|null,targetClipId?:string|null)=>string;
   onArrangementApproved?:(arrangement:ComposerArrangement|null)=>void;
+  initialSuggestion?:{summary:string;suggestion:string}|null;
 }){
   const [status,setStatus]=useState<ComposerStatus|null>(null);
   const [busy,setBusy]=useState(false);
@@ -71,6 +72,7 @@ export default function AiComposerPanel({
     setArrangement(null); setApproved(false); setProposal(null); setLastAcceptedTrackId(null); onArrangementApproved?.(null);
   },[bpm,sigNum,sigDen,totalBars,onArrangementApproved]);
   useEffect(()=>{if(open)setControls(c=>({...c,startBar:Math.max(1,Math.floor(playheadBar))}));},[open,playheadBar]);
+  useEffect(()=>{if(initialSuggestion){setControls(c=>({...c,style:initialSuggestion.suggestion}));setArrangement(null);setApproved(false);}},[initialSuggestion]);
 
   const sourceAvailable=Boolean(proposal || project.source?.notes?.length);
   const sourceName=proposal ? `${proposal.label} proposal` : project.source?.notes?.length ? `selected MIDI: ${project.source.trackName}` : 'none';
@@ -122,6 +124,7 @@ export default function AiComposerPanel({
       <button className="h-8 w-8 rounded-lg hover:bg-white/10" onClick={onClose} aria-label="Close AI Composer">×</button>
     </div>
     <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+      {initialSuggestion&&<section className="rounded-xl border border-amber-300/20 bg-amber-300/[0.05] p-3 text-xs"><div className="font-semibold">Assistant arrangement idea: {initialSuggestion.summary}</div><p className="mt-1 opacity-70">{initialSuggestion.suggestion}</p><p className="mt-1 opacity-50">Added to style / direction. Propose and review a structured arrangement below.</p></section>}
       <section className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
         <div className="flex items-center justify-between gap-2"><div><div className="text-xs font-semibold">Composer engine</div><div className="text-[10px] opacity-50">{status?.configured?`${status.provider} · ${status.model}`:'Server AI not configured yet'}</div></div><span className={`rounded-full px-2 py-1 text-[9px] ${status?.configured?'bg-emerald-500/15 text-emerald-200':'bg-amber-500/15 text-amber-200'}`}>{status?.configured?'READY':'NEEDS API KEY'}</span></div>
         <p className="mt-2 text-[10px] opacity-55">No deterministic fallback is mislabeled as AI. Until the server AI is configured, YSong will refuse generation rather than fake it.</p>

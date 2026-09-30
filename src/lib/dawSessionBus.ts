@@ -12,11 +12,14 @@ export type DawSessionTrackSnapshot = {
   instrumentLabel?: string;
   presetHint?: string;
   desktopVstUnavailable?: boolean;
-  effects: { id: string; name: string; enabled: boolean }[];
+  effects: { id: string; name: string; type: string; enabled: boolean; parameters: Record<string, number> }[];
+  nativeVst: boolean;
+  clipCount: number;
   mixer: DawMixerStripState;
 };
 
 export type DawSessionSnapshot = {
+  projectId: string;
   projectName: string;
   playing: boolean;
   playheadBar: number;

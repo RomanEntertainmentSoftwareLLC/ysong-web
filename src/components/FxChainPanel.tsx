@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { browserEffectNames, type BrowserEffectType, type DawTrackEffect } from "../lib/dawEffects";
 import { normalizeTrackEffects } from "../lib/dawEffects";
 import BrowserEffectEditor from "./BrowserEffectEditor";
@@ -18,16 +18,18 @@ type Props = {
   onReorder: (from: number, to: number) => void;
   onPlan: (intent: string) => Promise<FxChainPlan>;
   onApplyPlan: (plan: FxChainPlan) => void;
+  initialPlan?: FxChainPlan | null;
   onClose: () => void;
 };
 
 const COMMON_INTENTS = ["Spacious lead vocal", "Subtle vocal polish", "Aggressive electronic vocal", "Wide synth", "Dark atmospheric pad", "Distorted lo-fi texture", "Punchier drums", "Cleaner mix"];
 
-export default function FxChainPanel({ trackName, instrument, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onPlan, onApplyPlan, onClose }: Props) {
+export default function FxChainPanel({ trackName, instrument, effects, browserEffectsAvailable, onAddCompressor, onAddBrowserEffect, onToggle, onRemove, onOpen, onReorder, onPlan, onApplyPlan, initialPlan, onClose }: Props) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const [intent, setIntent] = useState("");
-  const [plan, setPlan] = useState<FxChainPlan | null>(null);
+  const [plan, setPlan] = useState<FxChainPlan | null>(initialPlan ?? null);
+  useEffect(() => { if (initialPlan) { setIntent(initialPlan.intent); setPlan(initialPlan); } }, [initialPlan]);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState("");
   const [editingPlanEffectId, setEditingPlanEffectId] = useState<string | null>(null);

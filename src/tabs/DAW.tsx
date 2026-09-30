@@ -10,6 +10,7 @@ import FxChainPanel from "../components/FxChainPanel";
 import DynamicsC1Editor from "../components/DynamicsC1Editor";
 import BrowserEffectEditor from "../components/BrowserEffectEditor";
 import DawAgentPanel from "../components/DawAgentPanel";
+import type { DawAgentProposal } from "../lib/dawAgentContract";
 import AiComposerPanel from "../components/AiComposerPanel";
 import InstrumentCatalogPanel from "../components/InstrumentCatalogPanel";
 import AiSoundDesignerPanel from "../components/AiSoundDesignerPanel";
@@ -734,6 +735,9 @@ export default function DAW(_props: TabRendererProps) {
 	const [exporting, setExporting] = useState(false);
 	const [exportStatus, setExportStatus] = useState("");
 	const [dawAgentOpen, setDawAgentOpen] = useState(false);
+	const [agentFxPlan, setAgentFxPlan] = useState<{ trackId: string; plan: FxChainPlan } | null>(null);
+	const [agentArrangement, setAgentArrangement] = useState<{ summary: string; suggestion: string } | null>(null);
+	const [agentSoundIntent, setAgentSoundIntent] = useState("");
 	const [aiComposerOpen, setAiComposerOpen] = useState(false);
 	const [instrumentCatalogOpen, setInstrumentCatalogOpen] = useState(false);
 	const [soundDesignerOpen, setSoundDesignerOpen] = useState(false);
@@ -4347,7 +4351,10 @@ export default function DAW(_props: TabRendererProps) {
 	useEffect(() => {
 		if (!dawHydrated) return;
 		const maxMeter = tracks.reduce((peak, track) => Math.max(peak, trackMeters[track.id] ?? 0), 0);
+		const clipCounts = new Map<string, number>();
+		for (const clip of clips) clipCounts.set(clip.trackId, (clipCounts.get(clip.trackId) ?? 0) + 1);
 		publishDawSessionSnapshot({
+			projectId: activeProjectId,
 			projectName,
 			playing: isPlaying,
 			playheadBar: playheadPosBars,
@@ -4373,7 +4380,9 @@ export default function DAW(_props: TabRendererProps) {
 					instrumentLabel: track.type === "instrument" ? (track.vst3PluginName ?? gm?.label ?? "Acoustic Grand Piano") : undefined,
 					presetHint: track.vstPresetHint,
 					desktopVstUnavailable: !!track.vst3PluginPath && bridgeAvailable === false,
-					effects: (track.effects ?? []).map((effect) => ({ id: effect.id, name: effect.name, enabled: effect.enabled })),
+					nativeVst: trackUsesNativeVst(track),
+					clipCount: clipCounts.get(track.id) ?? 0,
+					effects: (track.effects ?? []).map((effect) => ({ id: effect.id, name: effect.name, type: effect.type, enabled: effect.enabled, parameters: Object.fromEntries(Object.entries(effect).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]))) })),
 					mixer: normalizeMixerStrip(track.mixer),
 				};
 			}),
@@ -4388,7 +4397,7 @@ export default function DAW(_props: TabRendererProps) {
 				durationSeconds: Math.max(0, endBar - 1) * barSeconds, bpm, sigNum, sigDen, title: projectName, artist: "", album: "", updatedAt: now,
 			}).catch(() => {});
 		}
-	}, [dawHydrated, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, trackMeters]);
+	}, [dawHydrated, activeProjectId, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, clips, trackMeters]);
 
 	// Feed browser/WebAudio master analysis into the native Bridge. Native VST3
 	// instruments are analyzed inside Bridge itself, then both paths are merged there.
@@ -5986,7 +5995,21 @@ export default function DAW(_props: TabRendererProps) {
 							<div style={{ height: 80 }} />
 						</div>
 				</div>
-				<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} />
+				<DawAgentPanel open={dawAgentOpen} onClose={() => setDawAgentOpen(false)} onReviewProposal={(proposal: DawAgentProposal) => {
+					setDawAgentOpen(false);
+					setAiComposerOpen(false); setSoundDesignerOpen(false); setInstrumentCatalogOpen(false); setProgressiveStemOpen(false);
+					if (proposal.kind === "fx-plan") {
+						const track = tracks.find((item) => item.id === proposal.trackId);
+						if (!track) return;
+						const plan = normalizeFxChainPlan(proposal.plan, proposal.plan.intent, { browserEffectsAvailable: !trackUsesNativeVst(track), source: "ai" });
+						if (!plan.devices.length) return;
+						setAgentFxPlan({ trackId: track.id, plan }); setFxChainTrackId(track.id); setFxEditorEffectId(null);
+					} else if (proposal.kind === "arrangement") {
+						setAgentArrangement({ summary: proposal.summary, suggestion: proposal.suggestion }); setAiComposerOpen(true);
+					} else {
+						setSelectedTrackId(proposal.trackId); setAgentSoundIntent(proposal.intent); setSoundDesignerOpen(true);
+					}
+				}} />
 			</div>
 			</div>
 
@@ -6000,13 +6023,14 @@ export default function DAW(_props: TabRendererProps) {
 
 			<AiSoundDesignerPanel
 				open={soundDesignerOpen}
-				onClose={() => setSoundDesignerOpen(false)}
+				onClose={() => { setSoundDesignerOpen(false); setAgentSoundIntent(""); }}
 				selectedTrack={selectedTrackId ? tracks.find((track) => track.id === selectedTrackId) ?? null : null}
 				transportPlaying={isPlaying}
 				bpm={bpm}
 				sigNum={sigNum}
 				sigDen={sigDen}
 				projectSummary={soundDesignerProjectSummary}
+				initialIntent={agentSoundIntent}
 				initialKeyLabel={soundDesignerKeyLabel}
 				midiSource={composerProjectContext.source ?? null}
 				onAssignInstrument={assignInstrumentFromCatalog}
@@ -6027,7 +6051,7 @@ export default function DAW(_props: TabRendererProps) {
 			<AiComposerPanel
 				key={activeProjectId}
 				open={aiComposerOpen}
-				onClose={() => setAiComposerOpen(false)}
+				onClose={() => { setAiComposerOpen(false); setAgentArrangement(null); }}
 				project={composerProjectContext}
 				bpm={bpm}
 				sigNum={sigNum}
@@ -6037,6 +6061,7 @@ export default function DAW(_props: TabRendererProps) {
 				selectedPart={selectedPart}
 				onAccept={acceptComposerProposal}
 				onArrangementApproved={setApprovedComposerArrangement}
+				initialSuggestion={agentArrangement}
 			/>
 
 			{/* Shared transport console. The MIDI editor reuses this exact component. */}
@@ -6199,6 +6224,7 @@ export default function DAW(_props: TabRendererProps) {
 
 			{fxChainTrack && createPortal(
 				<FxChainPanel
+					key={fxChainTrack.id}
 					trackName={fxChainTrack.name}
 					instrument={fxChainTrack.type === "instrument" ? {
 						name: fxChainTrack.vst3PluginName ?? GM_PROGRAMS.find((program) => program.program === normalizeGmProgram(fxChainTrack.gmProgram ?? 0))?.label ?? "General MIDI instrument",
@@ -6212,6 +6238,7 @@ export default function DAW(_props: TabRendererProps) {
 					} : undefined}
 					effects={fxChainTrack.effects ?? []}
 					browserEffectsAvailable={!trackUsesNativeVst(fxChainTrack)}
+					initialPlan={agentFxPlan?.trackId === fxChainTrack.id ? agentFxPlan.plan : null}
 					onAddCompressor={() => addDynamicsC1(fxChainTrack.id)}
 					onAddBrowserEffect={(type) => addBrowserEffect(fxChainTrack.id, type)}
 					onToggle={(effectId) => toggleTrackEffect(fxChainTrack.id, effectId)}
@@ -6220,7 +6247,7 @@ export default function DAW(_props: TabRendererProps) {
 					onReorder={(from, to) => reorderTrackEffect(fxChainTrack.id, from, to)}
 					onPlan={(intent) => requestFxChainPlan(fxChainTrack, intent)}
 					onApplyPlan={(plan) => applyFxChainPlan(fxChainTrack, plan)}
-					onClose={() => { setFxChainTrackId(null); setFxEditorEffectId(null); }}
+					onClose={() => { setFxChainTrackId(null); setFxEditorEffectId(null); setAgentFxPlan(null); }}
 				/>,
 				document.body,
 			)}

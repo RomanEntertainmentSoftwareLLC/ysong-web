@@ -12,6 +12,7 @@ type MidiSource={trackName:string;startBar:number;lengthBars:number;notes:Array<
 type Props={
   open:boolean; onClose:()=>void; selectedTrack:TrackTarget|null; transportPlaying:boolean; bpm:number; sigNum:number; sigDen:number;
   projectSummary:string; initialKeyLabel?:string; midiSource?:MidiSource|null;
+  initialIntent?:string;
   onAssignInstrument:(instrument:InstrumentCatalogEntry)=>Promise<string|null>;
 };
 
@@ -20,7 +21,7 @@ const db=(n:number)=>Number.isFinite(n)?`${n.toFixed(1)} dB`:'—';
 function messageOf(error:unknown,fallback:string){ return error instanceof Error && error.message ? error.message : fallback; }
 function desiredTerms(value:string){ return value.split(/[\s,;/|]+/).map((x)=>x.trim()).filter((x)=>x.length>1).slice(0,32); }
 
-export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transportPlaying,bpm,sigNum,sigDen,projectSummary,initialKeyLabel='',midiSource=null,onAssignInstrument}:Props){
+export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transportPlaying,bpm,sigNum,sigDen,projectSummary,initialKeyLabel='',midiSource=null,initialIntent,onAssignInstrument}:Props){
   const [status,setStatus]=useState<SoundDesignerStatus|null>(null);
   const [desired,setDesired]=useState('icy demonic pluck that does not interfere with the vocal');
   const [role,setRole]=useState('lead / pluck');
@@ -68,6 +69,7 @@ export default function AiSoundDesignerPanel({open,onClose,selectedTrack,transpo
   },[midiSource,bpm,sigNum,sigDen]);
 
   useEffect(()=>{ if(initialKeyLabel)setKeyLabel(initialKeyLabel); },[initialKeyLabel,selectedTrack?.id]);
+  useEffect(()=>{ if(initialIntent)setDesired(initialIntent); },[initialIntent]);
 
   useEffect(()=>{
     if(!open)return;
