@@ -12,6 +12,7 @@ export const YSongDepthOfFieldShader = {
 		focusRange: { value: 1.5 },
 		dofBalance: { value: 0.0 },
 		maxBlur: { value: 10.0 },
+		aperture: { value: 2.8 },
 		bokehSize: { value: 1.0 },
 		bokehBlades: { value: 8.0 },
 		bokehRotation: { value: 0.0 },
@@ -37,6 +38,7 @@ export const YSongDepthOfFieldShader = {
 		uniform float focusRange;
 		uniform float dofBalance;
 		uniform float maxBlur;
+		uniform float aperture;
 		uniform float bokehSize;
 		uniform float bokehBlades;
 		uniform float bokehRotation;
@@ -83,7 +85,7 @@ export const YSongDepthOfFieldShader = {
 				gl_FragColor = original;
 				return;
 			}
-			float depth = texture2D(tDepth, vUv).x;
+			float depth = unpackRGBAToDepth(texture2D(tDepth, vUv));
 			float factor = blurFactorForDepth(depth);
 			if (factor < 0.002) {
 				gl_FragColor = original;
@@ -91,7 +93,8 @@ export const YSongDepthOfFieldShader = {
 			}
 
 			vec2 texel = 1.0 / max(resolution, vec2(1.0));
-			float radiusPx = maxBlur * factor * max(0.1, bokehSize);
+			// F-stop controls the aperture diameter; 2.8 preserves existing shots.
+			float radiusPx = maxBlur * factor * max(0.1, bokehSize) * (2.8 / max(0.7, aperture));
 			vec3 sum = boostedSample(original.rgb) * 1.6;
 			float weight = 1.6;
 			// Fixed sample count keeps this predictable on older GPUs. The blade count

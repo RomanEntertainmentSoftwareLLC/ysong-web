@@ -2850,7 +2850,9 @@ export default function VisualOutput() {
 		let lastRendererWarning = "";
 		const reportRendererWarning = (stage: string, caught: unknown) => {
 			const detail = caught instanceof Error ? caught.message : String(caught || "Unknown renderer error");
-			const message = `Visual renderer fallback (${stage}): ${detail}`;
+			const message = stage.startsWith("Depth of Field")
+				? `Depth of Field output unavailable (${stage}): ${detail}`
+				: `Visual renderer fallback (${stage}): ${detail}`;
 			if (message === lastRendererWarning) return;
 			lastRendererWarning = message;
 			channel.postMessage({
@@ -2912,7 +2914,7 @@ export default function VisualOutput() {
 				try {
 					postRuntimes.push(makePostRuntime(module));
 				} catch (caught) {
-					reportRendererWarning(`Post FX · ${module.name || module.type}`, caught);
+					reportRendererWarning(module.type === "depthOfField" ? "Depth of Field" : `Post FX · ${module.name || module.type}`, caught);
 				}
 			}
 			composer.passes.length = 0;
@@ -5432,6 +5434,7 @@ export default function VisualOutput() {
 					uniforms.focusRange.value = Math.max(0.02, programCamera.focusRange);
 					uniforms.dofBalance.value = Math.max(-1, Math.min(1, programCamera.dofBalance));
 					uniforms.maxBlur.value = Math.max(0, programCamera.maxBlur);
+					uniforms.aperture.value = Math.max(0.7, programCamera.aperture);
 					uniforms.bokehSize.value = Math.max(0.1, programCamera.bokehSize);
 					uniforms.bokehBlades.value = Math.max(3, programCamera.bokehBlades);
 					uniforms.bokehRotation.value = THREE.MathUtils.degToRad(programCamera.bokehRotation);
@@ -5456,6 +5459,7 @@ export default function VisualOutput() {
 						uniforms.focusRange.value = Math.max(0.02, previewCamera.focusRange);
 						uniforms.dofBalance.value = Math.max(-1, Math.min(1, previewCamera.dofBalance));
 						uniforms.maxBlur.value = Math.max(0, previewCamera.maxBlur);
+						uniforms.aperture.value = Math.max(0.7, previewCamera.aperture);
 						uniforms.bokehSize.value = Math.max(0.1, previewCamera.bokehSize);
 						uniforms.bokehBlades.value = Math.max(3, previewCamera.bokehBlades);
 						uniforms.bokehRotation.value = THREE.MathUtils.degToRad(previewCamera.bokehRotation);
@@ -6567,7 +6571,12 @@ export default function VisualOutput() {
 				}
 				composer.render();
 			} catch (caught) {
-				reportRendererWarning("post-processing/render", caught);
+				reportRendererWarning(
+					postRuntimes.some(runtime => runtime.type === "depthOfField" && runtime.pass.enabled)
+						? "Depth of Field render"
+						: "post-processing/render",
+					caught,
+				);
 				// Drop optional passes for this frame and keep the core renderer alive. This
 				// preserves free-roam, scene objects, Spectrum and authored overlays.
 				for (const runtime of postRuntimes) runtime.pass.enabled = false;
