@@ -17,6 +17,8 @@ export type StudioVisualClip = StudioClipBase & {
   mediaId?: string; // Resolves against ReusableAdCreative.backgroundMedia.
   overlayId?: string; // Resolves against ReusableAdCreative.overlays for image/sticker/logo assets.
   sourceInSeconds: number; sourceOutSeconds: number;
+  /** Source video playback multiplier. Audio embedded in video remains muted in Studio preview. */
+  speed?: 0.5 | 0.75 | 1 | 1.25 | 1.5 | 2;
   transform: StudioTransform;
 };
 export type StudioAudioClip = StudioClipBase & {
@@ -154,6 +156,7 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         if (!refs.overlayIds?.includes(string(clip.overlayId, "clip.overlayId"))) fail("unknown overlayId");
         const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
         if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
+        if (clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
         checkTransform(clip.transform, "clip.transform");
       } else {
         const idKey = track.kind === "audio" ? "snippetId" : "mediaId";
@@ -161,6 +164,7 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         if (!(track.kind === "audio" ? refs.audioSnippetIds : refs.backgroundMediaIds).includes(ref)) fail(`unknown ${idKey}`);
         const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
         if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
+        if (track.kind === "visual" && clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
         if (track.kind === "audio") { const volume = number(clip.volume, "volume", 0); if (volume > 1) fail("volume"); }
         else checkTransform(clip.transform, "clip.transform");
       }

@@ -2,6 +2,7 @@ import type { ReusableAdCreative } from "./api";
 import type { CreativeStudioProject, StudioTrack, StudioTransform } from "./creativeStudioProject";
 
 export type StudioSource = { id: string; kind: StudioTrack["kind"]; label: string; identity: string; track: StudioTrack };
+export const STUDIO_VIDEO_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const transform: StudioTransform = { x: .5, y: .5, scale: 1, rotationDegrees: 0, opacity: 1 };
 const style = { fontSize: 48, color: "#ffffff" };
 const clipBase = (id: string, frames: number) => ({ id: `clip:${id}`, startFrame: 0, durationFrames: frames, keyframes: [] });
@@ -38,6 +39,21 @@ export function studioSources(creative: Pick<ReusableAdCreative, "audioSnippets"
 export function addStudioSource(project: CreativeStudioProject, source: StudioSource): CreativeStudioProject {
   if (project.tracks.some(track => track.id === source.id) || project.tracks.length >= 12) return project;
   return { ...project, tracks: [...project.tracks, source.track] };
+}
+
+/** Changes source playback speed and recalculates timeline length from the unchanged source range. */
+export function setStudioVideoSpeed(project: CreativeStudioProject, trackId: string, clipId: string, speed: typeof STUDIO_VIDEO_SPEEDS[number], fps: number): CreativeStudioProject {
+  const track = project.tracks.find(item => item.id === trackId);
+  const clip = track?.kind === "visual" ? track.clips.find(item => item.id === clipId) : undefined;
+  if (!track || track.kind !== "visual" || !clip || track.locked || !STUDIO_VIDEO_SPEEDS.includes(speed)) return project;
+  const durationFrames = Math.max(1, Math.round((clip.sourceOutSeconds - clip.sourceInSeconds) / speed * fps));
+  if (clip.startFrame + durationFrames > project.durationFrames) return project;
+  const ratio = durationFrames / clip.durationFrames;
+  const transitionIn = clip.transitionIn && { ...clip.transitionIn, durationFrames: Math.min(durationFrames, Math.round(clip.transitionIn.durationFrames * ratio)) };
+  const transitionOut = clip.transitionOut && { ...clip.transitionOut, durationFrames: Math.min(durationFrames - (transitionIn?.durationFrames || 0), Math.round(clip.transitionOut.durationFrames * ratio)) };
+  const updated = { ...clip, speed, durationFrames, transitionIn, transitionOut,
+    keyframes: clip.keyframes.flatMap(key => { const frame = Math.round(key.frame * ratio); return frame < durationFrames ? [{ ...key, frame }] : []; }) };
+  return { ...project, tracks: project.tracks.map(item => item.id === trackId && item.kind === "visual" ? { ...item, clips: item.clips.map(value => value.id === clipId ? updated : value) } : item) };
 }
 
 export function moveStudioTrack(project: CreativeStudioProject, trackId: string, direction: -1 | 1): CreativeStudioProject {
