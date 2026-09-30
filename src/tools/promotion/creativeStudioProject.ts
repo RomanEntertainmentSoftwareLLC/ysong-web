@@ -45,12 +45,17 @@ export type StudioTrack =
   | { id: string; kind: "text"; visible?: boolean; locked?: boolean; clips: StudioTextClip[] };
 
 /** Arrays are ordered bottom-to-top for visuals/text and top-to-bottom for audio. */
+export type StudioAspectRatio = "9:16" | "1:1" | "16:9";
+export type StudioAspectVariant = { width: number; height: number; tracks: StudioTrack[] };
+
 export type CreativeStudioProject = {
   schemaVersion: 1;
   revision: number; // Server-assigned, monotonically increasing; 0 for a new project.
   durationFrames: number;
   timebase: StudioTimebase;
   tracks: StudioTrack[];
+  /** Independent editorial tracks and transforms for social crops; media IDs remain shared. */
+  variants?: Partial<Record<StudioAspectRatio, StudioAspectVariant>>;
   render: {
     width: number; height: number; videoCodec: "h264";
     audioCodec: "aac"; backgroundColor: string;
@@ -96,6 +101,17 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
   if (edit.summary !== undefined) string(edit.summary, "summary");
   if (edit.parentRevision !== undefined) number(edit.parentRevision, "parentRevision", 0, true);
   choice(edit.source, ["artist", "template", "generated", "import"], "edit.source");
+  if (project.variants !== undefined) {
+    const variants = record(project.variants, "variants");
+    for (const aspect of ["9:16", "1:1", "16:9"] as const) {
+      if (variants[aspect] === undefined) continue;
+      const variant = record(variants[aspect], `variants.${aspect}`);
+      const width = number(variant.width, `variants.${aspect}.width`, 1, true);
+      const height = number(variant.height, `variants.${aspect}.height`, 1, true);
+      if (width > 4096 || height > 4096) fail(`variants.${aspect} dimensions`);
+      validateCreativeStudioProject({ ...project, variants: undefined, tracks: variant.tracks, render: { ...render, width, height } }, refs);
+    }
+  }
   const tracks = array(project.tracks, "tracks");
   if (tracks.length > 12) fail("too many tracks");
   const ids = new Set<string>();

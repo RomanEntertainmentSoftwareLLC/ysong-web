@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { promotionApi, type AdCreative, type ReusableAdCreative } from "./api";
-import type { CreativeStudioProject } from "./creativeStudioProject";
+import type { CreativeStudioProject, StudioAspectRatio } from "./creativeStudioProject";
 import { createStudioHistory, editStudioHistory, redoStudioHistory, undoStudioHistory, type StudioHistory } from "./creativeStudioHistory";
 import { studioSources } from "./creativeStudioTracks";
 import CreativeStudioTimeline from "./CreativeStudioTimeline";
@@ -15,6 +15,7 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [aspect, setAspect] = useState<StudioAspectRatio>("9:16");
   const owner = creative.stableCreativeId && creative.audioSnippets && creative.backgroundMedia
     ? { id: creative.stableCreativeId, name: `Creative ${creative.stableCreativeId.slice(0, 8)}`, audioSnippets: creative.audioSnippets, backgroundMedia: creative.backgroundMedia, overlays: creative.overlays || [], caption: creative.caption || { text: "" }, cta: creative.cta || { label: "" } } satisfies Pick<ReusableAdCreative,"id"|"name"|"audioSnippets"|"backgroundMedia"|"overlays"|"caption"|"cta">
     : null;
@@ -30,9 +31,16 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: {
         timebase: { framesPerSecond: { numerator: 30, denominator: 1 } },
         tracks: studioSources(owner, durationFrames, 30).slice(0, 12).map(source => source.track),
         render: { width: 1080, height: 1920, videoCodec: "h264", audioCodec: "aac", backgroundColor: "#000000" },
+        variants: {},
         edit: { createdAt: creative.createdAt || now, updatedAt: now, source: "artist", parentRevision: 0 },
       };
-      setProject(value); setBaseline(value || starter); setHistory(createStudioHistory(value || starter)); setLoading(false);
+      const source = value || starter;
+      const dimensions: Record<StudioAspectRatio, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "16:9": [1920, 1080] };
+      const normalized: CreativeStudioProject = { ...source, variants: Object.fromEntries((Object.keys(dimensions) as StudioAspectRatio[]).map(key => {
+        const [width, height] = dimensions[key];
+        return [key, source.variants?.[key] || { width, height, tracks: source.tracks }];
+      })) };
+      setAspect("9:16"); setProject(value); setBaseline(normalized); setHistory(createStudioHistory(normalized)); setLoading(false);
     } }).catch(cause => { if (active) { setLoadFailed(true); setError(cause instanceof Error ? cause.message : "Could not load this creative's project."); setLoading(false); } });
     return () => { active = false; };
     // The reusable creative ID determines the read; campaign render refreshes do not.
@@ -44,6 +52,12 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: {
   if (!history || !baseline) return null;
   const current = history.present;
   const dirty = current !== baseline || (!project && current.tracks.length > 0);
+  const dimensions: Record<StudioAspectRatio, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "16:9": [1920, 1080] };
+  const activeVariant = current.variants?.[aspect];
+  const editingProject: CreativeStudioProject = { ...current, tracks: activeVariant?.tracks || current.tracks, render: { ...current.render, width: activeVariant?.width || dimensions[aspect][0], height: activeVariant?.height || dimensions[aspect][1] } };
+  function updateAspectProject(next: CreativeStudioProject, group?: string) {
+    setHistory(value => value && editStudioHistory(value, { ...current, variants: { ...current.variants, [aspect]: { width: next.render.width, height: next.render.height, tracks: next.tracks } } }, group));
+  }
   async function save() {
     if (!owner) return;
     setSaving(true); setError(""); setNotice("");
@@ -62,8 +76,8 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl }: {
     if (key === "z" && !event.shiftKey && history.past.length) { event.preventDefault(); setHistory(value => value && undoStudioHistory(value)); }
     else if (((key === "z" && event.shiftKey) || key === "y") && history.future.length) { event.preventDefault(); setHistory(value => value && redoStudioHistory(value)); }
   }}>
-    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><span className="text-neutral-500">{project ? `Revision ${project.revision}` : "New timeline from creative assets"}</span><button type="button" disabled={!history.past.length || saving} onClick={() => setHistory(value => value && undoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Undo</button><button type="button" disabled={!history.future.length || saving} onClick={() => setHistory(value => value && redoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Redo</button><button type="button" disabled={!dirty || saving} onClick={() => void save()} className="rounded border border-violet-500 px-3 py-2 font-semibold text-violet-600 disabled:opacity-40">{saving ? "Saving…" : "Save timeline"}</button><button type="button" disabled={!dirty || saving} onClick={() => setHistory(createStudioHistory(baseline))} className="rounded border px-3 py-2 disabled:opacity-40">Discard edits</button>{dirty && <span>Unsaved changes</span>}</div>
+    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><label className="flex items-center gap-2 font-medium">Social aspect<select aria-label="Social aspect ratio" value={aspect} disabled={saving} onChange={event => setAspect(event.target.value as StudioAspectRatio)} className="rounded border bg-transparent p-2"><option value="9:16">9:16 Vertical</option><option value="1:1">1:1 Square</option><option value="16:9">16:9 Landscape</option></select></label><span className="text-neutral-500">Each layout keeps its own crop and overlay positions.</span><span className="text-neutral-500">{project ? `Revision ${project.revision}` : "New timeline from creative assets"}</span><button type="button" disabled={!history.past.length || saving} onClick={() => setHistory(value => value && undoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Undo</button><button type="button" disabled={!history.future.length || saving} onClick={() => setHistory(value => value && redoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Redo</button><button type="button" disabled={!dirty || saving} onClick={() => void save()} className="rounded border border-violet-500 px-3 py-2 font-semibold text-violet-600 disabled:opacity-40">{saving ? "Saving…" : "Save timeline"}</button><button type="button" disabled={!dirty || saving} onClick={() => setHistory(createStudioHistory(baseline))} className="rounded border px-3 py-2 disabled:opacity-40">Discard edits</button>{dirty && <span>Unsaved changes</span>}</div>
     {error && <p role="alert" className="mb-2 text-xs text-amber-600">{error}</p>}{notice && <p role="status" className="mb-2 text-xs text-emerald-600">{notice}</p>}
-    <div inert={saving}><CreativeStudioTimeline creative={owner} project={current} onChange={(next, group) => setHistory(value => value && editStudioHistory(value, next, group))} mediaUrls={mediaUrls} audioUrl={audioUrl} /></div>
+    <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={mediaUrls} audioUrl={audioUrl} /></div>
   </div>;
 }
