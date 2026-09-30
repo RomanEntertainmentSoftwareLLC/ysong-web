@@ -1,4 +1,6 @@
 import { AUTH_BASE } from "../../lib/authApi";
+import type { CreativeStudioProject } from "./creativeStudioProject";
+import { validateCreativeStudioProject } from "./creativeStudioProject";
 
 export type PromotionDestination = { id?: string; platform: string; label: string; url: string; kind: "stream"|"presave"|"social"|"store"|"other"; position?: number; enabled: boolean };
 export type PromotionTrack = { id:string; title:string; genre:string; tags?:unknown[]; explicit?:boolean; isrc?:string|null; trackNumber?:number; durationSeconds?:number|null; audioObjectKey?:string };
@@ -29,6 +31,8 @@ export type ReusableAdCreative = {
   audioSnippets:AdCreativeAudioSnippetRef[];backgroundMedia:AdCreativeBackgroundMediaRef[];overlays:AdCreativeOverlay[];
   cta:{label:string;destinationUrl?:string;destinationId?:string};caption:{text:string;language?:string};
   aspectRatio:AdCreativeAspectRatio;timing:AdCreativeTiming;edit:AdCreativeEditMetadata;provenance:AdCreativeProvenance;
+  /** Versioned source edit. Render outputs remain derived artifacts. */
+  studioProject?:CreativeStudioProject|null;
   renderStatus:AdCreativeRenderStatus;renderError:string|null;renders:Array<{aspectRatio:AdCreativeAspectRatio;objectKey:string;status:AdCreativeRenderStatus;durationSeconds:number|null}>;
   createdAt:string;updatedAt:string;
 };
@@ -60,7 +64,7 @@ export type PromotionIntelligenceResponse = {analytics:PaidAdAnalytics;intellige
 function token(){ try{return localStorage.getItem("ys_token")||localStorage.getItem("ysong_auth_token")||"";}catch{return "";} }
 async function request<T>(path:string, init:RequestInit={}):Promise<T>{
   const headers=new Headers(init.headers||{}); if(!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) headers.set("Content-Type","application/json"); const t=token(); if(t)headers.set("Authorization",`Bearer ${t}`);
-  const res=await fetch(`${AUTH_BASE}${path}`,{...init,headers,credentials:"include"}); const data=await res.json().catch(()=>({})); if(!res.ok) throw new Error(String(data?.message||data?.error||`HTTP ${res.status}`)); return data as T;
+  const res=await fetch(`${AUTH_BASE}${path}`,{...init,headers,credentials:"include"}); const data=await res.json().catch(()=>({})); if(!res.ok) throw Object.assign(new Error(String(data?.message||data?.error||`HTTP ${res.status}`)),{status:res.status}); return data as T;
 }
 const ROOT="/api/tools/promotion";
 export const promotionApi={
@@ -90,6 +94,26 @@ export const promotionApi={
   deleteSnippet:(id:string,snippetId:string)=>request<{ok:boolean}>(`${ROOT}/ad-campaigns/${id}/snippets/${snippetId}`,{method:"DELETE"}),
   renderBatch:(id:string,body:{snippetIds:string[];backgroundVideoIds:string[];libraryId?:string|null;backgroundFit?:"crop"|"fit"})=>request<{queued:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/render`,{method:"POST",body:JSON.stringify(body)}),
   creatives:(id:string)=>request<{creatives:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/creatives`),
+  loadStudioProject:async(creative:ReusableAdCreative)=>{
+    const out=await request<{project:CreativeStudioProject|null}>(`${ROOT}/creatives/${encodeURIComponent(creative.id)}/studio-project`);
+    if(out.project!==null)validateCreativeStudioProject(out.project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId)});
+    return out.project;
+  },
+  /** The reusable creative owns this edit; the server must compare expectedRevision atomically. */
+  saveStudioProject:async(creative:ReusableAdCreative, project:CreativeStudioProject)=>{
+    validateCreativeStudioProject(project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId)});
+    if(project.edit.parentRevision!==project.revision)throw new Error("Studio edit parent revision must match the saved revision.");
+    const out=await request<{creative:ReusableAdCreative}>(`${ROOT}/creatives/${encodeURIComponent(creative.id)}/studio-project`,{
+      method:"PUT",body:JSON.stringify({expectedRevision:project.revision,project}),
+    }).catch((error:Error&{status?:number})=>{
+      if(error.status===409)throw Object.assign(new Error("This creative changed elsewhere. Reload the project before saving."),{status:409});
+      throw error;
+    });
+    if(out.creative.id!==creative.id||!out.creative.studioProject)throw new Error("Studio save response is missing the project.");
+    validateCreativeStudioProject(out.creative.studioProject,{audioSnippetIds:out.creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:out.creative.backgroundMedia.map(x=>x.mediaId)});
+    if(out.creative.studioProject.revision!==project.revision+1)throw new Error("Studio save response has an unexpected revision.");
+    return out;
+  },
   patchCreative:(id:string,creativeId:string,body:Record<string,unknown>)=>request<{creative:AdCreative}>(`${ROOT}/ad-campaigns/${id}/creatives/${creativeId}`,{method:"PATCH",body:JSON.stringify(body)}),
   retryCreative:(id:string,creativeId:string)=>request<{creative:AdCreative}>(`${ROOT}/ad-campaigns/${id}/creatives/${creativeId}/retry`,{method:"POST",body:"{}"}),
   backgrounds:()=>request<{backgroundVideos:BackgroundVideo[]}>(`${ROOT}/background-videos`),
