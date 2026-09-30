@@ -1,4 +1,4 @@
-import type { CreativeStudioProject, StudioTrack } from "./creativeStudioProject";
+import type { CreativeStudioProject, StudioAudioClip, StudioTextClip, StudioTrack, StudioVisualClip } from "./creativeStudioProject";
 import { validateCreativeStudioProject } from "./creativeStudioProject.ts";
 
 export type CriticRange = { startFrame: number; endFrame: number }; // Half open, in the selected Studio timebase.
@@ -8,7 +8,7 @@ export type CriticSignal = {
   id: string;
   kind: "measured" | "heuristic" | "uncertainty";
   code: "timeline_duration" | "visual_gap" | "audio_gap" | "overlay_duration" |
-    "brief_opening" | "dense_text" | "late_cta" |
+    "brief_opening" | "dense_text" | "late_cta" | "long_visual_hold" |
     "render_unchecked" | "source_duration_unverified" | "placement_unverified";
   severity: CriticSeverity;
   confidence: number; // Deterministic engine confidence, 0..1; never an outcome probability.
@@ -38,8 +38,49 @@ export type AdsCriticInterpretation = {
 };
 export type AdsCriticResponse = { schemaVersion: 1; interpretations: AdsCriticInterpretation[] };
 
+/** Produce observations and bounded editorial heuristics from saved Studio metadata. */
+export function analyzeAdsCreativeTimeline(project: CreativeStudioProject): CriticSignal[] {
+  const tracks: StudioTrack[] = project.variants?.["9:16"]?.tracks || project.tracks;
+  const fps = project.timebase.framesPerSecond.numerator / project.timebase.framesPerSecond.denominator;
+  const result: CriticSignal[] = [];
+  let serial = 0;
+  const add = (signal: Omit<CriticSignal, "id">) => result.push({ ...signal, id: `critic-${++serial}` });
+  const visual: StudioVisualClip[] = tracks.flatMap(track => track.kind === "visual" ? track.clips : []).sort((a, b) => a.startFrame - b.startFrame);
+  const audio: StudioAudioClip[] = tracks.flatMap(track => track.kind === "audio" ? track.clips : []).sort((a, b) => a.startFrame - b.startFrame);
+  const texts: StudioTextClip[] = tracks.flatMap(track => track.kind === "text" && track.visible !== false ? track.clips : []);
+  const gapSignals = (kind: "visual" | "audio", rows: Array<{ id: string; startFrame: number; durationFrames: number }>) => {
+    let cursor = 0;
+    for (const row of rows) {
+      if (row.startFrame > cursor) {
+        const startFrame = cursor, endFrame = row.startFrame;
+        add({ kind: "measured", code: kind === "visual" ? "visual_gap" : "audio_gap", severity: "warning", confidence: 1, range: { startFrame, endFrame }, clipIds: [], overlayIds: [], observation: { value: endFrame - startFrame, unit: "frames" }, rule: null });
+      }
+      cursor = Math.max(cursor, row.startFrame + row.durationFrames);
+    }
+    if (cursor < project.durationFrames) add({ kind: "measured", code: kind === "visual" ? "visual_gap" : "audio_gap", severity: "warning", confidence: 1, range: { startFrame: cursor, endFrame: project.durationFrames }, clipIds: [], overlayIds: [], observation: { value: project.durationFrames - cursor, unit: "frames" }, rule: null });
+  };
+  add({ kind: "measured", code: "timeline_duration", severity: "info", confidence: 1, range: { startFrame: 0, endFrame: project.durationFrames }, clipIds: [], overlayIds: [], observation: { value: project.durationFrames / fps, unit: "seconds" }, rule: null });
+  gapSignals("visual", visual);
+  gapSignals("audio", audio);
+  for (const clip of texts) {
+    const startFrame = clip.startFrame, endFrame = startFrame + clip.durationFrames;
+    add({ kind: "measured", code: "overlay_duration", severity: "info", confidence: 1, range: { startFrame, endFrame }, clipIds: [clip.id], overlayIds: clip.overlayId ? [clip.overlayId] : [], observation: { value: clip.durationFrames / fps, unit: "seconds" }, rule: null });
+    const chars = clip.text.trim().length;
+    if (chars > 18) add({ kind: "heuristic", code: "dense_text", severity: "warning", confidence: 0.7, range: { startFrame, endFrame }, clipIds: [clip.id], overlayIds: clip.overlayId ? [clip.overlayId] : [], observation: { value: chars, unit: "characters" }, rule: { id: "text-density", version: 1, threshold: 18, unit: "characters" } });
+  }
+  const firstVisual = visual[0];
+  if (firstVisual && firstVisual.startFrame / fps > 0.5) add({ kind: "heuristic", code: "brief_opening", severity: "warning", confidence: 0.7, range: { startFrame: 0, endFrame: firstVisual.startFrame }, clipIds: [], overlayIds: [], observation: { value: firstVisual.startFrame / fps, unit: "seconds" }, rule: { id: "opening-visual-delay", version: 1, threshold: 0.5, unit: "seconds" } });
+  for (const clip of visual) if (clip.durationFrames / fps > 4) add({ kind: "heuristic", code: "long_visual_hold", severity: "info", confidence: 0.65, range: { startFrame: clip.startFrame, endFrame: clip.startFrame + clip.durationFrames }, clipIds: [clip.id], overlayIds: [], observation: { value: clip.durationFrames / fps, unit: "seconds" }, rule: { id: "visual-segment-duration", version: 1, threshold: 4, unit: "seconds" } });
+  const cta = texts.filter(clip => clip.source === "cta").sort((a, b) => a.startFrame - b.startFrame).at(-1);
+  if (cta && cta.startFrame / project.durationFrames > 0.75) add({ kind: "heuristic", code: "late_cta", severity: "info", confidence: 0.65, range: { startFrame: cta.startFrame, endFrame: cta.startFrame + cta.durationFrames }, clipIds: [cta.id], overlayIds: cta.overlayId ? [cta.overlayId] : [], observation: { value: cta.startFrame / fps, unit: "seconds" }, rule: { id: "cta-start-position", version: 1, threshold: project.durationFrames * 0.75 / fps, unit: "seconds" } });
+  add({ kind: "uncertainty", code: "render_unchecked", severity: "info", confidence: 0, range: { startFrame: 0, endFrame: project.durationFrames }, clipIds: [], overlayIds: [], observation: null, rule: null });
+  add({ kind: "uncertainty", code: "source_duration_unverified", severity: "info", confidence: 0, range: { startFrame: 0, endFrame: project.durationFrames }, clipIds: [], overlayIds: [], observation: null, rule: null });
+  add({ kind: "uncertainty", code: "placement_unverified", severity: "info", confidence: 0, range: { startFrame: 0, endFrame: project.durationFrames }, clipIds: [], overlayIds: [], observation: null, rule: null });
+  return result;
+}
+
 const measured = ["timeline_duration", "visual_gap", "audio_gap", "overlay_duration"];
-const heuristics = ["brief_opening", "dense_text", "late_cta"];
+const heuristics = ["brief_opening", "dense_text", "late_cta", "long_visual_hold"];
 const uncertainties = ["render_unchecked", "source_duration_unverified", "placement_unverified"];
 const fail = (reason: string): never => { throw new Error(`Invalid Ads Critic evidence: ${reason}`); };
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);

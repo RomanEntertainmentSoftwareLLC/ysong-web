@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAdsCriticEvidence, validateAdsCriticResponse } from "../src/tools/promotion/adsCriticEvidenceContract.ts";
+import { analyzeAdsCreativeTimeline, buildAdsCriticEvidence, validateAdsCriticResponse } from "../src/tools/promotion/adsCriticEvidenceContract.ts";
 
 const project = {
   schemaVersion: 1, revision: 3, durationFrames: 300,
@@ -42,4 +42,18 @@ test("AI commentary must cite existing evidence and cannot add action or outcome
   assert.throws(() => validateAdsCriticResponse({ schemaVersion: 1, interpretations: [{ ...row, evidenceIds: ["fabricated"] }] }, packet), /unsupported evidence/);
   assert.throws(() => validateAdsCriticResponse({ schemaVersion: 1, interpretations: [{ ...row, publish: true }] }, packet), /fields/);
   assert.throws(() => validateAdsCriticResponse({ schemaVersion: 1, interpretations: [{ ...row, explanation: "This will increase clicks." }] }, packet), /explanation/);
+});
+
+test("derives opening, timeline gaps, text density, and explicit render uncertainties", () => {
+  const edited = structuredClone(project);
+  edited.tracks[0].clips[0].startFrame = 30;
+  edited.tracks[0].clips[0].durationFrames = 240;
+  edited.tracks[1].clips[0].text = "A longer overlay that may be hard to read";
+  const signals = analyzeAdsCreativeTimeline(edited);
+  assert.ok(signals.some(item => item.code === "brief_opening" && item.kind === "heuristic"));
+  assert.ok(signals.some(item => item.code === "visual_gap" && item.kind === "measured"));
+  assert.ok(signals.some(item => item.code === "audio_gap" && item.kind === "measured"));
+  assert.ok(signals.some(item => item.code === "dense_text" && item.kind === "heuristic"));
+  assert.ok(signals.some(item => item.code === "render_unchecked" && item.kind === "uncertainty"));
+  assert.doesNotThrow(() => buildAdsCriticEvidence({ ...input(signals), project: edited }));
 });
