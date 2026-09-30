@@ -15,6 +15,8 @@ type Props={
   creatives:AdCreative[];
   creativeUrls:Record<string,{vertical?:string;feed?:string}>;
   interestSeeds?:string[];
+  assistantInterest?:MetaInterest|null;
+  onAssistantInterestConsumed?:()=>void;
   onSaved:(ad:AdCampaign)=>void;
   onMessage:(value:string)=>void;
 };
@@ -76,7 +78,7 @@ function overlaySettings(value:unknown):AdOverlaySettings{if(!value||typeof valu
 function formatAudienceNumber(n:number|undefined){return Number(n||0).toLocaleString();}
 function formatAudienceRange(item:{audienceSizeLower?:number;audienceSizeUpper?:number}){const low=Number(item.audienceSizeLower||0),high=Number(item.audienceSizeUpper||0);if(!low&&!high)return "Audience estimate unavailable";return `Audience Between: ${formatAudienceNumber(low)} - ${formatAudienceNumber(high||low)}`;}
 
-export default function AudienceCampaignSetup({ad,smartLink,health,creatives,creativeUrls,interestSeeds=[],onSaved,onMessage}:Props){
+export default function AudienceCampaignSetup({ad,smartLink,health,creatives,creativeUrls,interestSeeds=[],assistantInterest,onAssistantInterestConsumed,onSaved,onMessage}:Props){
   const [view,setView]=useState<SetupView>("audience");
   const [catalog,setCatalog]=useState<PromotionCatalog|null>(null);
   const [targeting,setTargeting]=useState<AdTargeting>(()=>asTargeting(ad.targeting));
@@ -158,6 +160,7 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
   function toggleCountry(code:string){setTargeting(v=>({...v,countries:v.countries.includes(code)?v.countries.filter(x=>x!==code):[...v.countries,code],countryPreset:"custom"}));}
   function togglePlacement(id:AdPlacementTarget){setTargeting(v=>{const next=v.placementTargets.includes(id)?v.placementTargets.filter(x=>x!==id):[...v.placementTargets,id];return {...v,placementTargets:next};});}
   function addResolvedInterest(item:MetaInterest){setTargeting(v=>({...v,interests:[...v.interests.filter(x=>x.id!==item.id),{id:item.id,name:item.name,audienceSizeLower:item.audienceSizeLower,audienceSizeUpper:item.audienceSizeUpper,path:item.path}].slice(0,200),interestKeywords:v.interestKeywords.filter(k=>k.toLowerCase()!==item.name.toLowerCase())}));setInterestQuery("");setInterestResults([]);}
+  useEffect(()=>{if(!assistantInterest)return;addResolvedInterest(assistantInterest);onAssistantInterestConsumed?.();},[assistantInterest]); // eslint-disable-line react-hooks/exhaustive-deps
   function searchSuggestion(seed:string){setInterestPickerOpen(true);setInterestQuery(seed);}
   async function uploadCover(files:FileList|null){const file=files?.[0];if(!file)return;setBusy(true);try{const out=await promotionApi.upload(file);setCoverArtObjectKey(out.objectKey);onMessage("Custom campaign cover art uploaded. Save settings to attach it to this draft.");}catch(e){onMessage(e instanceof Error?e.message:"Cover art upload failed.");}finally{setBusy(false);}}
   async function save(){

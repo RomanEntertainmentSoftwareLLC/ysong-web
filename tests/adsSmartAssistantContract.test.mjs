@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAdsAssistantContext, validateAdsAssistantResponse } from "../src/tools/promotion/adsSmartAssistantContract.ts";
+import { buildAdsAssistantContext, targetingDiscoveryTerms, validateAdsAssistantResponse } from "../src/tools/promotion/adsSmartAssistantContract.ts";
 
 function fixture() {
   const track = { id: "track-1", title: "Song", audioObjectKey: "private/master.wav", durationSeconds: 180, genre: "Pop" };
@@ -36,4 +36,13 @@ test("response accepts grounded advice and rejects actions and invented facts", 
   assert.doesNotThrow(() => validateAdsAssistantResponse(response, context));
   assert.throws(() => validateAdsAssistantResponse({ ...response, execute: { action: "publish" } }, context), /fields/);
   assert.throws(() => validateAdsAssistantResponse({ ...response, suggestions: [{ ...response.suggestions[0], evidencePaths: ["evidence.analytics.impressions"] }] }, context), /Unverifiable/);
+});
+
+test("discovery terms use verified genre context and exclude sensitive traits", () => {
+  const input = fixture();
+  input.release.genre = "Indie pop";
+  input.ad.genre = "Pop";
+  const context = buildAdsAssistantContext({ ...input, genreEvidence: { trackId: input.track.id, result: { engine: "audio", primary: "Synth pop", secondary: "Political identity", family: "Pop", related: ["Dream pop", "Health conditions"] } } });
+  assert.deepEqual(targetingDiscoveryTerms(context), ["Pop", "Indie pop", "Synth pop", "Dream pop"]);
+  assert.deepEqual(targetingDiscoveryTerms({ ...context, evidence: { ...context.evidence, audio: { ...context.evidence.audio, verified: false } } }), []);
 });

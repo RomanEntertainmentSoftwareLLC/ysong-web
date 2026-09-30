@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AdsAssistantContext, AdsAssistantResponse } from "./adsSmartAssistantContract";
-import { validateAdsAssistantResponse } from "./adsSmartAssistantContract";
+import { targetingDiscoveryTerms, validateAdsAssistantResponse } from "./adsSmartAssistantContract";
+import { promotionApi, type MetaInterest } from "./api";
 import type { AdsCriticEvidencePacket } from "./adsCriticEvidenceContract";
 
 const criticLabels: Record<string, string> = { timeline_duration: "Timeline duration", visual_gap: "Visual timeline gap", audio_gap: "Audio timeline gap", overlay_duration: "Overlay timing", brief_opening: "Opening visual starts late", dense_text: "Text may be dense", late_cta: "CTA appears late", long_visual_hold: "Long visual segment; review pacing", render_unchecked: "Rendered appearance not checked", source_duration_unverified: "Source media duration not checked", placement_unverified: "Placement preview not checked" };
@@ -22,8 +23,27 @@ function responseFor(context: AdsAssistantContext, selection: AdsStudioSelection
   return value;
 }
 
-export default function AdsSmartAssistantPanel({ context, selection, criticPacket, onReviewCritic, onCreateVariants, onNavigate }: { context: AdsAssistantContext | null; selection: AdsStudioSelection; criticPacket?: AdsCriticEvidencePacket | null; onReviewCritic?: () => void; onCreateVariants?: () => void; onNavigate: (step: "audio" | "generate" | "setup" | "intelligence") => void }) {
+export default function AdsSmartAssistantPanel({ context, selection, connectionId, onSelectInterest, criticPacket, onReviewCritic, onCreateVariants, onNavigate }: { context: AdsAssistantContext | null; selection: AdsStudioSelection; connectionId: string; onSelectInterest: (interest: MetaInterest) => void; criticPacket?: AdsCriticEvidencePacket | null; onReviewCritic?: () => void; onCreateVariants?: () => void; onNavigate: (step: "audio" | "generate" | "setup" | "intelligence") => void }) {
   const response = useMemo(() => context ? responseFor(context, selection) : null, [context, selection]);
+  const terms = useMemo(() => context ? targetingDiscoveryTerms(context) : [], [context]);
+  const [discovered, setDiscovered] = useState<MetaInterest[]>([]);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState("");
+  const discoverySequence = useRef(0);
+  const termKey = terms.join("|");
+  const campaignId = context?.evidence.campaign.id;
+  useEffect(() => { const sequence = discoverySequence; sequence.current++; setDiscovered([]); setDiscoveryError(""); setDiscoveryBusy(false); return () => { sequence.current++; }; }, [campaignId, connectionId, termKey]);
+  async function discover() {
+    if (!connectionId || !terms.length) return;
+    const sequence = ++discoverySequence.current;
+    setDiscoveryBusy(true); setDiscoveryError(""); setDiscovered([]);
+    try {
+      const responses = await Promise.all(terms.map(term => promotionApi.interests(term, connectionId, 20)));
+      if (sequence !== discoverySequence.current) return;
+      setDiscovered([...new Map(responses.flatMap(result => result.interests).filter(item => typeof item.id === "string" && item.id && typeof item.name === "string" && item.name).map(item => [item.id, item])).values()].slice(0, 40));
+    } catch (error) { if (sequence === discoverySequence.current) setDiscoveryError(error instanceof Error ? error.message : "Meta interest search failed."); }
+    finally { if (sequence === discoverySequence.current) setDiscoveryBusy(false); }
+  }
   if (!context || !response) return <section aria-label="Ads Smart Assistant" className="rounded-2xl border border-dashed border-neutral-300 p-4 text-sm text-neutral-500 dark:border-neutral-700"><div className="font-semibold text-neutral-700 dark:text-neutral-200">Ads Smart Assistant</div><p className="mt-1">Choose an Ads campaign with its verified track and Smart Link to get context-aware guidance.</p></section>;
   return <section aria-label="Ads Smart Assistant" className="rounded-2xl border border-violet-500/25 bg-violet-500/[0.035] p-4 dark:bg-violet-500/[0.04]">
     <div className="flex items-center justify-between gap-2"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Ads Smart Assistant</div><h3 className="mt-1 font-semibold">Current selection</h3></div><span className="rounded-full border border-violet-500/25 px-2 py-1 text-[10px] text-violet-600 dark:text-violet-300">Advisory</span></div>
@@ -33,6 +53,7 @@ export default function AdsSmartAssistantPanel({ context, selection, criticPacke
     {criticPacket && <button type="button" onClick={onReviewCritic} className="mt-2 rounded-lg border border-violet-500/50 px-3 py-1.5 text-xs font-medium text-violet-600 dark:text-violet-300">Review Critic fixes in Studio</button>}
     {onCreateVariants && <button type="button" onClick={onCreateVariants} className="mt-2 ml-2 rounded-lg border border-violet-500/50 px-3 py-1.5 text-xs font-medium text-violet-600 dark:text-violet-300">Create creative variants</button>}
     <p className="mt-3 text-sm text-neutral-700 dark:text-neutral-300">{response.summary}</p>
+    <div className="mt-3 rounded-xl border border-violet-500/20 bg-white/60 p-3 text-xs dark:bg-neutral-950/40"><div className="font-medium">Audience discovery</div><p className="mt-1 text-neutral-500">Search terms from the verified track’s campaign and release genres{context.evidence.genre.analysis ? " and in-session music analysis" : ""}: {terms.join(", ") || "none available"}. Search Meta to see actual interests. You choose any interest; nothing is added automatically.</p><button type="button" disabled={!connectionId || !terms.length || discoveryBusy} onClick={() => void discover()} className="mt-2 rounded-lg border border-violet-500/50 px-3 py-1.5 font-medium text-violet-600 disabled:opacity-40 dark:text-violet-300">{discoveryBusy ? "Searching Meta…" : "Discover Meta interests"}</button>{!connectionId && <p className="mt-2 text-amber-600">Connect a Meta account in setup to search interests.</p>}{discoveryError && <p className="mt-2 text-red-500">{discoveryError}</p>}{discovered.length > 0 && <div className="mt-3 flex flex-wrap gap-2" aria-label="Meta interest results">{discovered.map(item => <button type="button" key={item.id} onClick={() => onSelectInterest(item)} className="rounded-full border border-violet-500/40 px-2.5 py-1 text-left hover:bg-violet-500/10">{item.name} · Meta interest</button>)}</div>}{!discoveryBusy && !discoveryError && discovered.length === 0 && <p className="mt-2 text-neutral-500">No Meta interests loaded.</p>}</div>
     {response.suggestions.length > 0 ? <div className="mt-3 space-y-2">{response.suggestions.map((item, index) => <article key={`${item.kind}:${index}`} className="rounded-xl border border-neutral-200 bg-white/70 p-3 dark:border-neutral-800 dark:bg-neutral-950/35"><div className="flex items-center justify-between gap-2"><h4 className="text-sm font-medium">{item.title}</h4><span className="text-[10px] text-neutral-500">{item.confidence} confidence</span></div><p className="mt-1 text-xs leading-5 text-neutral-600 dark:text-neutral-400">{item.rationale}</p><div className="mt-2 flex flex-wrap items-center gap-2"><span className="text-[10px] text-neutral-400">{item.evidencePaths.length ? `Evidence: ${item.evidencePaths.join(", ")}` : "Inference · limited evidence"}</span>{item.kind === "measurement" && <button type="button" onClick={() => onNavigate("intelligence")} className="ml-auto rounded-lg border px-2.5 py-1.5 text-xs">Review evidence</button>}{item.kind === "destination" && <button type="button" onClick={() => onNavigate("setup")} className="ml-auto rounded-lg border px-2.5 py-1.5 text-xs">Review setup</button>}</div></article>)}</div> : <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs">No immediate concerns surfaced in this snapshot. You can keep editing and ask for another review.</div>}
     <p className="mt-3 text-[10px] text-neutral-500">Suggestions are structured and advisory. Review any change in the existing Ads workflow; nothing is applied or published here.</p>
   </section>;

@@ -23,6 +23,17 @@ export type AdsAssistantContext = {
 export type AdsAssistantSuggestion = { kind: "creative" | "audience" | "budget" | "destination" | "measurement"; title: string; rationale: string; evidencePaths: string[]; confidence: "low" | "medium" | "high" };
 export type AdsAssistantResponse = { schemaVersion: 1; summary: string; suggestions: AdsAssistantSuggestion[] };
 
+/** Discovery terms only. Meta supplies IDs; the artist chooses any resulting interest. */
+export function targetingDiscoveryTerms(context: AdsAssistantContext): string[] {
+  if (!context.evidence.audio.verified) return [];
+  const { release, genre } = context.evidence;
+  const candidates = [genre.campaignGenre, release.genre, genre.analysis?.primary, genre.analysis?.secondary, genre.analysis?.family, ...(genre.analysis?.related || [])];
+  const sensitive = /\b(religion|religious|christian|muslim|islam|jewish|hindu|buddhist|politic\w*|democrat\w*|republican\w*|ethnic\w*|race|racial|sexual\w*|lgbt\w*|queer|gay|lesbian|transgender|health|disease|disability|income|debt)\b/i;
+  return [...new Set(candidates.filter((term): term is string => typeof term === "string")
+    .map(term => term.trim()).filter(term => term.length >= 2 && term.length <= 60 && !sensitive.test(term))
+    .map(term => term.replace(/\s+/g, " ")))].slice(0, 6);
+}
+
 type Input = { ad: AdCampaign; smartLink: PromotionCampaign; release: PromotionRelease; track: PromotionTrack; snippets: AudioSnippet[]; creatives: AdCreative[]; genreEvidence?: { trackId: string; result: AdsGenreResult } | null; cutsBySnippet?: Record<string, EditTiming[]>; studioProjects?: Record<string, CreativeStudioProject | null>; analytics?: PaidAdAnalytics | null };
 const fail = (reason: string): never => { throw new Error(`Invalid Ads Smart Assistant context: ${reason}`); };
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
