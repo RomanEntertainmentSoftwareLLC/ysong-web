@@ -1176,7 +1176,9 @@ export default function VisualOutput() {
 
 	useEffect(() => {
 		let cancelled = false;
-		void bridgeApi
+		// Embedded renderers receive the editor's current logical scene directly. A Bridge
+		// snapshot may lag behind local edits and must not replace that scene during load.
+		if (!embedded) void bridgeApi
 			.getVisualScene<VisualSceneState>()
 			.then((payload) => {
 				if (cancelled) return;
@@ -1205,7 +1207,7 @@ export default function VisualOutput() {
 				}
 			})
 			.catch(() => {});
-		const stopScene = bridgeApi.subscribeVisualScene<VisualSceneState>((payload) => {
+		const stopScene = embedded ? () => {} : bridgeApi.subscribeVisualScene<VisualSceneState>((payload) => {
 			const next = normalizeVisualScene(payload.scene);
 			sceneRef.current = next;
 			sceneHydratedRef.current = true;
@@ -1234,7 +1236,7 @@ export default function VisualOutput() {
 			stopAudio();
 			stopTransport();
 		};
-	}, [obsMode]);
+	}, [embedded, obsMode]);
 
 	useEffect(() => {
 		const trigger = (effect: VisualRoomAudienceEffect) => {
@@ -2594,12 +2596,16 @@ export default function VisualOutput() {
 			if (event.data.type === "ysong-scene-sync" && event.data.scene && typeof event.data.scene === "object") {
 				const replacement = normalizeVisualScene(event.data.scene as VisualSceneState);
 				sceneRef.current = replacement;
+				sceneHydratedRef.current = true;
+				setSceneHydrated(true);
 				setScene(replacement);
 				return;
 			}
 			if (event.data.type === "ysong-scene-replace" && event.data.scene && typeof event.data.scene === "object") {
 				const replacement = normalizeVisualScene(event.data.scene as VisualSceneState);
 				sceneRef.current = replacement;
+				sceneHydratedRef.current = true;
+				setSceneHydrated(true);
 				setScene(replacement);
 				clearGlb();
 				modelPlacementActive = false;
@@ -2682,6 +2688,7 @@ export default function VisualOutput() {
 		};
 		window.addEventListener("message", onPlacementMessage);
 		window.addEventListener("message", onViewportCommandMessage);
+		if (embedded) window.parent.postMessage({ type: "ysong-viewport-ready" }, window.location.origin);
 		window.addEventListener("keydown", onPlacementKeyDown);
 		window.addEventListener("keydown", onModelPlacementKeyDown);
 		canvas.addEventListener("mousedown", onPlacementMouseDown, true);

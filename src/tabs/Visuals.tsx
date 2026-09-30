@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { requestWorldTransport, useWorldPlayer } from "../components/WorldPlayer";
 import { getPlaybackOwner, subscribePlaybackOwner, type PlaybackOwner } from "../lib/playbackOwner";
@@ -48,6 +48,7 @@ import {
 	type VisualSpectrumMode,
 } from "../lib/visualsScene";
 import { buildVisualCameraShots, sampleVisualProgramCamera } from "../lib/visualsCamera";
+import { syncVisualSceneToFrames } from "../lib/visualsViewportSync";
 import { visualAnimationCueDuration, visualAnimationSpans } from "../lib/visualsPerformance";
 import {
 	applyVisualDirectorPlan,
@@ -144,6 +145,7 @@ export default function VisualsPane() {
 	const modelFolderInputRef=useRef<HTMLInputElement|null>(null);
 	const materialInputRef=useRef<HTMLInputElement|null>(null);
 	const viewportFrameRef=useRef<HTMLIFrameElement|null>(null);
+	const monitorFrameRef=useRef<HTMLIFrameElement|null>(null);
 	const viewportHostRef=useRef<HTMLDivElement|null>(null);
 	const importModelPackageRef=useRef<((files:File[],placement?:ModelDropPlacement)=>Promise<void>)|null>(null);
 	const sceneReadyRef=useRef(false);
@@ -151,6 +153,9 @@ export default function VisualsPane() {
 	const sceneClipboardRef=useRef<SceneClipboard|null>(null);
 
 	const refreshLibrary=()=>void bridgeApi.getVisualLibrary<VisualSceneState>().then(r=>setPresets(r.presets||[])).catch(()=>{});
+	const syncViewportScene=useCallback((frame?:HTMLIFrameElement|null)=>{
+		syncVisualSceneToFrames(sceneRef.current,frame?[frame]:[viewportFrameRef.current,monitorFrameRef.current],window.location.origin);
+	},[]);
 	useEffect(()=>{
 		let cancelled=false;
 		void bridgeApi.getVisualScene<VisualSceneState>().then(payload=>{
@@ -179,11 +184,11 @@ export default function VisualsPane() {
 		// The embedded Scene viewport is a local editor and should reflect React state
 		// immediately. Bridge remains the durable/OBS authority, but waiting for its
 		// round-trip caused materials and Sky Sphere updates to appear seconds later.
-		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-sync",scene},window.location.origin);
+		syncViewportScene();
 		const generation=++sceneSaveGenerationRef.current;
 		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)void bridgeApi.setVisualScene({...scene,updatedAt:Date.now()}).catch(()=>{})},90);
 		return()=>clearTimeout(t);
-	},[scene]);
+	},[scene,syncViewportScene]);
 	useEffect(()=>{
 		const host=viewportHostRef.current;if(!host)return;
 		const update=()=>{const rect=host.getBoundingClientRect();setViewportBounds(prev=>Math.abs(prev.width-rect.width)<.5&&Math.abs(prev.height-rect.height)<.5?prev:{width:rect.width,height:rect.height})};
@@ -197,6 +202,9 @@ export default function VisualsPane() {
 	useEffect(()=>{
 		const onMessage=(event:MessageEvent)=>{
 			if(event.origin!==window.location.origin||!event.data||typeof event.data!=="object")return;
+			if(event.data.type==="ysong-viewport-ready"){
+				for(const frame of [viewportFrameRef.current,monitorFrameRef.current])if(frame&&event.source===frame.contentWindow){syncViewportScene(frame);return;}
+			}
 			if(event.data.type==="ysong-visual-select"&&typeof event.data.id==="string")setSelectedId(event.data.id);
 			if(event.data.type==="ysong-editor-camera"&&event.data.position&&event.data.rotation)setEditorCamera(event.data as EditorCameraSnapshot & {type:string});
 			if(event.data.type==="ysong-editor-free-roam")setEditorFreeRoamActive(event.data.active===true);
@@ -227,7 +235,7 @@ export default function VisualsPane() {
 			}
 		};
 		window.addEventListener("message",onMessage);return()=>window.removeEventListener("message",onMessage);
-	},[]);
+	},[syncViewportScene]);
 	useEffect(()=>{
 		let raf=0,lastSample=0;
 		const tick=(now:number)=>{
@@ -538,11 +546,11 @@ export default function VisualsPane() {
 				<div ref={viewportHostRef} className="relative h-full min-h-0 w-full overflow-hidden rounded-lg border border-white/10 bg-black">
 					<div className={previewProgramCamera?"absolute inset-0 grid place-items-center bg-black":"absolute inset-0"}>
 						<div className={previewProgramCamera?"relative overflow-hidden bg-black":"relative h-full w-full overflow-hidden"} style={previewProgramCamera&&viewportBounds.width>0&&viewportBounds.height>0?(()=>{const width=Math.min(viewportBounds.width,viewportBounds.height*16/9);return{width,height:width*9/16}})():undefined}>
-							<iframe ref={viewportFrameRef} onLoad={()=>{if(primitivePlacement)viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-primitive-placement-start",...primitivePlacement},window.location.origin)}} title="YSong Visualizers live viewport" src={`/visual-output?embedded=1${previewProgramCamera?"&program=1":`&fx=${editorFxPreview?1:0}`}` } className="absolute inset-0 h-full w-full border-0"/>
+							<iframe ref={viewportFrameRef} onLoad={()=>{syncViewportScene(viewportFrameRef.current);if(primitivePlacement)viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-primitive-placement-start",...primitivePlacement},window.location.origin)}} title="YSong Visualizers live viewport" src={`/visual-output?embedded=1${previewProgramCamera?"&program=1":`&fx=${editorFxPreview?1:0}`}` } className="absolute inset-0 h-full w-full border-0"/>
 						</div>
 					</div>
 					{!previewProgramCamera?<div className="absolute right-3 top-3 z-40"><ViewCompass rotation={editorCamera.rotation} onSnap={view=>viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-view-orientation",view},window.location.origin)} onOrbit={(dx,dy)=>viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-view-orbit",dx,dy},window.location.origin)}/></div>:null}
-					{!previewProgramCamera&&activeCamera?<div className="pointer-events-none absolute bottom-3 right-3 z-40 w-[260px] max-w-[42%] overflow-hidden rounded-md border border-cyan-300/25 bg-black shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 bg-black/85 px-2 py-1 text-[8px] font-bold uppercase tracking-[.14em] text-neutral-400"><span>Program Camera</span><span className="max-w-[140px] truncate text-cyan-300/80">{activeCamera.name}</span></div><div className="relative aspect-video"><iframe tabIndex={-1} aria-hidden="true" title="Program camera preview" src={`/visual-output?embedded=1&program=1&monitor=1&cameraId=${encodeURIComponent(activeCamera.id)}`} className="absolute inset-0 h-full w-full border-0"/></div></div>:null}
+					{!previewProgramCamera&&activeCamera?<div className="pointer-events-none absolute bottom-3 right-3 z-40 w-[260px] max-w-[42%] overflow-hidden rounded-md border border-cyan-300/25 bg-black shadow-2xl"><div className="flex items-center justify-between border-b border-white/10 bg-black/85 px-2 py-1 text-[8px] font-bold uppercase tracking-[.14em] text-neutral-400"><span>Program Camera</span><span className="max-w-[140px] truncate text-cyan-300/80">{activeCamera.name}</span></div><div className="relative aspect-video"><iframe ref={monitorFrameRef} onLoad={()=>syncViewportScene(monitorFrameRef.current)} tabIndex={-1} aria-hidden="true" title="Program camera preview" src={`/visual-output?embedded=1&program=1&monitor=1&cameraId=${encodeURIComponent(activeCamera.id)}`} className="absolute inset-0 h-full w-full border-0"/></div></div>:null}
 				</div>
 				{showAudioMeters?<div className="absolute bottom-5 left-6 right-6 z-50 flex items-end gap-2"><AudioMeter label="BASS" value={audio.bass}/><AudioMeter label="MIDS" value={audio.mids}/><AudioMeter label="HIGHS" value={audio.highs}/><AudioMeter label="ENERGY" value={audio.energy}/><AudioMeter label="KICK" value={audio.kick}/></div>:null}
 			</main>
