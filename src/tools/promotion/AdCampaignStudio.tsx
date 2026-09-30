@@ -84,7 +84,11 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage,st
   const combinationCount=chosenSnippets.length*chosenBackgrounds.length;
   const navSteps:[Step,string][]=[["music","1 · Music"],["audio","2 · Audio clips"],["videos","3 · Backgrounds"],["generate","4 · Generate"],["setup","5 · Audience & Campaign"],["analytics","6 · Analytics"],["intelligence","7 · Intelligence"]];
 
-  return <div className="mt-6 grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+  const previewCreative=[...creatives].reverse().find(c=>c.status==="ready"&&c.selected&&creativeUrls[c.id]?.vertical)||[...creatives].reverse().find(c=>c.status==="ready"&&creativeUrls[c.id]?.vertical);
+  const previewBackground=backgrounds.find(item=>chosenBackgrounds.includes(item.id));
+  const overlay=(selected?.targeting?.adOverlay||{}) as {headline?:string;caption?:string;cta?:string;position?:"top"|"center"|"bottom"};
+
+  return <div className="mt-6 grid items-start gap-5 xl:grid-cols-[280px_minmax(0,1fr)_280px]">
     <aside className={panel}><div className="flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Paid campaigns</div><h2 className="mt-1 text-lg font-semibold">Ad Campaigns</h2></div><button onClick={beginNew} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white">+ New Ad Campaign</button></div>
       <div className="mt-4 space-y-2">{ads.length?ads.map(a=><button key={a.id} onClick={()=>void openAd(a.id)} className={`w-full rounded-xl border p-3 text-left ${selected?.id===a.id?"border-violet-500/60 bg-violet-500/5":"border-neutral-200 dark:border-neutral-800"}`}><div className="font-medium">{a.name}</div><div className="mt-1 flex items-center justify-between text-[11px] text-neutral-500"><span>{a.genre||"Genre not set"}</span><span>{a.status}</span></div></button>):<div className="rounded-xl border border-dashed border-neutral-300 p-5 text-center text-xs text-neutral-500 dark:border-neutral-700">No paid-ad drafts yet.</div>}</div>
       <div className="mt-5 rounded-xl border border-neutral-200 p-3 text-xs dark:border-neutral-800"><div className="font-semibold">Render engine</div><div className={`mt-1 ${renderReady?"text-emerald-500":"text-amber-500"}`}>{renderReady?"FFmpeg ready":"FFmpeg unavailable"}</div><div className="mt-1 break-words text-[10px] text-neutral-500">{health?.render.version||health?.render.error||"Checking runtime…"}</div></div>
@@ -124,5 +128,18 @@ export default function AdCampaignStudio({campaigns,releases,health,onMessage,st
         {step==="intelligence"&&selected&&<PromotionIntelligence ad={selected} onMessage={onMessage}/>}
       </div>}
     </section>
+    <aside className="xl:sticky xl:top-5">
+      <div className="mb-2 flex items-center justify-between"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Creative preview</div><div className="text-sm font-medium">Vertical · 9:16</div></div><span className="rounded-full bg-neutral-100 px-2 py-1 text-[10px] text-neutral-500 dark:bg-neutral-800">Illustrative</span></div>
+      <div className="mx-auto w-[min(100%,250px)] rounded-[2rem] border-[7px] border-neutral-800 bg-neutral-900 p-2 shadow-xl">
+        <div className="relative aspect-[9/16] overflow-hidden rounded-[1.45rem] bg-gradient-to-br from-violet-800 via-fuchsia-700 to-indigo-950 text-white">
+          {previewCreative&&creativeUrls[previewCreative.id]?.vertical?<video key={previewCreative.id} className="absolute inset-0 h-full w-full object-contain" src={creativeUrls[previewCreative.id]?.vertical} controls playsInline preload="metadata"/>:previewBackground&&backgroundUrls[previewBackground.id]?<video key={previewBackground.id} className={`absolute inset-0 h-full w-full ${backgroundFit==="fit"?"object-contain":"object-cover"}`} src={backgroundUrls[previewBackground.id]} muted loop playsInline autoPlay preload="metadata"/>:<div className="absolute inset-0 grid place-items-center p-5 text-center"><div><div className="text-4xl">♫</div><div className="mt-2 text-lg font-semibold">{selectedTrack?.track.title||"Your song"}</div><div className="mt-1 text-xs text-white/75">Choose a background to preview your visual</div></div></div>}
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[12%] bg-black/25"/><div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-[22%] bg-black/35"/>
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-[8%] top-[12%] bottom-[22%] rounded-lg border border-dashed border-white/70"/>
+          {(overlay.headline||overlay.caption||overlay.cta)&&<div className={`pointer-events-none absolute inset-x-[11%] z-10 text-center drop-shadow-lg ${overlay.position==="top"?"top-[16%]":overlay.position==="center"?"top-1/2 -translate-y-1/2":"bottom-[25%]"}`}>{overlay.headline&&<div className="text-base font-bold leading-tight">{overlay.headline}</div>}{overlay.caption&&<div className="mt-1 text-[11px]">{overlay.caption}</div>}{overlay.cta&&<span className="mt-2 inline-block rounded-full bg-white px-3 py-1 text-[10px] font-semibold text-neutral-900">{overlay.cta}</span>}</div>}
+          <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/50 px-1.5 py-1 text-[8px]">YSong · Sponsored</div><div className="pointer-events-none absolute bottom-2 left-2 right-2 text-[8px] text-white/90">Illustrative social placement</div>
+        </div>
+      </div>
+      <div className="mx-auto mt-3 max-w-[250px] rounded-xl border border-neutral-200 p-3 dark:border-neutral-800"><div className="flex items-center justify-between text-xs"><span className="font-medium">Audio clip</span><span className="text-neutral-500">{chosenSnippets.length?`${chosenSnippets.length} selected`:"Not selected"}</span></div>{audioUrl&&selectedTrack&&<audio className="mt-2 h-8 w-full" controls preload="none" src={audioUrl}/>}<p className="mt-2 text-[10px] leading-4 text-neutral-500">Guides are conservative planning margins, not exact platform specifications. UI chrome is illustrative; final placements can vary.</p></div>
+    </aside>
   </div>;
 }
