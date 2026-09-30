@@ -11,6 +11,7 @@ import { buildAdsCriticFixSuggestions } from "./adsCriticFixSuggestions";
 import type { AdsCriticEvidencePacket } from "./adsCriticEvidenceContract";
 import type { AdsStudioSelection } from "./AdsSmartAssistantPanel";
 import { acceptStudioVideoRange, videoProviderCapabilities, type StudioVideoRange } from "./studioVideoRanges";
+import SmartCreativeVariantPanel from "./SmartCreativeVariantPanel";
 
 /** Edits the reusable creative; campaign renders remain derived bindings. */
 export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, beatCutsBySnippet = {}, criticPacket, onSaved, onSelectionChange }: { creative: AdCreative; mediaUrls: Record<string, string>; audioUrl: string; beatCutsBySnippet?: Record<string, number[]>; criticPacket?: AdsCriticEvidencePacket | null; onSaved?: (project: CreativeStudioProject) => void; onSelectionChange?: (selection: AdsStudioSelection) => void }) {
@@ -78,6 +79,8 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
   const dimensions: Record<StudioAspectRatio, [number, number]> = { "9:16": [1080, 1920], "1:1": [1080, 1080], "16:9": [1920, 1080] };
   const activeVariant = current.variants?.[aspect];
   const editingProject: CreativeStudioProject = { ...current, tracks: activeVariant?.tracks || current.tracks, render: { ...current.render, width: activeVariant?.width || dimensions[aspect][0], height: activeVariant?.height || dimensions[aspect][1] } };
+  const savedVariant = baseline.variants?.[aspect];
+  const variantSource: CreativeStudioProject = { ...baseline, tracks: savedVariant?.tracks || baseline.tracks, render: { ...baseline.render, width: savedVariant?.width || dimensions[aspect][0], height: savedVariant?.height || dimensions[aspect][1] }, variants: undefined };
   const refs = { audioSnippetIds: owner.audioSnippets.map(item => item.snippetId), backgroundMediaIds: owner.backgroundMedia.map(item => item.mediaId), overlayIds: owner.overlays.map(item => item.id), stockMediaIds: owner.backgroundMedia.filter(item => item.source === "stock").map(item => item.mediaId) };
   const fps = current.timebase.framesPerSecond.numerator / current.timebase.framesPerSecond.denominator;
   const criticAspectMatches = criticPacket?.aspectRatio === aspect || (criticPacket?.aspectRatio === "base" && aspect === "9:16" && !project?.variants?.["9:16"]);
@@ -162,6 +165,7 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
   }}>
     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs"><label className="flex items-center gap-2 font-medium">Social aspect<select aria-label="Social aspect ratio" value={aspect} disabled={saving} onChange={event => setAspect(event.target.value as StudioAspectRatio)} className="rounded border bg-transparent p-2"><option value="9:16">9:16 Vertical</option><option value="1:1">1:1 Square</option><option value="16:9">16:9 Landscape</option></select></label><span className="text-neutral-500">Each layout keeps its own crop and overlay positions.</span><span className="text-neutral-500">{project ? `Revision ${project.revision}` : "New timeline from creative assets"}</span><button type="button" disabled={!history.past.length || saving} onClick={() => setHistory(value => value && undoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Undo</button><button type="button" disabled={!history.future.length || saving} onClick={() => setHistory(value => value && redoStudioHistory(value))} className="rounded border px-3 py-2 disabled:opacity-40">Redo</button><button type="button" disabled={!dirty || saving} onClick={() => void save()} className="rounded border border-violet-500 px-3 py-2 font-semibold text-violet-600 disabled:opacity-40">{saving ? "Saving…" : "Save timeline"}</button><button type="button" disabled={!dirty || saving} onClick={() => setHistory(createStudioHistory(baseline))} className="rounded border px-3 py-2 disabled:opacity-40">Discard edits</button>{dirty && <span>Unsaved changes</span>}</div>
     {error && <p role="alert" className="mb-2 text-xs text-amber-600">{error}</p>}{notice && <p role="status" className="mb-2 text-xs text-emerald-600">{notice}</p>}
+    {project ? <SmartCreativeVariantPanel key={`${creative.adCampaignId}:${owner.id}:${baseline.revision}:${aspect}`} source={owner} campaignId={creative.adCampaignId} aspect={aspect} project={variantSource} mediaUrls={{ ...mediaUrls, ...generatedUrls }} audioUrl={audioUrl} /> : <p className="mb-3 text-xs text-neutral-500">Save this Creative Studio timeline before proposing variants from it.</p>}
     <section aria-label="Smart timeline edit proposals" className="mb-3 rounded-xl border border-violet-500/25 p-3 text-xs">
       <div className="font-semibold">Ads Smart Assistant · Timeline proposals</div>
       <p className="mt-1 text-neutral-500">Select a clip to preview a validated edit for the {aspect} layout.</p>
