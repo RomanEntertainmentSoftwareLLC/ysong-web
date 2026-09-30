@@ -3,7 +3,8 @@ export type StudioTimebase = { framesPerSecond: { numerator: number; denominator
 export type StudioTransform = { x: number; y: number; scale: number; rotationDegrees: number; opacity: number; fit?: "cover" | "contain" | "fill"; anchorX?: number; anchorY?: number };
 export type StudioKeyframeProperty = "x" | "y" | "scale" | "rotationDegrees" | "opacity" | "volume";
 export type StudioKeyframe = { frame: number; property: StudioKeyframeProperty; value: number; interpolation: "hold" | "linear" };
-export type StudioTransition = { kind: "cut" | "fade" | "dissolve"; durationFrames: number };
+export type StudioTransitionKind = "cut" | "fade" | "dissolve" | "dip" | "wipe-left" | "wipe-right" | "wipe-up" | "wipe-down";
+export type StudioTransition = { kind: StudioTransitionKind; durationFrames: number };
 export type StudioClipBase = {
   id: string;
   startFrame: number;
@@ -116,7 +117,7 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
       for (const edge of ["transitionIn", "transitionOut"] as const) {
         if (clip[edge] === undefined) continue;
         const transition = record(clip[edge], edge);
-        choice(transition.kind, ["cut", "fade", "dissolve"], `${edge}.kind`);
+        choice(transition.kind, ["cut", "fade", "dissolve", "dip", "wipe-left", "wipe-right", "wipe-up", "wipe-down"], `${edge}.kind`);
         const frames = number(transition.durationFrames, `${edge}.durationFrames`, 0, true);
         if (frames > length || (transition.kind === "cut" && frames !== 0)) fail(edge);
       }
