@@ -1,21 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { planShortAdEdits, type EditTiming } from "./shortAdEditPlan";
 
-export default function ShortAdEditPlanner({ start, duration, tempo }: {
+export default function ShortAdEditPlanner({ start, duration, tempo, onChange }: {
   start: number; duration: number; tempo?: { bpm: number | null; confidence: number; onsetsSeconds?: number[] };
+  onChange?: (cuts: EditTiming[]) => void;
 }) {
   const plan = useMemo(() => planShortAdEdits({ startSeconds: start, durationSeconds: duration, bpm: tempo?.bpm,
     confidence: tempo?.confidence, onsetsSeconds: tempo?.onsetsSeconds }), [start, duration, tempo]);
   const [cuts, setCuts] = useState<EditTiming[]>(plan.cuts);
-  useEffect(() => setCuts(plan.cuts), [plan]);
+  useEffect(() => { setCuts(plan.cuts); onChange?.(plan.cuts); }, [plan]); // eslint-disable-line react-hooks/exhaustive-deps
   function update(index: number, field: "cutSeconds" | "transitionSeconds", value: number) {
     if (!Number.isFinite(value)) return;
-    setCuts(previous => previous.map((cut, i) => {
+    const next = cuts.map((cut, i) => {
       if (i !== index) return cut;
-      const lower = field === "cutSeconds" ? (previous[i - 1]?.cutSeconds ?? 0) + 0.1 : 0;
-      const upper = field === "cutSeconds" ? (previous[i + 1]?.cutSeconds ?? duration) - 0.1 : 0.5;
+      const lower = field === "cutSeconds" ? (cuts[i - 1]?.cutSeconds ?? 0) + 0.1 : 0;
+      const upper = field === "cutSeconds" ? (cuts[i + 1]?.cutSeconds ?? duration) - 0.1 : 0.5;
       return { ...cut, [field]: Math.round(Math.max(lower, Math.min(upper, value)) * 100) / 100 };
-    }));
+    });
+    setCuts(next); onChange?.(next);
   }
   return <section className="mt-4 rounded-2xl border border-violet-500/25 bg-violet-500/5 p-4 text-xs">
     <div className="font-semibold">Short-ad edit plan</div>
