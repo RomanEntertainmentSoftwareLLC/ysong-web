@@ -16,6 +16,26 @@ const EMPTY_ACKS:Acks={settingsCorrect:false,rightsConfirmed:false,metaBilling:f
 
 function money(minor:number,currency:string){try{return new Intl.NumberFormat(undefined,{style:"currency",currency}).format(minor/100);}catch{return `${currency} ${(minor/100).toFixed(2)}`;}}
 function remoteState(remote:MetaRemoteStatus|null){return String(remote?.campaign?.effective_status||remote?.campaign?.status||"").toUpperCase();}
+function metaReviewState(remote:MetaRemoteStatus|null,ad:AdCampaign){
+  const statuses=[remote?.campaign,...(remote?.adSets||[]),...(remote?.ads||[])].filter(Boolean).map(item=>String(item?.effective_status||item?.status||"").toUpperCase());
+  const fallback=String(ad.metaStatus||ad.status||"UNKNOWN").toUpperCase();
+  const state=statuses.includes("DISAPPROVED")?"REJECTED":statuses.includes("PENDING_REVIEW")||statuses.includes("IN_PROCESS")||fallback==="IN_REVIEW"?"IN_REVIEW":statuses.includes("ACTIVE")?"ACTIVE":statuses.includes("PAUSED")||fallback==="PAUSED"?"PAUSED":remoteState(remote)||fallback;
+  const labels:Record<string,string>={IN_REVIEW:"In Review",PENDING_REVIEW:"In Review",IN_PROCESS:"In Review",ACTIVE:"Approved / Active",PAUSED:"Paused",DISAPPROVED:"Rejected",WITH_ISSUES:"Needs attention",ERROR:"Meta error",DELETED:"Removed",ARCHIVED:"Archived"};
+  return {state,label:labels[state]||state.replaceAll("_"," ").toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())};
+}
+function metaReviewReasons(remote:MetaRemoteStatus|null){
+  const entities=[...(remote?.campaign?[{kind:"Campaign",item:remote.campaign}]:[]),...(remote?.adSets||[]).map(item=>({kind:"Ad set",item})),...(remote?.ads||[]).map(item=>({kind:"Ad",item}))];
+  const reasons:Array<{key:string;kind:string;text:string}>=[];
+  for(const {kind,item} of entities){
+    const feedback=item.review_feedback;
+    if(feedback&&typeof feedback==="object"){
+      const object=feedback as Record<string,unknown>;
+      for(const [key,value] of Object.entries(object)){const text=typeof value==="string"?value:Array.isArray(value)?value.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" · "):"";if(text.trim())reasons.push({key:`${kind}-${key}`,kind,text});}
+    }
+    for(const field of ["rejection_reason","disapproval_reason","issues_info"]){const value=item[field];if(typeof value==="string"&&value.trim())reasons.push({key:`${kind}-${field}`,kind,text:value});else if(Array.isArray(value))for(const [index,entry] of value.entries()){const text=typeof entry==="string"?entry:entry&&typeof entry==="object"?String((entry as Record<string,unknown>).message||(entry as Record<string,unknown>).description||(entry as Record<string,unknown>).error||""):"";if(text.trim())reasons.push({key:`${kind}-${field}-${index}`,kind,text});}}
+  }
+  return reasons;
+}
 function errText(error:unknown,fallback:string){return error instanceof Error?error.message:fallback;}
 function rightsSummary(result:Record<string,unknown>|null|undefined){return result?String(result.summary||result.message||result.reason||result.decision||result.status||"Check completed; see details below."):"No result was returned for this check.";}
 function isStrongUnrelatedMatch(result:Record<string,unknown>|null|undefined){if(!result)return false;const status=String(result.status||result.decision||"").toLowerCase().replace(/[ -]/g,"_");const summary=String(result.summary||result.message||result.reason||"").toLowerCase();const strong=result.strong===true||result.isStrong===true||result.confidence==="strong"||Number(result.confidence)>=0.9||Number(result.score)>=0.9;const unrelated=/unrelated|different recording|different track/.test(`${status} ${summary}`);return unrelated&&(Boolean(strong)||/mismatch|non_match|no_match|unrelated/.test(status));}
@@ -111,19 +131,25 @@ export default function MetaPublishPanel({ad,smartLink,onUpdated,onMessage}:Prop
   }
 
   if(hasRemote){
+    const review=metaReviewState(remote,ad);
     const state=remoteState(remote)||String(ad.metaStatus||"UNKNOWN").toUpperCase();
-    const canDiscard=["failed","paused"].includes(ad.status)||["PAUSED","ERROR","WITH_ISSUES","DISAPPROVED"].includes(state);
+    const reasons=metaReviewReasons(remote);
+    const canDiscard=["failed","paused"].includes(ad.status)||["PAUSED","ERROR","WITH_ISSUES","DISAPPROVED","REJECTED"].includes(review.state);
     return <div className="mt-5 space-y-4">
       <div className={box}>
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="font-semibold">Meta paid campaign</h4><p className="mt-1 text-xs text-neutral-500">This YSong campaign is already linked to a real Meta Campaign.</p></div><span className="rounded-full border border-neutral-300 px-2.5 py-1 text-xs font-semibold dark:border-neutral-700">{state||ad.status}</span></div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="font-semibold">Meta paid campaign</h4><p className="mt-1 text-xs text-neutral-500">This YSong campaign is already linked to a real Meta Campaign.</p></div><span className="rounded-full border border-neutral-300 px-2.5 py-1 text-xs font-semibold dark:border-neutral-700">{review.label}</span></div>
+        <p className="mt-2 text-xs text-neutral-500">Meta status: {state||ad.status}</p>
         <div className="mt-4 grid gap-2 text-xs sm:grid-cols-2"><div><span className="text-neutral-500">Meta Campaign ID</span><div className="mt-1 break-all font-mono">{ad.metaCampaignId}</div></div><div><span className="text-neutral-500">Meta Ad Set ID</span><div className="mt-1 break-all font-mono">{ad.metaAdSetId||"Pending"}</div></div><div><span className="text-neutral-500">Published</span><div className="mt-1">{ad.metaPublishedAt?new Date(ad.metaPublishedAt).toLocaleString():"Creation in progress / not finalized"}</div></div><div><span className="text-neutral-500">YSong state</span><div className="mt-1 capitalize">{ad.status.replaceAll("_"," ")}</div></div></div>
         {lastError&&<div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600 dark:text-red-300"><b>Last Meta error:</b> {lastError}</div>}
+        {review.state==="IN_REVIEW"&&<div role="status" className="mt-4 rounded-xl border border-blue-500/30 bg-blue-500/5 p-3 text-xs text-blue-800 dark:text-blue-200"><b>In review.</b> Meta is reviewing this submission. Refresh status for updates.</div>}
+        {review.state==="REJECTED"&&<div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-300"><b>Meta rejected this submission.</b> Review the provider feedback below, then update the YSong campaign and resubmit.</div>}
+        {reasons.length>0&&<div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-200"><b>Meta review feedback</b><ul className="mt-2 list-disc space-y-1 pl-5">{reasons.map(reason=><li key={reason.key}><b>{reason.kind}:</b> {reason.text}</li>)}</ul></div>}
         <div className="mt-4 flex flex-wrap gap-2"><button disabled={busy||loading} onClick={()=>void refreshRemote()} className="rounded-xl border border-neutral-300 px-3 py-2 text-xs font-semibold dark:border-neutral-700">{loading?"Refreshing…":"Refresh status"}</button><button disabled={busy} onClick={()=>void setStatus("PAUSED")} className="rounded-xl border border-amber-500/40 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">Pause delivery</button></div>
       </div>
 
       <div className={box}><h4 className="font-semibold">Resume paid delivery</h4><p className="mt-1 text-xs text-neutral-500">Activating a paused Meta campaign can spend from the payment method attached to the selected Meta Ad Account.</p><div className="mt-3 flex gap-2"><input className={input} value={resumeText} onChange={e=>setResumeText(e.target.value)} placeholder="Type RESUME"/><button disabled={busy||resumeText.trim().toUpperCase()!=="RESUME"} onClick={()=>void setStatus("ACTIVE")} className="shrink-0 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">Resume</button></div></div>
 
-      {canDiscard&&<div className={`${box} border-red-500/30`}><h4 className="font-semibold text-red-600 dark:text-red-300">Discard remote Meta campaign</h4><p className="mt-1 text-xs text-neutral-500">Deletes the remote Meta Campaign but keeps the YSong Smart Link, snippets, stock footage, renders, and campaign draft so you can fix it and publish again.</p><div className="mt-3 flex gap-2"><input className={input} value={deleteText} onChange={e=>setDeleteText(e.target.value)} placeholder="Type DELETE"/><button disabled={busy||deleteText.trim().toUpperCase()!=="DELETE"} onClick={()=>void discard()} className="shrink-0 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">Delete remote campaign</button></div></div>}
+      {canDiscard&&<div className={`${box} border-red-500/30`}><h4 className="font-semibold text-red-600 dark:text-red-300">Edit and resubmit</h4><p className="mt-1 text-xs text-neutral-500">Removes the remote Meta campaign and returns this YSong draft to editing. Your Smart Link, snippets, stock footage, renders, and campaign settings stay available to fix and resubmit.</p><div className="mt-3 flex gap-2"><input className={input} value={deleteText} onChange={e=>setDeleteText(e.target.value)} placeholder="Type DELETE" aria-label="Type DELETE to remove remote Meta campaign"/><button disabled={busy||deleteText.trim().toUpperCase()!=="DELETE"} onClick={()=>void discard()} className="shrink-0 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">Remove Meta submission</button></div></div>}
     </div>;
   }
 
