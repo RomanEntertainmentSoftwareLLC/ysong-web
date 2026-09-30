@@ -4,6 +4,7 @@ import type { CreativeStudioProject, StudioAspectRatio } from "./creativeStudioP
 import { createStudioHistory, editStudioHistory, redoStudioHistory, undoStudioHistory, type StudioHistory } from "./creativeStudioHistory";
 import { studioSources } from "./creativeStudioTracks";
 import CreativeStudioTimeline from "./CreativeStudioTimeline";
+import CreativeStudioVideoJobs from "./CreativeStudioVideoJobs";
 import { previewStudioEditProposal, type StudioEditProposal } from "./studioEditProposals";
 import type { AdsStudioSelection } from "./AdsSmartAssistantPanel";
 
@@ -136,5 +137,6 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
       {pending && <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3"><div className="font-medium">Proposed change · {aspect}</div><div className="mt-1 text-neutral-500">Before: {pending.before}</div><div className="mt-1">After: {pending.after}</div><div className="mt-2 flex gap-2"><button type="button" disabled={saving || pending.source !== current || pending.aspect !== aspect} onClick={applyProposal} className="rounded bg-violet-600 px-3 py-1.5 font-medium text-white disabled:opacity-40">Apply edit</button><button type="button" onClick={() => setPending(null)} className="rounded border px-3 py-1.5">Dismiss</button></div>{(pending.source !== current || pending.aspect !== aspect) && <p className="mt-1 text-amber-600">Timeline changed. Preview the proposal again.</p>}</div>}
     </section>
     <div inert={saving}><CreativeStudioTimeline creative={owner} project={editingProject} onChange={updateAspectProject} mediaUrls={mediaUrls} audioUrl={audioUrl} onSelectionChange={handleSelectionChange} /></div>
+    <CreativeStudioVideoJobs creative={creative} selection={selection} />
   </div>;
 }
