@@ -1711,7 +1711,11 @@ export default function VisualOutput() {
 				skySphere.visible = false;
 				environmentScene.background = skySphereTexture;
 				environmentScene.backgroundIntensity = brightness;
-				environmentScene.backgroundRotation.set(0, state.sky.rotationY || 0, 0);
+				environmentScene.backgroundRotation.set(
+					state.sky.rotationX || 0,
+					state.sky.rotationY || 0,
+					state.sky.rotationZ || 0,
+				);
 				skyBox.visible = false;
 				return;
 			}
@@ -1727,7 +1731,11 @@ export default function VisualOutput() {
 			urls.forEach((url, index) => setSkyBoxFace(index, url || ""));
 			for (const material of skyBoxMaterials) material.color.setScalar(brightness);
 			skyBox.position.set(0, 0, 0);
-			skyBox.rotation.set(0, state.sky.rotationY || 0, 0);
+			skyBox.rotation.set(
+				state.sky.rotationX || 0,
+				state.sky.rotationY || 0,
+				state.sky.rotationZ || 0,
+			);
 			skyBox.visible = urls.every(Boolean) && skyBoxTextures.every(Boolean);
 			skySphere.visible = false;
 		};

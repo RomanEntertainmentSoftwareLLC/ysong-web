@@ -705,7 +705,9 @@ export type VisualSceneState = {
 		sphereUrl: string;
 		sphereFileName: string;
 		spherePolygons: number;
+		rotationX: number;
 		rotationY: number;
+		rotationZ: number;
 		brightness: number;
 		boxRightUrl: string;
 		boxLeftUrl: string;
@@ -1208,7 +1210,9 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		sphereUrl: "",
 		sphereFileName: "",
 		spherePolygons: 4096,
+		rotationX: 0,
 		rotationY: 0,
+		rotationZ: 0,
 		brightness: 1,
 		boxRightUrl: "",
 		boxLeftUrl: "",
@@ -1505,7 +1509,13 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 		},
 		grid: { ...DEFAULT_VISUAL_SCENE.grid, ...(raw.grid ?? {}) },
 		stage: { ...DEFAULT_VISUAL_SCENE.stage, ...(raw.stage ?? {}), ambientSkyColor:typeof raw.stage?.ambientSkyColor==="string"?raw.stage.ambientSkyColor:DEFAULT_VISUAL_SCENE.stage.ambientSkyColor, ambientGroundColor:typeof raw.stage?.ambientGroundColor==="string"?raw.stage.ambientGroundColor:DEFAULT_VISUAL_SCENE.stage.ambientGroundColor, moonEnabled:raw.stage?.moonEnabled===true, moonColor:typeof raw.stage?.moonColor==="string"?raw.stage.moonColor:DEFAULT_VISUAL_SCENE.stage.moonColor, moonIntensity:Math.max(0,Math.min(20,numberOr(raw.stage?.moonIntensity,DEFAULT_VISUAL_SCENE.stage.moonIntensity))), moonX:numberOr(raw.stage?.moonX,DEFAULT_VISUAL_SCENE.stage.moonX), moonY:numberOr(raw.stage?.moonY,DEFAULT_VISUAL_SCENE.stage.moonY), moonZ:numberOr(raw.stage?.moonZ,DEFAULT_VISUAL_SCENE.stage.moonZ), moonSource:(["bass","mids","highs","energy","kick","rms","peak"] as VisualAudioSource[]).includes(raw.stage?.moonSource as VisualAudioSource)?raw.stage!.moonSource as VisualAudioSource:DEFAULT_VISUAL_SCENE.stage.moonSource, moonAmount:Math.max(0,Math.min(10,numberOr(raw.stage?.moonAmount,DEFAULT_VISUAL_SCENE.stage.moonAmount))), shadowMapSize:[512,1024,2048,4096].includes(Math.round(numberOr(raw.stage?.shadowMapSize,1024)))?Math.round(numberOr(raw.stage?.shadowMapSize,1024)):1024, shadowBias:Math.max(-.02,Math.min(.02,numberOr(raw.stage?.shadowBias,-.00035))), sunShadows:raw.stage?.sunShadows!==false, moonShadows:raw.stage?.moonShadows===true, keyShadows:raw.stage?.keyShadows!==false },
-		sky: { ...DEFAULT_VISUAL_SCENE.sky, ...(raw.sky ?? {}) },
+		sky: {
+			...DEFAULT_VISUAL_SCENE.sky,
+			...(raw.sky ?? {}),
+			rotationX: numberOr(raw.sky?.rotationX, DEFAULT_VISUAL_SCENE.sky.rotationX),
+			rotationY: numberOr(raw.sky?.rotationY, DEFAULT_VISUAL_SCENE.sky.rotationY),
+			rotationZ: numberOr(raw.sky?.rotationZ, DEFAULT_VISUAL_SCENE.sky.rotationZ),
+		},
 		particles: { ...DEFAULT_VISUAL_SCENE.particles, ...(raw.particles ?? {}) },
 		clouds: { ...DEFAULT_VISUAL_SCENE.clouds, ...(raw.clouds ?? {}), lightAbsorption:Math.max(0,Math.min(1,numberOr(raw.clouds?.lightAbsorption,DEFAULT_VISUAL_SCENE.clouds.lightAbsorption))) },
 		wind: { ...DEFAULT_VISUAL_SCENE.wind, ...(raw.wind ?? {}), directionX:numberOr(raw.wind?.directionX,DEFAULT_VISUAL_SCENE.wind.directionX), directionZ:numberOr(raw.wind?.directionZ,DEFAULT_VISUAL_SCENE.wind.directionZ), strength:Math.max(0,Math.min(20,numberOr(raw.wind?.strength,DEFAULT_VISUAL_SCENE.wind.strength))), gustiness:Math.max(0,Math.min(2,numberOr(raw.wind?.gustiness,DEFAULT_VISUAL_SCENE.wind.gustiness))), turbulence:Math.max(0,Math.min(4,numberOr(raw.wind?.turbulence,DEFAULT_VISUAL_SCENE.wind.turbulence))), physicsForce:Math.max(0,Math.min(100,numberOr(raw.wind?.physicsForce,DEFAULT_VISUAL_SCENE.wind.physicsForce))) },

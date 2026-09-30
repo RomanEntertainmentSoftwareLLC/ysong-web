@@ -1066,7 +1066,7 @@ function SkyInspector({scene,setScene}:{scene:VisualSceneState;setScene:React.Di
 	};
 	return <><InspectorSection title="Sky Environment">
 		<SelectRow label="Mode" value={scene.sky.mode} options={["sphere","box"]} labels={{sphere:"Sky Sphere",box:"Skybox (6 faces)"}} onChange={v=>patch({mode:v as VisualSceneState["sky"]["mode"]})}/>
-		<RangeRow label="Rotation" value={scene.sky.rotationY} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationY:v})}/>
+		<div className="grid grid-cols-3 gap-2"><RangeRow label="Pitch" value={scene.sky.rotationX} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationX:v})}/><RangeRow label="Yaw" value={scene.sky.rotationY} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationY:v})}/><RangeRow label="Roll" value={scene.sky.rotationZ} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationZ:v})}/></div>
 		<RangeRow label="Brightness" value={scene.sky.brightness} min={.1} max={3} step={.05} onChange={v=>patch({brightness:v})}/>
 		<div className="rounded border border-white/10 bg-white/[.025] p-2 text-[9px] leading-relaxed text-neutral-500">Sky environments stay centered on the camera and ignore scene fog, lights and shadows. They are the only environment layer intended to replace the background image/video.</div>
 	</InspectorSection>
