@@ -56,6 +56,7 @@ import {
 	type VisualSecondaryDynamic,
 } from "../lib/visualsScene";
 import { deterministicCameraShake, resolveVisualProgramCamera, sampleVisualProgramCamera } from "../lib/visualsCamera";
+import { isCurrentVisualMaterialTexture, type MaterialTextureKey } from "../lib/visualMaterialUpload";
 import { activeVisualAnimationClips, animationLayerAllowsTarget, sampleIKWeight } from "../lib/visualsPerformance";
 import {
 	buildSecondaryTopology,
@@ -4064,7 +4065,7 @@ export default function VisualOutput() {
 			material.clearcoatRoughness = asset.clearcoatRoughness;
 			material.transmission = mm("transmission", asset.transmission, 0, 1);
 			material.ior = asset.ior;
-			const slots: [keyof VisualMaterialAsset, keyof THREE.MeshPhysicalMaterial, boolean][] = [
+			const slots: [MaterialTextureKey, keyof THREE.MeshPhysicalMaterial, boolean][] = [
 				["baseColorMap", "map", true],
 				["normalMap", "normalMap", false],
 				["bumpMap", "bumpMap", false],
@@ -4081,16 +4082,20 @@ export default function VisualOutput() {
 				const requestUrls = (material.userData.ysongTextureRequestUrls ??= {}) as Record<string, string>;
 				const current = (material as unknown as Record<string, unknown>)[key] as THREE.Texture | null;
 				if (slot?.url) {
-					requestUrls[key] = slot.url;
-					if (current?.userData.ysongUrl !== slot.url)
+					if (requestUrls[key] !== slot.url) {
+						requestUrls[key] = slot.url;
+						// The old map is never a preview of the newly assigned slot.
+						if (current?.userData.ysongUrl !== slot.url) {
+							(material as unknown as Record<string, unknown>)[key] = null;
+							material.needsUpdate = true;
+						}
 						requestMaterialTexture(slot.url, color, (texture) => {
-							// Ignore a completed older upload if the user selected a newer texture
-							// while this one was decoding/fetching.
-							if (requestUrls[key] !== slot.url) return;
+							if (requestUrls[key] !== slot.url || !isCurrentVisualMaterialTexture(sceneRef.current, asset.id, slotName, slot.url)) return;
 							texture.userData.ysongUrl = slot.url;
 							(material as unknown as Record<string, unknown>)[key] = texture;
 							material!.needsUpdate = true;
 						});
+					}
 				} else {
 					requestUrls[key] = "";
 					if (current) {
@@ -4100,13 +4105,17 @@ export default function VisualOutput() {
 				}
 			}
 			const env = asset.envMap?.url || "";
+			const requestUrls = (material.userData.ysongTextureRequestUrls ??= {}) as Record<string, string>;
+			requestUrls.envMap = env;
 			if (env) {
 				if (material.envMap?.userData.ysongUrl !== env)
 					requestEnvironmentTexture(env, (texture) => {
+						if (requestUrls.envMap !== env || !isCurrentVisualMaterialTexture(sceneRef.current, asset.id, "envMap", env)) return;
 						material!.envMap = texture;
 						material!.needsUpdate = true;
 					});
-			} else if (material.envMap) {
+			}
+			if (material.envMap && material.envMap.userData.ysongUrl !== env) {
 				material.envMap = null;
 				material.needsUpdate = true;
 			}
