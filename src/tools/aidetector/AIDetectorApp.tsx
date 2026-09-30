@@ -50,10 +50,16 @@ function humanSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function verdictLabel(report: DetectorReport) {
+  if (report.verdict === "likely_human") return "Likely human-produced";
+  if (report.verdict === "likely_ai" || report.verdict === "ai_like") return "Likely AI-generated";
+  return "Indeterminate";
+}
+
 function verdictNote(report: DetectorReport) {
   if (report.strong_provenance) return "Explicit generator/provenance evidence found in the file. Structured provenance is interpreted locally; signatures are not cryptographically verified yet.";
-  if (report.verdict === "uncertain") return "Signal evidence is mixed or too weak to separate cleanly.";
-  return "Signal-evidence assessment · not provenance-confirmed.";
+  if (report.verdict === "uncertain") return "Signal evidence is mixed or too weak to separate cleanly · not provenance-confirmed.";
+  return "Signal evidence assessment · not provenance-confirmed.";
 }
 
 function verdictExplanation(report: DetectorReport) {
@@ -202,7 +208,7 @@ export default function AIDetectorApp({ onBack }: Props) {
               <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.2em] text-violet-500">2 · Verdict</div><h2 className="mt-1 text-xl font-semibold">Origin assessment</h2></div><span className="text-[11px] text-neutral-500">{report.mode} · {report.analysis_profile.sampled_windows} windows · {report.elapsed_seconds.toFixed(2)}s</span></div>
               <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-center">
                 <div className="grid h-36 w-36 shrink-0 place-items-center rounded-full p-[10px]" style={{ background: `conic-gradient(${scoreAccent} ${report.ai_evidence_score}%, rgba(148,163,184,.16) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-white text-center dark:bg-neutral-900"><div><div className="text-4xl font-semibold tabular-nums">{report.ai_evidence_score.toFixed(1)}</div><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">AI evidence</div></div></div></div>
-                <div><div className="text-2xl font-semibold">{report.verdict_label}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{report.evidence_agreement.toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
+                <div><div className="text-2xl font-semibold">{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{report.evidence_agreement.toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
               </div>
               <div className="mt-6 grid grid-cols-3 text-[10px] uppercase tracking-wide text-neutral-500"><span>Human-leaning</span><span className="text-center">Indeterminate</span><span className="text-right">AI-leaning</span></div>
             </section>
