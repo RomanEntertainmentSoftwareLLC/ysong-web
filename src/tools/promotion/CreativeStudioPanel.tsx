@@ -7,11 +7,13 @@ import { generatedVideoSource, type CompletedVideoJob } from "./generatedVideoJo
 import CreativeStudioTimeline from "./CreativeStudioTimeline";
 import CreativeStudioVideoJobs from "./CreativeStudioVideoJobs";
 import { previewStudioEditProposal, type StudioEditProposal } from "./studioEditProposals";
+import { buildAdsCriticFixSuggestions } from "./adsCriticFixSuggestions";
+import type { AdsCriticEvidencePacket } from "./adsCriticEvidenceContract";
 import type { AdsStudioSelection } from "./AdsSmartAssistantPanel";
 import { acceptStudioVideoRange, videoProviderCapabilities, type StudioVideoRange } from "./studioVideoRanges";
 
 /** Edits the reusable creative; campaign renders remain derived bindings. */
-export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, beatCutsBySnippet = {}, onSelectionChange }: { creative: AdCreative; mediaUrls: Record<string, string>; audioUrl: string; beatCutsBySnippet?: Record<string, number[]>; onSelectionChange?: (selection: AdsStudioSelection) => void }) {
+export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, beatCutsBySnippet = {}, criticPacket, onSaved, onSelectionChange }: { creative: AdCreative; mediaUrls: Record<string, string>; audioUrl: string; beatCutsBySnippet?: Record<string, number[]>; criticPacket?: AdsCriticEvidencePacket | null; onSaved?: (project: CreativeStudioProject) => void; onSelectionChange?: (selection: AdsStudioSelection) => void }) {
   const [project, setProject] = useState<CreativeStudioProject | null>(null);
   const [baseline, setBaseline] = useState<CreativeStudioProject | null>(null);
   const [history, setHistory] = useState<StudioHistory | null>(null);
@@ -78,12 +80,15 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
   const editingProject: CreativeStudioProject = { ...current, tracks: activeVariant?.tracks || current.tracks, render: { ...current.render, width: activeVariant?.width || dimensions[aspect][0], height: activeVariant?.height || dimensions[aspect][1] } };
   const refs = { audioSnippetIds: owner.audioSnippets.map(item => item.snippetId), backgroundMediaIds: owner.backgroundMedia.map(item => item.mediaId), overlayIds: owner.overlays.map(item => item.id), stockMediaIds: owner.backgroundMedia.filter(item => item.source === "stock").map(item => item.mediaId) };
   const fps = current.timebase.framesPerSecond.numerator / current.timebase.framesPerSecond.denominator;
+  const criticAspectMatches = criticPacket?.aspectRatio === aspect || (criticPacket?.aspectRatio === "base" && aspect === "9:16" && !project?.variants?.["9:16"]);
+  const criticReady = !!criticPacket && criticPacket.creativeId === owner.id && criticPacket.studioRevision === baseline.revision && criticAspectMatches && current === baseline;
+  const criticSuggestions = criticReady ? buildAdsCriticFixSuggestions(criticPacket, baseline, refs, Object.values(beatCutsBySnippet).flat().map(second => Math.round(second * fps))) : [];
   const targetTrack = selection && editingProject.tracks.find(item => item.id === selection.trackId);
   const targetClip = selection && targetTrack?.clips.find(item => item.id === selection.clipId);
   const ideas: Array<{ label: string; proposal: StudioEditProposal }> = [];
   if (selection && targetClip && targetTrack && !targetTrack.locked) {
     const target = { trackId: selection.trackId, clipId: selection.clipId };
-    if (targetClip.startFrame === 0 && targetClip.durationFrames > Math.max(1, Math.round(fps * .5)) + 1) ideas.push({ label: "Trim this opening", proposal: { kind: "trim_opening", ...target, frames: Math.max(1, Math.round(fps * .5)) } });
+    if (targetClip.startFrame === 0 && targetClip.durationFrames > Math.max(1, Math.round(fps * .8)) + 1) ideas.push({ label: "Trim opening by 0.8s", proposal: { kind: "trim_opening", ...target, frames: Math.max(1, Math.round(fps * .8)) } });
     if (targetClip.startFrame > 0) ideas.push({ label: "Move the hook earlier", proposal: { kind: "move_hook", ...target, startFrame: 0 } });
     const snippetId = "snippetId" in targetClip ? targetClip.snippetId : owner.audioSnippets[0]?.snippetId;
     const cuts = [...new Set((beatCutsBySnippet[snippetId] || []).map(second => Math.round(second * fps)))].filter(frame => frame > targetClip.startFrame && frame < targetClip.startFrame + targetClip.durationFrames).slice(0, 8);
@@ -144,7 +149,7 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
       const outgoing = { ...current, edit: { ...current.edit, parentRevision: current.revision, updatedAt: new Date().toISOString(), summary: "Updated Creative Studio tracks" } };
       const result = await promotionApi.saveStudioProject(owner, outgoing);
       const saved = result.creative.studioProject!;
-      setProject(saved); setBaseline(saved); setHistory(createStudioHistory(saved)); setNotice("Timeline saved to reusable creative.");
+      setProject(saved); setBaseline(saved); setHistory(createStudioHistory(saved)); onSaved?.(saved); setNotice("Timeline saved to reusable creative.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save timeline."); }
     finally { setSaving(false); }
   }
@@ -160,6 +165,8 @@ export default function CreativeStudioPanel({ creative, mediaUrls, audioUrl, bea
     <section aria-label="Smart timeline edit proposals" className="mb-3 rounded-xl border border-violet-500/25 p-3 text-xs">
       <div className="font-semibold">Ads Smart Assistant · Timeline proposals</div>
       <p className="mt-1 text-neutral-500">Select a clip to preview a validated edit for the {aspect} layout.</p>
+      {criticSuggestions.length > 0 && <div className="mt-3 space-y-2"><div className="font-medium">Ads Critic fixes · saved revision {criticPacket?.studioRevision}</div>{criticSuggestions.map(item => <div key={item.evidenceId} className="flex flex-wrap items-center justify-between gap-2 rounded border p-2"><div><div className="font-medium">{item.title}</div><div className="text-neutral-500">{item.detail} · Evidence {item.evidenceId}</div></div>{item.proposal ? <button type="button" disabled={saving} onClick={() => propose(item.proposal!)} className="rounded border border-violet-500 px-2.5 py-1.5 disabled:opacity-40">Preview fix</button> : <span className="text-neutral-500">Review in video tools below</span>}</div>)}</div>}
+      {criticPacket && !criticReady && <p className="mt-2 text-neutral-500">Ads Critic fixes require the matching saved aspect and revision. Save current edits or select that aspect to review them.</p>}
       <div className="mt-2 flex flex-wrap gap-2">{ideas.map(idea => <button key={idea.label} type="button" disabled={saving} onClick={() => propose(idea.proposal)} className="rounded border px-2.5 py-1.5 disabled:opacity-40">{idea.label}</button>)}</div>
       {proposalError && <p role="alert" className="mt-2 text-amber-600">{proposalError}</p>}
       {pending && <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3"><div className="font-medium">Proposed change · {aspect}</div><div className="mt-1 text-neutral-500">Before: {pending.before}</div><div className="mt-1">After: {pending.after}</div><div className="mt-2 flex gap-2"><button type="button" disabled={saving || pending.source !== current || pending.aspect !== aspect} onClick={applyProposal} className="rounded bg-violet-600 px-3 py-1.5 font-medium text-white disabled:opacity-40">Apply edit</button><button type="button" onClick={() => setPending(null)} className="rounded border px-3 py-1.5">Dismiss</button></div>{(pending.source !== current || pending.aspect !== aspect) && <p className="mt-1 text-amber-600">Timeline changed. Preview the proposal again.</p>}</div>}

@@ -57,3 +57,10 @@ test("derives opening, timeline gaps, text density, and explicit render uncertai
   assert.ok(signals.some(item => item.code === "render_unchecked" && item.kind === "uncertainty"));
   assert.doesNotThrow(() => buildAdsCriticEvidence({ ...input(signals), project: edited }));
 });
+
+test("accepts measured duration for Studio text without a reusable overlay ID", () => {
+  const edited = structuredClone(project);
+  delete edited.tracks[1].clips[0].overlayId;
+  const signals = analyzeAdsCreativeTimeline(edited);
+  assert.doesNotThrow(() => buildAdsCriticEvidence({ ...input(signals), project: edited }));
+});

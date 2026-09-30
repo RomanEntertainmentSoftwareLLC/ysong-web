@@ -1,5 +1,7 @@
 # Ads Critic measured-evidence contract
 
+`buildAdsCriticFixSuggestions` maps supported deterministic findings from the saved packet into Creative Studio edit proposals. It requires the exact Studio revision and timebase, resolves clip IDs in the packet's aspect, and runs each edit through `previewStudioEditProposal` before showing it. Opening delay, late CTA, dense text, and long visual holds with beat markers can produce editable suggestions. Visual gaps and long holds without beat markers remain review steps for the existing video tools; they never create media or alter tracks automatically. The artist previews the before/after, explicitly applies the edit to local Studio history, and separately saves the timeline. Undo/redo remain available before save; editing or switching aspects invalidates the pending preview.
+
 `buildAdsCriticEvidence` in `src/tools/promotion/adsCriticEvidenceContract.ts` is the version 1 boundary between a deterministic Ads Critic and artist-facing critique. It accepts only a validated, saved Creative Studio project, its source ID lists, one selected aspect variant, a capture time, and bounded deterministic signals. The packet records the reusable creative ID, exact Studio revision, rational frame timebase, and half-open frame ranges. Rebuild it when the project revision changes; never carry findings forward onto an edited timeline.
 
 ## Evidence classes
