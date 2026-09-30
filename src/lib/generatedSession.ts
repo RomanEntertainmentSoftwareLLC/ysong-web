@@ -1,6 +1,7 @@
 import type { MidiScaleId } from "./midi";
 import type { InstrumentRoleIntent } from "./bridgeApi";
 import type { SingerIdentity } from "./singerLibrary";
+import type { SongGenerationResult } from "./songGenerationContract";
 
 export type GeneratedMidiNote = {
   pitch: number;
@@ -90,6 +91,7 @@ export type GeneratedSessionManifest = {
   sections: GeneratedSongSection[];
   singerRoster?: SingerIdentity[];
   tracks: GeneratedSessionTrack[];
+  result?: SongGenerationResult;
 };
 
 const PENDING_KEY = "ysong:pending-generated-session:v1";

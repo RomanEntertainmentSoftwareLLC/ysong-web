@@ -29,6 +29,7 @@ import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type Daw
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
+import { parseSongGenerationResult, type SongGenerationResult } from "../lib/songGenerationContract";
 import { listGenerations, upsertGeneration, type GenerationRecord } from "../lib/generationLibrary";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
@@ -571,6 +572,7 @@ export default function DAW(_props: TabRendererProps) {
 		createdAt: number;
 		title: string;
 		singers?: NonNullable<GeneratedSessionManifest["singerRoster"]>;
+		songResult?: SongGenerationResult;
 	};
 	type DawPersistV1 = {
 		v: 1;
@@ -3514,6 +3516,7 @@ export default function DAW(_props: TabRendererProps) {
 		if (activeProjectId !== generatedSessionTargetProjectRef.current) return;
 		const manifest = generatedSessionPendingRef.current;
 		if (!manifest) return;
+		const songResult = parseSongGenerationResult(manifest.result);
 
 		stop();
 		bridgeApi.unloadAllVst3().catch(() => {});
@@ -3529,6 +3532,7 @@ export default function DAW(_props: TabRendererProps) {
 		const barSec = (60 / Math.max(1, manifest.bpm)) * (4 / Math.max(1, manifest.sigDen)) * Math.max(1, manifest.sigNum);
 		for (let index = 0; index < manifest.tracks.length; index++) {
 			const source = manifest.tracks[index];
+			if (songResult?.parts.find((part) => part.id === source.id)?.status === "failed") continue;
 			const partGeneration: PartGeneration = {
 				origin: "create-song", role: source.role, vocalRole: source.vocalRole,
 				singerId: source.singer?.id, singerName: source.singer?.displayName, singerAvatarRef: source.singer?.avatarRef,
@@ -3553,7 +3557,7 @@ export default function DAW(_props: TabRendererProps) {
 			if (source.mode === "audio" && source.objectKey) {
 				const assetId = source.objectKey;
 				nextAssets.push({ id: assetId, kind: "audio", name: `${source.name}.wav`, objectKey: source.objectKey, sourceObjectKey: source.objectKey, durationSec: source.durationSec });
-				const lengthBars = source.durationSec && source.durationSec > 0 ? Math.max(0.01, source.durationSec / Math.max(0.0001, barSec)) : Math.max(1, manifest.totalBars);
+				const lengthBars = songResult ? manifest.totalBars : source.durationSec && source.durationSec > 0 ? Math.max(0.01, source.durationSec / Math.max(0.0001, barSec)) : Math.max(1, manifest.totalBars);
 				nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name: source.name, startBar: 1, lengthBars, sourceOffsetSec: 0, sourceDurationSec: source.durationSec, fadeInBars: 0, fadeOutBars: 0, partGeneration });
 			}
 			if (source.mode === "midi") {
@@ -3584,14 +3588,16 @@ export default function DAW(_props: TabRendererProps) {
 			createdAt: manifest.createdAt,
 			title: manifest.projectName || "Generated Song",
 			singers: manifest.singerRoster,
+			...(songResult ? { songResult } : {}),
 		});
 		upsertGeneration({
 			id: sessionId,
-			status: "succeeded",
+			status: songResult?.status === "partial" ? "partial" : "succeeded",
 			title: manifest.projectName || "Generated Song",
 			createdAt: manifest.createdAt,
 			source: { prompt: manifest.structuredCaption || "", origin: "create-song" },
 			artifacts: [{ id: `project:${activeProjectId}`, kind: "project", label: "Editable YSong project", projectId: activeProjectId }],
+			...(songResult ? { songResult } : {}),
 		});
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));
@@ -3611,7 +3617,7 @@ export default function DAW(_props: TabRendererProps) {
 			handledGenerationImportRef.current === generationImportRequest.requestId) return;
 		handledGenerationImportRef.current = generationImportRequest.requestId;
 		const record = typeof generationImportRequest.id === "string" ? listGenerations().find((item) => item.id === generationImportRequest.id) : undefined;
-		if (!record || record.status !== "succeeded") {
+		if (!record || (record.status !== "succeeded" && record.status !== "partial")) {
 			setSwitchError("This generation is no longer available to import."); setProjectSheetOpen(true); return;
 		}
 		const artifacts = record.artifacts.filter((artifact) => artifact.kind === "audio" && (artifact.objectKey || artifact.url));

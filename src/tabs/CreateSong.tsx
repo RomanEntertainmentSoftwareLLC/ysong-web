@@ -7,6 +7,8 @@ import { getActiveBandId, listBandProfiles, setActiveBandId, type BandProfile } 
 import { SCALE_DEFINITIONS, NOTE_NAMES, nearestAllowedPitch, type MidiScaleId, type MidiScaleRule } from "../lib/midi";
 import { decodeAudioDuration, generateMiniMaxTrack, getMusicEngineStatus, uploadGeneratedAudio, type MusicEngineStatus } from "../lib/musicGeneration";
 import { classifyVocalRole, stageGeneratedSession, type GeneratedMidiRegion, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
+import { resultFromGeneratedSession } from "../lib/songGenerationContract";
+import { upsertGeneration } from "../lib/generationLibrary";
 import { listSingerCharacters, saveSingerCharacter, singerIdentity, type SingerCharacter } from "../lib/singerLibrary";
 
 const STORAGE_KEY = "ysong:create-song:draft:v3";
@@ -355,13 +357,16 @@ export default function CreateSongPane(_props: TabRendererProps) {
       }
       const activePlan = plan;
       const audioTracks = activePlan.tracks.filter((t) => t.mode === "audio");
+      let generationEngine: MusicEngineStatus | undefined;
       if (audioTracks.length) {
         const status = await getMusicEngineStatus();
+        generationEngine = status;
         setEngine(status);
         if (!status.reachable) throw new Error(status.message || `MiniMax Music 3 is not reachable through ${status.provider === "audio_cpp" ? "the local audio.cpp runtime" : (status.baseUrl || "the configured endpoint")}.`);
       }
 
       const completed: GeneratedSessionTrack[] = [];
+      const failures = new Map<string, { code: "generation_failed" | "upload_failed"; message: string }>();
       const sharedSeed = Math.floor(Math.random() * 2_000_000_000);
       for (let i = 0; i < activePlan.tracks.length; i++) {
         const track = activePlan.tracks[i];
@@ -372,24 +377,44 @@ export default function CreateSongPane(_props: TabRendererProps) {
         }
         setProgress(`Generating isolated audio track ${i + 1}/${activePlan.tracks.length}: ${track.name}`);
         const durationSeconds = Math.max(2, Math.min(600, activePlan.totalBars * activePlan.sigNum * (4 / activePlan.sigDen) * (60 / activePlan.bpm)));
-        const blob = await generateMiniMaxTrack({
+        let blob: Blob;
+        try { blob = await generateMiniMaxTrack({
           lyrics: track.useLyrics && !draft.instrumental ? (draft.lyrics || "[Instrumental]") : "[Instrumental]",
           instructions: buildMiniMaxTrackInstructions(activePlan, track),
           seed: sharedSeed,
           maxNewTokens: 9000,
           durationSeconds,
           quality: "standard",
-        });
+        }); } catch (error) {
+          failures.set(track.id, { code: "generation_failed", message: error instanceof Error ? error.message : "Audio generation failed." });
+          completed.push(track);
+          continue;
+        }
         const durationSec = await decodeAudioDuration(blob).catch(() => undefined);
         setProgress(`Saving ${track.name} into YSong…`);
         const safeName = `${activePlan.projectName}-${track.name}`.replace(/[\\/:*?"<>|]+/g, "-").slice(0, 150) || `Generated-${i + 1}`;
-        const uploaded = await uploadGeneratedAudio(blob, `${safeName}.wav`);
-        completed.push({ ...track, objectKey: uploaded.objectKey, durationSec });
+        try {
+          const uploaded = await uploadGeneratedAudio(blob, `${safeName}.wav`);
+          completed.push({ ...track, objectKey: uploaded.objectKey, durationSec });
+        } catch (error) {
+          failures.set(track.id, { code: "upload_failed", message: error instanceof Error ? error.message : "Audio upload failed." });
+          completed.push(track);
+        }
       }
 
       const manifest: GeneratedSessionManifest = { v: 1, sessionId: crypto.randomUUID(), createdAt: Date.now(), ...activePlan, tracks: completed };
+      const result = resultFromGeneratedSession(manifest,
+        { origin: "create-song", prompt: activePlan.structuredCaption || "", seed: sharedSeed },
+        { provider: generationEngine?.provider || "ysong-midi", name: generationEngine?.model || "structured-midi" }, failures);
+      manifest.result = result;
+      if (result.status === "failed") {
+        upsertGeneration({ id: result.id, status: "failed", title: manifest.projectName, createdAt: result.createdAt,
+          source: { prompt: result.source.prompt, origin: "create-song" }, artifacts: [], songResult: result,
+          error: "All generated parts failed. Review the part failures and try again." });
+        throw new Error("All generated parts failed. No project was created.");
+      }
       stageGeneratedSession(manifest);
-      setProgress("Session generated. Opening the editable YSong project…");
+      setProgress(result.status === "partial" ? "Partial session saved. Opening the available tracks in YSong…" : "Session generated. Opening the editable YSong project…");
       const existingDaw = tabs.find((t) => t.type === "daw");
       const dawId = existingDaw?.id ?? openTab({ type: "daw", title: "DAW", pinned: true });
       activateTab(dawId);

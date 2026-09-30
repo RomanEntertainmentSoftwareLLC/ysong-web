@@ -1,0 +1,10 @@
+# AI multitrack generation result
+
+`SongGenerationResult` in `src/lib/songGenerationContract.ts` is the version 1 boundary between generation services and YSong projects. `resultFromGeneratedSession` is the current Create Song adapter. Provider responses stay in the service/client layer; this result holds only project references and metadata. `parseSongGenerationResult` validates persisted data and copies its allowlisted fields.
+
+- `id`, `createdAt`, `source` (origin, prompt, optional seed), and `model` (provider and name) record provenance. Raw requests, credentials, and provider job payloads have no field in this contract.
+- `timebase` fixes BPM, meter, one-based `startBar: 1`, and total bars for the whole generation. All audio parts begin at bar 1 with zero source offset and span `totalBars`; their source duration may differ and the DAW stretches the clip to the shared bar range. MIDI region starts are absolute project bars; note starts are relative to their region.
+- Each part has a stable ID, display name, free-form musical role, audio or MIDI kind, and a ready or failed state. Ready audio holds a saved YSong `objectKey`, not a provider URL. Ready MIDI holds editable regions and notes. Failed parts hold a code and message with no media.
+- Overall status is derived from parts: `complete` when all are ready, `partial` when some are ready, and `failed` when none are ready. A failed result creates no DAW project. A partial result opens only usable parts and retains failures in the project provenance and generation library.
+
+The existing `GeneratedSessionManifest` remains the DAW import plan for Create Song, and existing local projects and generation records without `songResult` remain readable. New generated projects persist the result in `generation.songResult`; library records persist it in `songResult`. Future providers should adapt to this contract before their results enter a project.

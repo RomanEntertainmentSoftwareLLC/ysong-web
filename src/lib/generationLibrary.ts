@@ -1,6 +1,7 @@
 /** Browser-local catalog for generated song records. Provider execution and
  * remote job ownership intentionally live outside this module. */
-export type GenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+import { parseSongGenerationResult, type SongGenerationResult } from "./songGenerationContract";
+export type GenerationStatus = "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
 
 export type GenerationArtifact = {
   id: string;
@@ -22,12 +23,13 @@ export type GenerationRecord = {
   artifacts: GenerationArtifact[];
   error?: string;
   folderId?: string;
+  songResult?: SongGenerationResult;
 };
 
 export type GenerationFolder = { id: string; name: string; createdAt: number; updatedAt: number };
 
 const STORAGE_KEY = "ysong:generations:v1";
-const STATUSES = new Set<GenerationStatus>(["queued", "running", "succeeded", "failed", "cancelled"]);
+const STATUSES = new Set<GenerationStatus>(["queued", "running", "succeeded", "partial", "failed", "cancelled"]);
 const FOLDERS_KEY = "ysong:generation-folders:v1";
 
 function normalizeRecord(value: unknown): GenerationRecord | null {
@@ -46,6 +48,7 @@ function normalizeRecord(value: unknown): GenerationRecord | null {
     updatedAt: typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) ? item.updatedAt : item.createdAt,
     source: { prompt: item.source.prompt, ...(typeof item.source.lyrics === "string" ? { lyrics: item.source.lyrics } : {}), ...(typeof item.source.style === "string" ? { style: item.source.style } : {}), ...(typeof item.source.origin === "string" ? { origin: item.source.origin } : {}) },
     artifacts: artifacts.map((artifact) => ({ ...artifact, ...(typeof artifact.durationSec === "number" && Number.isFinite(artifact.durationSec) && artifact.durationSec > 0 ? { durationSec: artifact.durationSec } : {}) })), ...(typeof item.error === "string" ? { error: item.error } : {}), ...(typeof item.folderId === "string" && item.folderId ? { folderId: item.folderId } : {}),
+    ...(item.songResult ? { songResult: parseSongGenerationResult(item.songResult) ?? undefined } : {}),
   };
 }
 
