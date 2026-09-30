@@ -267,9 +267,30 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
       </section>}
 
       {view==="summary"&&<section className={panel}><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-semibold">Confirmation summary</h3><p className="mt-1 text-xs text-neutral-500">Review the entire draft, then run Meta preflight before authorizing any paid delivery.</p></div><span className={chip}>{readiness}/7 ready</span></div>
-        <div className="mt-5 divide-y divide-neutral-200 text-sm dark:divide-neutral-800">
-          <SummaryRow label="Campaign" value={campaignName||ad.name}/><SummaryRow label="Objective" value={goal.replaceAll("_"," ")}/><SummaryRow label="Genre" value={`${genre||"Unset"} · ${genreSource}`}/><SummaryRow label="Smart Link" value={smartLink?.publicUrl||"Missing"}/><SummaryRow label="Countries" value={chosenCountries.length?`${chosenCountries.slice(0,8).map(c=>c.name).join(", ")}${chosenCountries.length>8?` +${chosenCountries.length-8} more`:""}`:"None"}/><SummaryRow label="Interests" value={targeting.interests.map(i=>i.name).slice(0,12).join(", ")||"None"}/><SummaryRow label="Age / gender" value={`${targeting.ageMin}–${targeting.ageMax} · ${targeting.gender}`}/><SummaryRow label="Placements" value={targeting.placementTargets.map(id=>PLACEMENTS.find(p=>p.id===id)?.label).filter(Boolean).join(", ")||"None"}/><SummaryRow label="Budget" value={`${money(Math.max(0,Math.round((Number(dailyBudget)||0)*100)),currency)} / day`}/><SummaryRow label="Schedule" value={scheduleMode==="always"?"Always active":`${startLocal||"?"} → ${endLocal||"?"} · ${timezone}`}/><SummaryRow label="Meta Page" value={chosenConnection?.pageName||"Not selected"}/><SummaryRow label="Instagram" value={chosenConnection?.instagramUsername?`@${chosenConnection.instagramUsername}`:"Not linked"}/><SummaryRow label="Ad account" value={chosenAdAccount?.name||"Not selected"}/><SummaryRow label="Pixel" value={chosenPixel?.name||"None"}/><SummaryRow label="Selected creatives" value={`${creatives.filter(c=>c.selected&&c.status==="ready").length} ready`}/><SummaryRow label="Headline" value={headline||"None"}/>
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="divide-y divide-neutral-200 text-sm dark:divide-neutral-800">
+            <SummaryRow label="Song / release" value={`${smartLink?.artistName||"Artist not set"} - ${smartLink?.title||"Release not linked"}`} />
+            <SummaryRow label="Genre hints" value={`${genre||"None"} (${genreSource})${interestSeeds.length?` - Ideas: ${unique(interestSeeds).slice(0,5).join(", ")}`:""}`} />
+            <SummaryRow label="Destination" value={smartLink?.publicUrl||"Smart Link URL unavailable"} />
+            <SummaryRow label="Location" value={chosenCountries.map(c=>c.name).join(", ")||"None selected"} />
+            <SummaryRow label="Age / gender" value={`${targeting.ageMin}-${targeting.ageMax===65?"65+":targeting.ageMax} - ${targeting.gender}`} />
+            <SummaryRow label="Interests" value={targeting.interests.map(i=>`${i.name} (${formatAudienceRange(i)})`).join(", ")||"None selected"} />
+            <SummaryRow label="Estimated audience" value={`${audienceEstimate.value}. ${audienceEstimate.detail}`} />
+            <SummaryRow label="Facebook placements" value={placementsForPlatform("facebook").map(p=>p.label).join(", ")||"None"} />
+            <SummaryRow label="Instagram placements" value={placementsForPlatform("instagram").map(p=>p.label).join(", ")||"None"} />
+            <SummaryRow label="Schedule" value={scheduleMode==="always"?"Always active":`${startLocal||"Start not set"} to ${endLocal||"End not set"} - ${timezone}`} />
+            <SummaryRow label="Budget" value={`${money(Math.max(0,Math.round((Number(dailyBudget)||0)*100)),currency)} per day${estimatedSpend!=null?` - planned max ${new Intl.NumberFormat(undefined,{style:"currency",currency}).format(estimatedSpend)}`:" - total unavailable until an end date is set"}`} />
+            <SummaryRow label="Facebook Page" value={chosenConnection?.pageName||"Not selected"} />
+            <SummaryRow label="Instagram identity" value={chosenConnection?.instagramUsername?`@${chosenConnection.instagramUsername}`:"Not linked"} />
+            <SummaryRow label="Ad account" value={chosenAdAccount?`${chosenAdAccount.name} - ${chosenAdAccount.currency}`:"Not selected"} />
+            <SummaryRow label="Pixel / dataset" value={chosenPixel?.name||"None selected"} />
+            <SummaryRow label="Creative" value={`${creatives.filter(c=>c.selected&&c.status==="ready").length} ready creative(s) - ${headline||"No headline"}`} />
+          </div>
+          <div><div className="mb-2 text-xs font-semibold text-neutral-500">Creative preview - {previewDef.label}</div><div className={`relative overflow-hidden bg-black ${previewDef.format==="vertical"?"aspect-[9/16] rounded-2xl":"aspect-[4/3] rounded-xl"}`}>
+            {previewUrl?<video className="absolute inset-0 h-full w-full object-cover" src={previewUrl} controls playsInline preload="metadata"/>:<div className="absolute inset-0 grid place-items-center p-4 text-center text-xs text-neutral-400">No rendered creative is ready for this placement.</div>}
+          </div><p className="mt-2 text-xs text-neutral-500">{adText||"No primary text added."}</p></div>
         </div>
+        <details className="mt-4 rounded-xl border border-neutral-200 px-4 py-3 text-xs dark:border-neutral-800"><summary className="cursor-pointer font-medium">Show provider reference IDs</summary><dl className="mt-3 space-y-2 text-neutral-500"><SummaryRow label="YSong campaign" value={ad.id}/><SummaryRow label="Source track" value={ad.sourceTrackId||"Not linked"}/><SummaryRow label="Meta connection" value={connectionId||"Not selected"}/><SummaryRow label="Meta ad account" value={adAccountId||"Not selected"}/><SummaryRow label="Meta Page" value={chosenConnection?.pageId||"Not available"}/><SummaryRow label="Instagram account" value={chosenConnection?.instagramUserId||"Not available"}/><SummaryRow label="Pixel / dataset" value={pixelId||"Not selected"}/></dl></details>
         <MetaPublishPanel ad={ad} smartLink={smartLink} onUpdated={onSaved} onMessage={onMessage}/>
       </section>}
 
