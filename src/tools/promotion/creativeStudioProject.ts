@@ -19,6 +19,8 @@ export type StudioVisualClip = StudioClipBase & {
   sourceInSeconds: number; sourceOutSeconds: number;
   /** Source video playback multiplier. Audio embedded in video remains muted in Studio preview. */
   speed?: 0.5 | 0.75 | 1 | 1.25 | 1.5 | 2;
+  /** Neutral defaults preserve older saved projects and existing footage. */
+  color?: { brightness: number; contrast: number; saturation: number; temperature: number; tint: number };
   transform: StudioTransform;
 };
 export type StudioAudioClip = StudioClipBase & {
@@ -157,6 +159,7 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
         if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
         if (clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
+        if (clip.color !== undefined) checkColor(clip.color);
         checkTransform(clip.transform, "clip.transform");
       } else {
         const idKey = track.kind === "audio" ? "snippetId" : "mediaId";
@@ -166,8 +169,17 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
         if (track.kind === "visual" && clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
         if (track.kind === "audio") { const volume = number(clip.volume, "volume", 0); if (volume > 1) fail("volume"); }
-        else checkTransform(clip.transform, "clip.transform");
+        else { if (clip.color !== undefined) checkColor(clip.color); checkTransform(clip.transform, "clip.transform"); }
       }
+    }
+  }
+  function checkColor(value: unknown) {
+    const color = record(value, "clip.color");
+    for (const key of ["brightness", "contrast", "saturation"] as const) {
+      const n = number(color[key], `clip.color.${key}`, 0); if (n > 200) fail(`clip.color.${key}`);
+    }
+    for (const key of ["temperature", "tint"] as const) {
+      const n = number(color[key], `clip.color.${key}`, -100); if (n > 100) fail(`clip.color.${key}`);
     }
   }
 }
