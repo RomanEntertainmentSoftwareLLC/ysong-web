@@ -1,4 +1,4 @@
-import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api";
+import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api.ts";
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${VOCAL_API_BASE}${path}`, init);
@@ -14,6 +14,41 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type RemasterMode = "preserve" | "balanced" | "aggressive" | "custom";
+
+export type MasteringRenderSettings = {
+  mode: "quick" | "assistant" | "reference";
+  remasterMode: RemasterMode;
+  targetLufs: number;
+  truePeak: number;
+  strength: number;
+  stereoWidth: number;
+  transientAmount: number;
+  applyDynamicEq: boolean;
+  referenceAssetId?: string | null;
+  referenceInfluence: number;
+};
+
+function bounded(value: number, minimum: number, maximum: number, fallback: number) {
+  return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
+}
+
+// Keep render requests inside the ranges exposed by the controls.
+export function masteringRenderQuery(settings: MasteringRenderSettings): URLSearchParams {
+  const quick = settings.mode === "quick";
+  const q = new URLSearchParams({
+    mode: settings.mode,
+    remaster_mode: quick ? "preserve" : settings.remasterMode,
+    target_lufs: String(bounded(settings.targetLufs, -24, -7, -16)),
+    true_peak_dbtp: String(bounded(settings.truePeak, -6, -0.1, -1)),
+    strength: String(quick ? Math.min(0.35, bounded(settings.strength, 0, 1, 0.35)) : bounded(settings.strength, 0, 1, 0.35)),
+    stereo_width: String(quick ? 1 : bounded(settings.stereoWidth, 0.5, 1.5, 1)),
+    transient_amount: String(quick ? 0 : bounded(settings.transientAmount, -0.35, 0.35, 0)),
+    apply_dynamic_eq: settings.applyDynamicEq ? "true" : "false",
+    reference_influence: String(quick ? 0 : bounded(settings.referenceInfluence, 0, 0.6, 0)),
+  });
+  if (!quick && settings.referenceAssetId) q.set("reference_asset_id", settings.referenceAssetId);
+  return q;
+}
 
 export type MasterMetrics = {
   duration_seconds: number;
@@ -164,31 +199,9 @@ export function startMasteringAnalysis(assetId: string, referenceAssetId?: strin
 
 export function startMasteringRender(
   assetId: string,
-  settings: {
-    mode: "quick" | "assistant" | "reference";
-    remasterMode: RemasterMode;
-    targetLufs: number;
-    truePeak: number;
-    strength: number;
-    stereoWidth: number;
-    transientAmount: number;
-    applyDynamicEq: boolean;
-    referenceAssetId?: string | null;
-    referenceInfluence: number;
-  },
+  settings: MasteringRenderSettings,
 ): Promise<LocalJob> {
-  const q = new URLSearchParams({
-    mode: settings.mode,
-    remaster_mode: settings.remasterMode,
-    target_lufs: String(settings.targetLufs),
-    true_peak_dbtp: String(settings.truePeak),
-    strength: String(settings.strength),
-    stereo_width: String(settings.stereoWidth),
-    transient_amount: String(settings.transientAmount),
-    apply_dynamic_eq: settings.applyDynamicEq ? "true" : "false",
-    reference_influence: String(settings.referenceInfluence),
-  });
-  if (settings.referenceAssetId) q.set("reference_asset_id", settings.referenceAssetId);
+  const q = masteringRenderQuery(settings);
   return jsonFetch<LocalJob>(`/v1/mastering/jobs/render/${encodeURIComponent(assetId)}?${q.toString()}`, { method: "POST" });
 }
 
