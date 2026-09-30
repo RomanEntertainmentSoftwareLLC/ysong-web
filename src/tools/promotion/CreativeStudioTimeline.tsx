@@ -28,7 +28,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   onChange: (project: CreativeStudioProject, group?: string) => void;
   mediaUrls?: Record<string, string>;
   audioUrl?: string;
-  onSelectionChange?: (selection: { kind: "audio" | "visual" | "text"; label: string; startSeconds: number; durationSeconds: number; text?: string } | null) => void;
+  onSelectionChange?: (selection: { kind: "audio" | "visual" | "text"; trackId: string; clipId: string; label: string; startSeconds: number; durationSeconds: number; text?: string } | null) => void;
 }) {
   const [zoom, setZoom] = useState(80);
   const [snap, setSnap] = useState(true);
@@ -58,7 +58,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
     const clip = track?.clips.find(item => item.id === selection.clipId);
     if (!track || !clip) { onSelectionChange?.(null); return; }
     const text = track.kind === "text" && "text" in clip ? clip.text : undefined;
-    onSelectionChange?.({ kind: track.kind, label: text || (track.kind === "audio" ? "Audio clip" : track.kind === "visual" ? "Visual clip" : "Text overlay"), startSeconds: clip.startFrame / fps, durationSeconds: clip.durationFrames / fps, ...(text ? { text } : {}) });
+    onSelectionChange?.({ kind: track.kind, trackId: track.id, clipId: clip.id, label: text || (track.kind === "audio" ? "Audio clip" : track.kind === "visual" ? "Visual clip" : "Text overlay"), startSeconds: clip.startFrame / fps, durationSeconds: clip.durationFrames / fps, ...(text ? { text } : {}) });
   }, [selection, project, fps, onSelectionChange]);
   const syncAudioPreview = (element: HTMLAudioElement) => {
     if (!selectedAudioClip || !selectedAudioTrack || !selectedSnippet) return;

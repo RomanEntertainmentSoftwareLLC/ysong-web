@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { AdsAssistantContext, AdsAssistantResponse } from "./adsSmartAssistantContract";
 import { validateAdsAssistantResponse } from "./adsSmartAssistantContract";
 
-export type AdsStudioSelection = { kind: "audio" | "visual" | "text"; label: string; startSeconds: number; durationSeconds: number; text?: string } | null;
+export type AdsStudioSelection = { kind: "audio" | "visual" | "text"; trackId: string; clipId: string; label: string; startSeconds: number; durationSeconds: number; text?: string } | null;
 
 function responseFor(context: AdsAssistantContext, selection: AdsStudioSelection): AdsAssistantResponse {
   const suggestions: AdsAssistantResponse["suggestions"] = [];
