@@ -273,3 +273,41 @@ body {
 .dark .ys-player-range::-moz-range-track { background: #525252; }
 .dark .ys-player-range::-webkit-slider-thumb,
 .dark .ys-player-range::-moz-range-thumb { background: #f5f5f5; }
+
+/* Touch sizing is capability based so mouse and trackpad layouts retain
+   their existing compact spacing and precision. */
+@media (pointer: coarse) {
+	button,
+	[role="button"],
+	[role="menuitem"],
+	[aria-haspopup="menu"] {
+		min-height: 44px;
+		touch-action: manipulation;
+	}
+
+	input[type="range"],
+	.ys-player-range {
+		min-height: 32px;
+		touch-action: pan-x;
+	}
+
+	.ys-player-range::-webkit-slider-thumb {
+		width: 18px;
+		height: 18px;
+		margin-top: -7.5px;
+	}
+
+	.ys-player-range::-moz-range-thumb {
+		width: 18px;
+		height: 18px;
+	}
+
+	.ys-dialog,
+	[role="dialog"] {
+		max-width: calc(100vw - 1rem);
+		max-height: calc(100vh - 1rem);
+		max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 1rem);
+		overscroll-behavior: contain;
+		-webkit-overflow-scrolling: touch;
+	}
+}
