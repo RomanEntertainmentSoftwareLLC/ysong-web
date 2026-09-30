@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import ABMonitor from "./ABMonitor";
+import { compareReferenceDescriptors, descriptorProfile, parseReferenceProfile, type ReferenceProfile } from "./referenceDescriptors";
 import {
   masteringAnalysisUrl,
   startMasteringAnalysis,
@@ -148,6 +149,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   const [source, setSource] = useState<UploadResult | null>(initialUpload);
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
   const [reference, setReference] = useState<UploadResult | null>(null);
+  const [savedReference, setSavedReference] = useState<ReferenceProfile | null>(null);
   const [analysis, setAnalysis] = useState<MasteringAnalysis | null>(null);
   const [report, setReport] = useState<MasteringReport | null>(null);
   const [stage, setStage] = useState<Stage>(initialUpload ? "ready" : "idle");
@@ -168,6 +170,11 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   const busy = stage === "uploading" || stage === "analyzing" || stage === "rendering";
   const trackedProgress = stage === "analyzing" || stage === "rendering";
   const eqCandidates = useMemo(() => (analysis?.dynamic_eq_candidates || []).slice(0, 8), [analysis]);
+  const activeReference = useMemo(() => analysis?.reference?.metrics
+    ? descriptorProfile(analysis.reference.metrics, reference?.original_filename || "Reference track")
+    : savedReference, [analysis, reference, savedReference]);
+  const descriptorDifferences = useMemo(() => analysis && activeReference
+    ? compareReferenceDescriptors(analysis.analysis, activeReference) : [], [analysis, activeReference]);
 
   async function refreshHealth() {
     setHealth("checking");
@@ -221,8 +228,26 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   }
 
   function resetReference(file: File | null) {
-    setReferenceFile(file); setReference(null); setAnalysis(null); setReport(null); setError("");
+    setReferenceFile(file); setReference(null); setSavedReference(null); setAnalysis(null); setReport(null); setError("");
     if (stage === "error") setStage(source ? "ready" : "idle");
+  }
+
+  async function importReference(file: File | null) {
+    if (!file) return;
+    try {
+      if (file.size > 64_000) throw new Error("Reference descriptor file is too large.");
+      const profile = parseReferenceProfile(JSON.parse(await file.text()));
+      setSavedReference(profile); setReference(null); setReferenceFile(null); setReport(null); setError("");
+      setAnalysis(previous => previous ? { ...previous, reference: null } : null);
+    } catch (e: unknown) { setError(errorMessage(e, "Could not read reference descriptors.")); }
+  }
+
+  function downloadReference() {
+    if (!activeReference) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(activeReference, null, 2)], { type: "application/json" }));
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = "ysong-reference-descriptors.json"; anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function acceptDroppedFile(kind: "source" | "reference", event: ReactDragEvent<HTMLLabelElement>) {
@@ -351,6 +376,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
         <label onDragEnter={e => handleDragOver("reference", e)} onDragOver={e => handleDragOver("reference", e)} onDragLeave={e => { e.preventDefault(); if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragTarget(null); }} onDrop={e => acceptDroppedFile("reference", e)} className={`mt-4 block cursor-pointer rounded-xl border border-dashed p-5 transition ${dragTarget === "reference" ? "border-violet-400 bg-violet-500/10 shadow-[inset_0_0_0_1px_rgba(139,92,246,.18)]" : "border-neutral-300 hover:border-violet-500/60 dark:border-neutral-700"}`}><input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg,.opus,.aiff,.aif,.wma" className="hidden" disabled={busy} onChange={e => { resetReference(e.target.files?.[0] || null); e.currentTarget.value = ""; }}/><div className="font-medium">{referenceFile?.name || reference?.original_filename || "Optional reference track"}</div><div className="mt-1 text-xs text-neutral-500">YSong reports brighter/darker, wider/narrower, punch/compression, bass and presence-band differences before offering capped guidance.</div></label>
         {referenceFile && !reference && <button type="button" onClick={prepareReference} disabled={busy || health !== "online"} className="mt-3 min-h-10 rounded-xl border border-violet-500/40 px-4 text-sm font-medium text-violet-500 disabled:opacity-40">Prepare reference</button>}
         {reference && <div className="mt-3 text-xs text-neutral-500">Reference <span className="font-mono">{reference.asset_id}</span></div>}
+        <label className="mt-3 inline-block cursor-pointer rounded-xl border border-neutral-300 px-3 py-2 text-xs dark:border-neutral-700"><input type="file" accept="application/json,.json" className="hidden" disabled={busy} onChange={e => { void importReference(e.target.files?.[0] || null); e.currentTarget.value = ""; }}/>Load saved descriptors</label>
+        {savedReference && <div className="mt-2 text-xs text-neutral-500">Loaded: {savedReference.name}. Reference-guided rendering needs a reference audio file.</div>}
       </section>
     </div>
 
@@ -364,7 +391,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     {analysis && <>
       <section className="mt-5 rounded-2xl border border-neutral-200 bg-white/70 p-5 dark:border-neutral-800 dark:bg-neutral-900/45"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Measured source</div><h2 className="mt-1 text-xl font-semibold">{analysis.engine}</h2><p className="mt-1 text-xs text-neutral-500">Critique: {analysis.critique_integration?.verdict || "available"} · {analysis.critique_integration?.finding_count || 0} finding(s) considered · {analysis.critique_integration?.frequency_time_hints_used || 0} direct time/frequency hint(s).</p></div><a href={masteringAnalysisUrl(analysis.asset_id)} target="_blank" rel="noreferrer" className="rounded-xl border border-neutral-300 px-3 py-2 text-xs dark:border-neutral-700">JSON analysis</a></div><div className="mt-5"><MetricsGrid metrics={analysis.analysis}/></div>{analysis.tonal_description?.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{analysis.tonal_description.map((text, i) => <span key={i} className="rounded-full border border-neutral-200 px-3 py-1 text-xs text-neutral-500 dark:border-neutral-800">{text}</span>)}</div>}<div className="mt-5"><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">Tonal balance</div><TonalBalance metrics={analysis.analysis}/></div></section>
       <AssistantPlan analysis={analysis}/>
-      {analysis.reference && <section className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/[.035] p-5"><div className="text-[10px] uppercase tracking-[.18em] text-sky-500">Reference Match</div><h2 className="mt-1 text-lg font-semibold">Differences first</h2><div className="mt-4 grid gap-3 md:grid-cols-2">{analysis.reference.match.descriptors.map((row, i) => <div key={`${row.dimension}-${i}`} className="rounded-xl border border-sky-500/15 bg-white/50 p-3 dark:bg-neutral-950/25"><div className="text-[10px] uppercase tracking-wide text-neutral-500">{row.dimension.replaceAll("_", " ")}</div><div className="mt-1 font-medium capitalize">{row.difference}</div><div className="mt-1 text-xs text-neutral-500">{row.detail}</div></div>)}</div><div className="mt-3 text-xs text-neutral-500">{analysis.reference.match.policy}</div></section>}
+      {activeReference && <section className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/[.035] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.18em] text-sky-500">Reference Match</div><h2 className="mt-1 text-lg font-semibold">Measured differences</h2><p className="mt-1 text-xs text-neutral-500">{activeReference.name} · source relative to reference</p></div><button type="button" onClick={downloadReference} className="rounded-xl border border-sky-500/30 px-3 py-2 text-xs text-sky-500">Save descriptors JSON</button></div><div className="mt-4 grid gap-3 md:grid-cols-2">{descriptorDifferences.map(row => <div key={row.key} className="rounded-xl border border-sky-500/15 bg-white/50 p-3 dark:bg-neutral-950/25"><div className="text-[10px] uppercase tracking-wide text-neutral-500">{row.label}</div><div className="mt-1 font-medium capitalize">{row.difference}</div><div className="mt-1 text-xs text-neutral-500">{row.detail}</div><div className="mt-2 text-xs text-sky-600 dark:text-sky-400">{row.guidance}</div></div>)}</div><div className="mt-3 text-xs text-neutral-500">These measurements do not change the processing settings. Suggested limits are 2 dB for broad EQ and 10% for width; listen and keep the existing peak guard. Incompatible proxy and measured loudness or true-peak values are omitted. Saved descriptors contain no audio.</div>{analysis.reference?.match?.policy && <div className="mt-2 text-xs text-neutral-500">Engine guidance: {analysis.reference.match.policy}</div>}</section>}
       <section className="mt-5 rounded-2xl border border-neutral-200 bg-white/70 p-5 dark:border-neutral-800 dark:bg-neutral-900/45"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Dynamic correction map</div><h2 className="mt-1 text-lg font-semibold">Fix the moment, not the whole song</h2></div><div className="text-xs text-neutral-500">{analysis.dynamic_eq_candidates?.length || 0} candidate(s)</div></div><div className="mt-4 grid gap-3 md:grid-cols-2">{eqCandidates.length ? eqCandidates.map(row => <Candidate key={row.id} row={row}/>) : <div className="text-sm text-neutral-500">No strong localized tonal outliers were found. YSong will not invent corrections just to look busy.</div>}</div></section>
     </>}
 
