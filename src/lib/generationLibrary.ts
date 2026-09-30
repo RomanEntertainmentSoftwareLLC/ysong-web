@@ -9,6 +9,7 @@ export type GenerationArtifact = {
   objectKey?: string;
   url?: string;
   projectId?: string;
+  durationSec?: number;
 };
 
 export type GenerationRecord = {
@@ -44,7 +45,7 @@ function normalizeRecord(value: unknown): GenerationRecord | null {
     id: item.id, status, title: item.title, createdAt: item.createdAt,
     updatedAt: typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) ? item.updatedAt : item.createdAt,
     source: { prompt: item.source.prompt, ...(typeof item.source.lyrics === "string" ? { lyrics: item.source.lyrics } : {}), ...(typeof item.source.style === "string" ? { style: item.source.style } : {}), ...(typeof item.source.origin === "string" ? { origin: item.source.origin } : {}) },
-    artifacts, ...(typeof item.error === "string" ? { error: item.error } : {}), ...(typeof item.folderId === "string" && item.folderId ? { folderId: item.folderId } : {}),
+    artifacts: artifacts.map((artifact) => ({ ...artifact, ...(typeof artifact.durationSec === "number" && Number.isFinite(artifact.durationSec) && artifact.durationSec > 0 ? { durationSec: artifact.durationSec } : {}) })), ...(typeof item.error === "string" ? { error: item.error } : {}), ...(typeof item.folderId === "string" && item.folderId ? { folderId: item.folderId } : {}),
   };
 }
 

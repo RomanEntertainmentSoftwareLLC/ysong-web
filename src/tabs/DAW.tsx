@@ -29,7 +29,7 @@ import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type Daw
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
-import { upsertGeneration } from "../lib/generationLibrary";
+import { listGenerations, upsertGeneration, type GenerationRecord } from "../lib/generationLibrary";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
 import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
@@ -564,8 +564,10 @@ function gridStepBars(v: GridValue, sigNum: number, sigDen: number) {
 
 export default function DAW(_props: TabRendererProps) {
 	type GeneratedProjectProvenance = {
-		origin: "create-song";
-		sessionId: string;
+		origin: "create-song" | "generation-library";
+		sessionId?: string;
+		generationId?: string;
+		artifactIds?: string[];
 		createdAt: number;
 		title: string;
 		singers?: NonNullable<GeneratedSessionManifest["singerRoster"]>;
@@ -737,6 +739,9 @@ export default function DAW(_props: TabRendererProps) {
 	const generatedSessionPendingRef = useRef<GeneratedSessionManifest | null>(null);
 	const generatedSessionTargetProjectRef = useRef<string | null>(null);
 	const [generatedSessionRevision, setGeneratedSessionRevision] = useState(0);
+	const generationImportPendingRef = useRef<GenerationRecord | null>(null);
+	const generationImportTargetRef = useRef<string | null>(null);
+	const handledGenerationImportRef = useRef<string | null>(null);
 	const exportSampleRate = 48000;
 	const [isSavingUi, setIsSavingUi] = useState(false);
 	const [persistedSnapshot, setPersistedSnapshot] = useState<{ id: string; fingerprint: string } | null>(null);
@@ -2843,7 +2848,7 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 
 		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), mixer: normalizeMixerStrip(t.mixer) }));
-		setProjectGeneration(data.generation?.origin === "create-song" ? data.generation : undefined);
+		setProjectGeneration(data.generation && (data.generation.origin === "create-song" || data.generation.origin === "generation-library") ? data.generation : undefined);
 		setTracks(restoredTracks);
 		setClips(data.clips ?? []);
 		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
@@ -3113,7 +3118,7 @@ export default function DAW(_props: TabRendererProps) {
 		};
 		localStorage.setItem(`ysong:daw:${id}`, JSON.stringify(state));
 		localStorage.setItem(`ysong:projectName:${id}`, name);
-		upsertProjectMeta(id, name, state.generation?.origin === "create-song" ? state.generation : undefined);
+		upsertProjectMeta(id, name, state.generation ? state.generation : undefined);
 		projectFileHandleRef.current = handle ?? null;
 		setFxChainTrackId(null);
 		setFxEditorEffectId(null);
@@ -3186,7 +3191,7 @@ export default function DAW(_props: TabRendererProps) {
 		return () => window.removeEventListener("keydown", onProjectShortcut);
 		// These are intentionally the same project-state inputs used by projectFileText().
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [projectName, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
+	}, [projectName, projectGeneration, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
 
 	useEffect(() => {
 		// Never autosave the component's empty pre-hydration render. On cold start,
@@ -3214,6 +3219,7 @@ export default function DAW(_props: TabRendererProps) {
 		activeProjectId,
 		pendingProjectId,
 		DAW_STORAGE_KEY,
+		projectGeneration,
 		tracks,
 		clips,
 		projectAssets,
@@ -3598,6 +3604,61 @@ export default function DAW(_props: TabRendererProps) {
 		window.dispatchEvent(new CustomEvent("ysong:generated-session-imported", { detail: { projectName: manifest.projectName, tracks: nextTracks.length } }));
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [dawHydrated, activeProjectId, generatedSessionRevision]);
+
+	const generationImportRequest = _props.tab.payload?.generationImportRequest as { id?: unknown; requestId?: unknown } | undefined;
+	useEffect(() => {
+		if (!dawHydrated || hydratedProjectId !== activeProjectId || typeof generationImportRequest?.requestId !== "string" ||
+			handledGenerationImportRef.current === generationImportRequest.requestId) return;
+		handledGenerationImportRef.current = generationImportRequest.requestId;
+		const record = typeof generationImportRequest.id === "string" ? listGenerations().find((item) => item.id === generationImportRequest.id) : undefined;
+		if (!record || record.status !== "succeeded") {
+			setSwitchError("This generation is no longer available to import."); setProjectSheetOpen(true); return;
+		}
+		const artifacts = record.artifacts.filter((artifact) => artifact.kind === "audio" && (artifact.objectKey || artifact.url));
+		if (!artifacts.length) {
+			setSwitchError("This generation has no playable audio artifacts to import."); setProjectSheetOpen(true); return;
+		}
+		generationImportPendingRef.current = record;
+		const targetId = crypto.randomUUID();
+		generationImportTargetRef.current = targetId;
+		try { localStorage.setItem(`ysong:projectName:${targetId}`, record.title || "Imported Generation"); } catch { /* Project hydration reports inaccessible storage. */ }
+		activeProjectRef.current = targetId;
+		vstLoadedRef.current.clear(); vstRestoredRef.current.clear(); setVstSoundState({});
+		setActiveProjectId(targetId);
+	}, [generationImportRequest?.requestId, generationImportRequest?.id, dawHydrated, hydratedProjectId, activeProjectId]);
+
+	useEffect(() => {
+		const record = generationImportPendingRef.current;
+		if (!record || !dawHydrated || hydratedProjectId !== activeProjectId || generationImportTargetRef.current !== activeProjectId) return;
+		stop();
+		const artifacts = record.artifacts.filter((artifact) => artifact.kind === "audio" && (artifact.objectKey || artifact.url));
+		const importedAt = Date.now();
+		const nextAssets: ProjectAsset[] = [];
+		const nextTracks: Track[] = [];
+		const nextClips: Clip[] = [];
+		const nextHeights: Record<string, number> = {};
+		const barSeconds = 2;
+		for (const [index, artifact] of artifacts.entries()) {
+			const assetId = `generation:${record.id}:${artifact.id}`;
+			const trackId = crypto.randomUUID();
+			const name = artifact.label || `${record.title} ${index + 1}`;
+			const track = mkTrack("audio", index + 1, trackId);
+			track.name = name;
+			nextTracks.push(track); nextHeights[trackId] = ROW_H;
+			nextAssets.push({ id: assetId, kind: "audio", name, objectKey: artifact.objectKey, url: artifact.url, durationSec: artifact.durationSec });
+			nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name, startBar: 1, lengthBars: artifact.durationSec ? Math.max(0.01, artifact.durationSec / barSeconds) : 4, sourceOffsetSec: 0, sourceDurationSec: artifact.durationSec, fadeInBars: 0, fadeOutBars: 0 });
+		}
+		const provenance: GeneratedProjectProvenance = { origin: "generation-library", generationId: record.id, artifactIds: artifacts.map((artifact) => artifact.id), createdAt: importedAt, title: record.title };
+		setProjectName(record.title || "Imported Generation"); setProjectGeneration(provenance);
+		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
+		setSelectedTrackId(nextTracks[0]?.id ?? null); setSelectedClipId(null); setPlayheadPosBars(1);
+		setBpm(120); bpmRef.current = 120; setSigNum(4); setSigDen(4); sigNumRef.current = 4; sigDenRef.current = 4;
+		setEndBar(65); setLoopL(1); setLoopR(5); setLoopEnabled(false);
+		generationImportPendingRef.current = null; generationImportTargetRef.current = null;
+		window.dispatchEvent(new CustomEvent("ysong:generation-imported", { detail: { generationId: record.id, artifactIds: provenance.artifactIds, projectId: activeProjectId } }));
+	// stop and the project asset setter are stable DAW operations used by this staged import.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [dawHydrated, hydratedProjectId, activeProjectId]);
 
 	const getBarSeconds = () => {
 		const beatSec = (60 / Math.max(1, bpmRef.current)) * (4 / Math.max(1, sigDenRef.current));
