@@ -291,6 +291,7 @@ export default function AudienceCampaignSetup({ad,smartLink,health,creatives,cre
           </div><p className="mt-2 text-xs text-neutral-500">{adText||"No primary text added."}</p></div>
         </div>
         <details className="mt-4 rounded-xl border border-neutral-200 px-4 py-3 text-xs dark:border-neutral-800"><summary className="cursor-pointer font-medium">Show provider reference IDs</summary><dl className="mt-3 space-y-2 text-neutral-500"><SummaryRow label="YSong campaign" value={ad.id}/><SummaryRow label="Source track" value={ad.sourceTrackId||"Not linked"}/><SummaryRow label="Meta connection" value={connectionId||"Not selected"}/><SummaryRow label="Meta ad account" value={adAccountId||"Not selected"}/><SummaryRow label="Meta Page" value={chosenConnection?.pageId||"Not available"}/><SummaryRow label="Instagram account" value={chosenConnection?.instagramUserId||"Not available"}/><SummaryRow label="Pixel / dataset" value={pixelId||"Not selected"}/></dl></details>
+        <div className="mb-4 rounded-xl border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-950/50"><h3 className="text-sm font-semibold">Optional Meta launch</h3><p className="mt-1 text-xs text-neutral-500">This section handles campaign submission separately from creative export. A connected Meta account and explicit authorization are required to submit; Meta controls its own review and approval.</p></div>
         <MetaPublishPanel ad={ad} smartLink={smartLink} onUpdated={onSaved} onMessage={onMessage}/>
       </section>}
 
