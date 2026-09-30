@@ -3071,19 +3071,23 @@ export default function VisualOutput() {
 		// DCC-style editor reference grid. This is an editor helper, not an authored Stage,
 		// and therefore never appears in Program Output / OBS. It gives an empty scene
 		// a stable world horizon/origin like 3ds Max, Blender, and Unity.
-		const editorReferenceGrid = new THREE.GridHelper(200, 200, 0x788394, 0x3b4350);
+		// Keep a useful local ground reference around the normal editing area. The
+		// authored Stage grid remains separately controlled by scene.grid.visible.
+		const editorReferenceGrid = new THREE.GridHelper(40, 40, 0x9aa9c2, 0x4c586b);
 		const editorReferenceMaterials: THREE.Material[] = Array.isArray(editorReferenceGrid.material)
 			? editorReferenceGrid.material
 			: [editorReferenceGrid.material];
 		for (const material of editorReferenceMaterials) {
 			material.transparent = true;
-			material.opacity = 0.42;
+			material.opacity = 0.28;
 			material.depthWrite = false;
 		}
 		editorReferenceGrid.renderOrder = -20;
 		editorReferenceGrid.visible = editorFreeRoam;
 		threeScene.add(editorReferenceGrid);
 		const editorAxes = new THREE.AxesHelper(3.5);
+		(editorAxes.material as THREE.LineBasicMaterial).transparent = true;
+		(editorAxes.material as THREE.LineBasicMaterial).opacity = 0.78;
 		editorAxes.visible = editorFreeRoam;
 		editorAxes.renderOrder = -19;
 		threeScene.add(editorAxes);
