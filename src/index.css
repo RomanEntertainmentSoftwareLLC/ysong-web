@@ -103,6 +103,18 @@ a {
 	border: 1px solid var(--ys-border-strong);
 	color: var(--ys-foreground);
 	box-shadow: var(--ys-shadow);
+	box-sizing: border-box;
+	max-width: calc(100vw - 2rem);
+	max-height: calc(100vh - 2rem);
+	max-height: calc(100dvh - 2rem);
+	overflow: auto;
+}
+
+/* Let the signed-in workspace follow mobile browser chrome as it expands and
+   collapses, while retaining the vh fallback for older browsers. */
+.ys-app-shell {
+	height: 100vh;
+	height: 100dvh;
 }
 
 /* Hover: higher contrast and a thicker underline. */

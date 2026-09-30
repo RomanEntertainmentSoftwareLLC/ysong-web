@@ -726,7 +726,7 @@ export default function UI({ currentUser = null }: { currentUser?: UIShellUser |
 			/>
 			<NotificationBell />
 
-			<div className="fixed inset-0 flex bg-neutral-950/10">
+			<div className="ys-app-shell fixed inset-x-0 top-0 flex bg-neutral-950/10">
 				{/* Desktop: a compact rail replaces the old full-width top navbar. */}
 				{isLgUp && (
 					<div
