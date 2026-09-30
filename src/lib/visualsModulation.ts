@@ -81,7 +81,12 @@ export function evaluateVisualAudioModulation(
 	const liveIds = new Set<string>();
 	for (const binding of config.bindings) {
 		liveIds.add(binding.id);
-		if (!binding.enabled || !binding.target) continue;
+		if (!binding.enabled || !binding.target) {
+			// An explicit opt-out should stop affecting the target immediately and must
+			// not preserve a smoothed signal that can reappear when re-enabled.
+			runtime.set(binding.id, 0);
+			continue;
+		}
 		let signal = Math.max(sources[binding.source] ?? 0, clamp01(config.testSignal));
 		const threshold = clamp01(binding.threshold);
 		signal = signal <= threshold ? 0 : (signal - threshold) / Math.max(0.0001, 1 - threshold);
