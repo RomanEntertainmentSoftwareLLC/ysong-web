@@ -30,6 +30,7 @@ import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/d
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
 import { parseSongGenerationResult, type SongGenerationResult } from "../lib/songGenerationContract";
+import { planSongGenerationImport } from "../lib/songGenerationImport";
 import { listGenerations, upsertGeneration, type GenerationRecord } from "../lib/generationLibrary";
 import type { ComposerArrangement, ComposerProjectContext, ComposerProposal } from "../lib/aiComposer";
 import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, StemRole } from "../lib/progressiveStemComposer";
@@ -52,6 +53,7 @@ type TrackType = "audio" | "instrument";
 type PartGeneration =
 	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string; parentRequestId?: string }
 	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string }
+	| { origin: "generation-library"; role: string; sourcePartId: string; generationId: string; artifactId?: string; createdAt: string }
 	| { origin: "vocal-transcription"; role: "vocal melody"; sourceClipId: string; sourceAssetId: string; algorithm: "ysong-yin-v1"; createdAt: string };
 
 type Track = {
@@ -3620,9 +3622,10 @@ export default function DAW(_props: TabRendererProps) {
 		if (!record || (record.status !== "succeeded" && record.status !== "partial")) {
 			setSwitchError("This generation is no longer available to import."); setProjectSheetOpen(true); return;
 		}
+		const bundle = record.songResult ? planSongGenerationImport(record.songResult) : null;
 		const artifacts = record.artifacts.filter((artifact) => artifact.kind === "audio" && (artifact.objectKey || artifact.url));
-		if (!artifacts.length) {
-			setSwitchError("This generation has no playable audio artifacts to import."); setProjectSheetOpen(true); return;
+		if (!bundle && (record.songResult || !artifacts.length)) {
+			setSwitchError("This generation has no valid, ready parts to import."); setProjectSheetOpen(true); return;
 		}
 		generationImportPendingRef.current = record;
 		const targetId = crypto.randomUUID();
@@ -3637,6 +3640,7 @@ export default function DAW(_props: TabRendererProps) {
 		const record = generationImportPendingRef.current;
 		if (!record || !dawHydrated || hydratedProjectId !== activeProjectId || generationImportTargetRef.current !== activeProjectId) return;
 		stop();
+		const bundle = record.songResult ? planSongGenerationImport(record.songResult) : null;
 		const artifacts = record.artifacts.filter((artifact) => artifact.kind === "audio" && (artifact.objectKey || artifact.url));
 		const importedAt = Date.now();
 		const nextAssets: ProjectAsset[] = [];
@@ -3644,7 +3648,28 @@ export default function DAW(_props: TabRendererProps) {
 		const nextClips: Clip[] = [];
 		const nextHeights: Record<string, number> = {};
 		const barSeconds = 2;
-		for (const [index, artifact] of artifacts.entries()) {
+		if (bundle) for (const [index, part] of bundle.parts.entries()) {
+			const trackId = crypto.randomUUID();
+			const artifact = part.audio ? artifacts.find((item) => item.objectKey === part.audio?.objectKey) : undefined;
+			const partGeneration: PartGeneration = { origin: "generation-library", generationId: record.id, sourcePartId: part.id,
+				role: part.role, ...(artifact ? { artifactId: artifact.id } : {}), createdAt: new Date(importedAt).toISOString() };
+			const track = mkTrack(part.kind === "midi" ? "instrument" : "audio", index + 1, trackId);
+			track.name = part.name; track.partGeneration = partGeneration;
+			nextTracks.push(track); nextHeights[trackId] = ROW_H;
+			if (part.audio) {
+				const assetId = `generation:${record.id}:${part.id}`;
+				nextAssets.push({ id: assetId, kind: "audio", name: part.name, objectKey: part.audio.objectKey,
+					sourceObjectKey: part.audio.objectKey, durationSec: part.audio.durationSec });
+				nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name: part.name, startBar: part.audio.startBar,
+					lengthBars: part.audio.lengthBars, sourceOffsetSec: 0, sourceDurationSec: part.audio.durationSec,
+					fadeInBars: 0, fadeOutBars: 0, partGeneration });
+			}
+			for (const midi of part.midiClips ?? []) {
+				nextClips.push({ id: crypto.randomUUID(), trackId, name: part.name, startBar: midi.startBar, lengthBars: midi.lengthBars,
+					midiNotes: midi.notes.map((note) => ({ ...note, id: crypto.randomUUID() })),
+					midiPitchBend: [], midiModulation: [], midiBendRange: 12, partGeneration });
+			}
+		} else for (const [index, artifact] of artifacts.entries()) {
 			const assetId = `generation:${record.id}:${artifact.id}`;
 			const trackId = crypto.randomUUID();
 			const name = artifact.label || `${record.title} ${index + 1}`;
@@ -3654,12 +3679,19 @@ export default function DAW(_props: TabRendererProps) {
 			nextAssets.push({ id: assetId, kind: "audio", name, objectKey: artifact.objectKey, url: artifact.url, durationSec: artifact.durationSec });
 			nextClips.push({ id: crypto.randomUUID(), trackId, assetId, name, startBar: 1, lengthBars: artifact.durationSec ? Math.max(0.01, artifact.durationSec / barSeconds) : 4, sourceOffsetSec: 0, sourceDurationSec: artifact.durationSec, fadeInBars: 0, fadeOutBars: 0 });
 		}
-		const provenance: GeneratedProjectProvenance = { origin: "generation-library", generationId: record.id, artifactIds: artifacts.map((artifact) => artifact.id), createdAt: importedAt, title: record.title };
+		const provenance: GeneratedProjectProvenance = { origin: "generation-library", generationId: record.id,
+			artifactIds: record.artifacts.map((artifact) => artifact.id), createdAt: importedAt, title: record.title,
+			...(bundle ? { songResult: bundle.result } : {}) };
 		setProjectName(record.title || "Imported Generation"); setProjectGeneration(provenance);
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setSelectedTrackId(nextTracks[0]?.id ?? null); setSelectedClipId(null); setPlayheadPosBars(1);
-		setBpm(120); bpmRef.current = 120; setSigNum(4); setSigDen(4); sigNumRef.current = 4; sigDenRef.current = 4;
-		setEndBar(65); setLoopL(1); setLoopR(5); setLoopEnabled(false);
+		const timebase = bundle?.result.timebase;
+		setBpm(timebase?.bpm ?? 120); bpmRef.current = timebase?.bpm ?? 120;
+		setSigNum(timebase?.sigNum ?? 4); setSigDen(timebase?.sigDen ?? 4);
+		sigNumRef.current = timebase?.sigNum ?? 4; sigDenRef.current = timebase?.sigDen ?? 4;
+		setEndBar(timebase ? Math.min(MAX_BARS, timebase.totalBars + 1) : 65);
+		setBars(timebase ? Math.min(MAX_BARS, Math.max(MIN_BARS, timebase.totalBars + 8)) : MIN_BARS);
+		setLoopL(1); setLoopR(timebase ? Math.min(5, timebase.totalBars + 1) : 5); setLoopEnabled(false);
 		generationImportPendingRef.current = null; generationImportTargetRef.current = null;
 		window.dispatchEvent(new CustomEvent("ysong:generation-imported", { detail: { generationId: record.id, artifactIds: provenance.artifactIds, projectId: activeProjectId } }));
 	// stop and the project asset setter are stable DAW operations used by this staged import.
