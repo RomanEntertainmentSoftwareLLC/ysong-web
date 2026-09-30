@@ -12,7 +12,8 @@ import {
   updateCustomPersona,
   type Persona,
 } from "../lib/personaApi";
-import { addRoomPersona, getRoom } from "../lib/roomApi";
+import { addRoomPersonaSlot, listRoomPersonaSlots } from "../lib/roomPersonaParticipants";
+import { getRegisteredPersona } from "../lib/ysongPersonaRegistry";
 
 type Props = {
   open?: boolean;
@@ -107,15 +108,13 @@ export default function PersonaAssetDrawer(props: Props) {
     setLoading(true); setError("");
     try {
       const items = await listPersonas();
-      setPersonas(items);
+      setPersonas(activeContext === "room" ? items.filter((item) => !!getRegisteredPersona(item.id)) : items);
       if (activeContext === "chat" && activeChatId) {
         try { setSelectedId((await getChatPersona(activeChatId)).personaId || DEFAULT_PERSONA_ID); } catch { /* Keep the default selection when chat state is unavailable. */ }
       }
       if (activeContext === "room") {
         const roomId = localStorage.getItem("ysong:activeRoomId") || "";
-        if (roomId) {
-          try { setRoomPersonaIds(new Set((await getRoom(roomId)).personas.map((p) => p.id))); } catch { /* The drawer still works when room state is unavailable. */ }
-        }
+        setRoomPersonaIds(new Set(listRoomPersonaSlots(roomId).map((slot) => slot.personaId)));
       }
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Could not load personas."); }
     finally { setLoading(false); }
@@ -137,9 +136,8 @@ export default function PersonaAssetDrawer(props: Props) {
       if (activeContext === "room") {
         const roomId = localStorage.getItem("ysong:activeRoomId") || "";
         if (!roomId) { setError("Open a room first."); return; }
-        if (!roomPersonaIds.has(persona.id)) await addRoomPersona(roomId, persona.id, "active");
+        if (!roomPersonaIds.has(persona.id)) addRoomPersonaSlot(roomId, persona.id);
         setRoomPersonaIds((prev) => new Set(prev).add(persona.id));
-        window.dispatchEvent(new CustomEvent("ysong:room-personas-changed", { detail: { roomId, personaId: persona.id } }));
         return;
       }
       if (activeContext === "chat" && activeChatId) {
@@ -170,14 +168,15 @@ export default function PersonaAssetDrawer(props: Props) {
         {personas.map((p) => {
           const selected = activeContext === "chat" && p.id === selectedId;
           const inRoom = activeContext === "room" && roomPersonaIds.has(p.id);
+          const roomEligible = activeContext !== "room" || !!getRegisteredPersona(p.id)?.capabilities.rooms;
           const image = personaImage(p);
           const missingArt = !image || unavailableArt.has(p.id);
-          return <button key={p.id} data-persona-card type="button" onClick={() => void choose(p)} aria-pressed={selected || inRoom} className={`persona-drawer-tile ${selected ? "persona-drawer-tile-selected" : ""} ${inRoom ? "persona-drawer-tile-in-room" : ""}`} title={`${p.name}${p.specialty ? ` · ${p.specialty}` : ""}`}>
+          return <button key={p.id} data-persona-card type="button" disabled={!roomEligible} onClick={() => void choose(p)} aria-pressed={selected || inRoom} className={`persona-drawer-tile ${selected ? "persona-drawer-tile-selected" : ""} ${inRoom ? "persona-drawer-tile-in-room" : ""}`} title={`${p.name}${p.specialty ? ` · ${p.specialty}` : ""}`}>
             <span className={`persona-drawer-art ${missingArt ? "persona-drawer-art-missing" : ""}`}>
               {missingArt ? <><span aria-hidden="true">✦</span><small>ARTWORK<br />IN PROGRESS</small></> : <img src={image} alt={`${p.name} portrait`} onError={() => setUnavailableArt((prev) => new Set(prev).add(p.id))} />}
             </span>
             <span className="persona-drawer-name">{p.name}</span>
-            <span className="persona-drawer-sub">{inRoom ? "In room" : selected ? "Selected" : p.description}</span>
+            <span className="persona-drawer-sub">{inRoom ? "Virtual participant: identity only" : !roomEligible ? "Unavailable for Rooms" : selected ? "Selected" : p.description}</span>
             {p.specialty && <span className="persona-drawer-specialty">{p.specialty}</span>}
             {p.isCustom && <span role="button" tabIndex={0} className="persona-drawer-specialty" onClick={(event) => { event.stopPropagation(); setEditingPersona(p); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.stopPropagation(); setEditingPersona(p); } }}>Edit</span>}
           </button>;
