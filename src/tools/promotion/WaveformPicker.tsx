@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import useAudioWaveform from "./useAudioWaveform";
 
 const MIN_CLIP = 5;
 const MAX_CLIP = 60;
@@ -12,9 +13,7 @@ function fmt(seconds: number) {
 export default function WaveformPicker({ audioUrl, durationHint = 0, start, duration, onChange }: {
   audioUrl: string; durationHint?: number; start: number; duration: number; onChange: (start: number, duration: number) => void;
 }) {
-  const [peaks, setPeaks] = useState<number[]>([]);
-  const [decodedDuration, setDecodedDuration] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const { peaks, duration: decodedDuration, loading } = useAudioWaveform(audioUrl);
   const [playhead, setPlayhead] = useState(0);
   const [previewing, setPreviewing] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -23,40 +22,6 @@ export default function WaveformPicker({ audioUrl, durationHint = 0, start, dura
   const clipLength = Math.min(MAX_CLIP, total, Math.max(MIN_CLIP, duration));
   const clipStart = Math.min(Math.max(0, start), Math.max(0, total - clipLength));
   const clipEnd = clipStart + clipLength;
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!audioUrl) { setPeaks([]); setDecodedDuration(0); return; }
-    setLoading(true);
-    void (async () => {
-      let context: AudioContext | undefined;
-      try {
-        const response = await fetch(audioUrl);
-        if (!response.ok) throw new Error("Audio waveform could not be loaded");
-        const buffer = await response.arrayBuffer();
-        const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextClass) throw new Error("Audio decoding is unavailable");
-        context = new AudioContextClass();
-        const decoded = await context.decodeAudioData(buffer.slice(0));
-        const samples = decoded.getChannelData(0);
-        const bucketCount = 420;
-        const bucketSize = Math.max(1, Math.floor(samples.length / bucketCount));
-        const next = Array.from({ length: bucketCount }, (_, index) => {
-          let peak = 0;
-          const end = Math.min(samples.length, (index + 1) * bucketSize);
-          for (let sample = index * bucketSize; sample < end; sample++) peak = Math.max(peak, Math.abs(samples[sample] || 0));
-          return peak;
-        });
-        if (!cancelled) { setPeaks(next); setDecodedDuration(decoded.duration || 0); }
-      } catch {
-        if (!cancelled) setPeaks([]);
-      } finally {
-        await context?.close().catch(() => undefined);
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [audioUrl]);
 
   useEffect(() => {
     if (total > 0 && (clipStart !== start || clipLength !== duration)) onChange(clipStart, clipLength);

@@ -94,7 +94,7 @@ export const promotionApi={
   deleteSnippet:(id:string,snippetId:string)=>request<{ok:boolean}>(`${ROOT}/ad-campaigns/${id}/snippets/${snippetId}`,{method:"DELETE"}),
   renderBatch:(id:string,body:{snippetIds:string[];backgroundVideoIds:string[];libraryId?:string|null;backgroundFit?:"crop"|"fit"})=>request<{queued:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/render`,{method:"POST",body:JSON.stringify(body)}),
   creatives:(id:string)=>request<{creatives:AdCreative[]}>(`${ROOT}/ad-campaigns/${id}/creatives`),
-  loadStudioProject:async(creative:ReusableAdCreative)=>{
+  loadStudioProject:async(creative:Pick<ReusableAdCreative,"id"|"audioSnippets"|"backgroundMedia">)=>{
     const out=await request<{project:CreativeStudioProject|null}>(`${ROOT}/creatives/${encodeURIComponent(creative.id)}/studio-project`);
     if(out.project!==null)validateCreativeStudioProject(out.project,{audioSnippetIds:creative.audioSnippets.map(x=>x.snippetId),backgroundMediaIds:creative.backgroundMedia.map(x=>x.mediaId)});
     return out.project;
