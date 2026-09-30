@@ -27,6 +27,11 @@ export type StudioAudioClip = StudioClipBase & {
   snippetId: string; // Resolves against ReusableAdCreative.audioSnippets.
   sourceInSeconds: number; sourceOutSeconds: number;
   volume: number;
+  muted?: boolean;
+  audioFadeInSeconds?: number;
+  audioFadeOutSeconds?: number;
+  /** Editorial intent only; does not destructively process the promoted source. */
+  duckingIntent?: "none" | "under-voiceover";
 };
 export type StudioTextClip = StudioClipBase & {
   text: string; transform: StudioTransform;
@@ -36,7 +41,7 @@ export type StudioTextClip = StudioClipBase & {
 };
 export type StudioTrack =
   | { id: string; kind: "visual"; visible?: boolean; locked?: boolean; clips: StudioVisualClip[] }
-  | { id: string; kind: "audio"; muted?: boolean; locked?: boolean; clips: StudioAudioClip[] }
+  | { id: string; kind: "audio"; muted?: boolean; waveformVisible?: boolean; locked?: boolean; clips: StudioAudioClip[] }
   | { id: string; kind: "text"; visible?: boolean; locked?: boolean; clips: StudioTextClip[] };
 
 /** Arrays are ordered bottom-to-top for visuals/text and top-to-bottom for audio. */
@@ -109,6 +114,7 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
     if (track.locked !== undefined && typeof track.locked !== "boolean") fail("track.locked");
     if (track.visible !== undefined && (track.kind === "audio" || typeof track.visible !== "boolean")) fail("track.visible");
     if (track.muted !== undefined && (track.kind !== "audio" || typeof track.muted !== "boolean")) fail("track.muted");
+    if (track.waveformVisible !== undefined && (track.kind !== "audio" || typeof track.waveformVisible !== "boolean")) fail("track.waveformVisible");
     const clips = array(track.clips, "track.clips");
     if (clips.length > 200) fail("too many clips");
     let previousStart = -1;
@@ -168,7 +174,14 @@ export function validateCreativeStudioProject(value: unknown, refs: StudioMediaR
         const sourceIn = number(clip.sourceInSeconds, "sourceInSeconds", 0);
         if (number(clip.sourceOutSeconds, "sourceOutSeconds", 0) <= sourceIn) fail("source range");
         if (track.kind === "visual" && clip.speed !== undefined && (typeof clip.speed !== "number" || ![0.5, 0.75, 1, 1.25, 1.5, 2].includes(clip.speed))) fail("clip.speed");
-        if (track.kind === "audio") { const volume = number(clip.volume, "volume", 0); if (volume > 1) fail("volume"); }
+        if (track.kind === "audio") {
+          const volume = number(clip.volume, "volume", 0); if (volume > 1) fail("volume");
+          if (clip.muted !== undefined && typeof clip.muted !== "boolean") fail("clip.muted");
+          for (const edge of ["audioFadeInSeconds", "audioFadeOutSeconds"] as const) {
+            if (clip[edge] !== undefined && number(clip[edge], edge, 0) > length * Number(fps.denominator) / Number(fps.numerator)) fail(edge);
+          }
+          if (clip.duckingIntent !== undefined) choice(clip.duckingIntent, ["none", "under-voiceover"], "clip.duckingIntent");
+        }
         else { if (clip.color !== undefined) checkColor(clip.color); checkTransform(clip.transform, "clip.transform"); }
       }
     }

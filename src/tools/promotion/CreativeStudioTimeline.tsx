@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import type { CreativeStudioProject, StudioTrack, StudioTransition, StudioTransitionKind, StudioVisualClip } from "./creativeStudioProject";
+import type { CreativeStudioProject, StudioAudioClip, StudioTrack, StudioTransition, StudioTransitionKind, StudioVisualClip } from "./creativeStudioProject";
 import type { ReusableAdCreative } from "./api";
 import useAudioWaveform from "./useAudioWaveform";
 import { addStudioSource, deleteStudioClip, moveStudioTrack, setStudioVideoSpeed, STUDIO_VIDEO_SPEEDS, splitStudioClip, studioSources, trimStudioClip } from "./creativeStudioTracks";
@@ -48,9 +48,25 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
   const snapFrames = snap ? Math.max(1, Math.round(fps * (zoom >= 100 ? .25 : zoom >= 48 ? .5 : 1))) : 0;
   const frameToPx = (frame: number) => frame / fps * zoom;
   const sources = studioSources(creative, project.durationFrames, fps);
+  const selectedAudioTrack = selection ? project.tracks.find((track): track is Extract<StudioTrack, { kind: "audio" }> => track.id === selection.trackId && track.kind === "audio") : undefined;
+  const selectedAudioClip = selectedAudioTrack?.clips.find(clip => clip.id === selection?.clipId);
+  const selectedSnippet = selectedAudioClip && creative.audioSnippets.find(item => item.snippetId === selectedAudioClip.snippetId);
+  const syncAudioPreview = (element: HTMLAudioElement) => {
+    if (!selectedAudioClip || !selectedAudioTrack || !selectedSnippet) return;
+    const localSeconds = element.currentTime - selectedSnippet.startSeconds - selectedAudioClip.sourceInSeconds;
+    if (localSeconds < 0) { element.volume = 0; return; }
+    if (localSeconds >= selectedAudioClip.sourceOutSeconds - selectedAudioClip.sourceInSeconds) { element.pause(); return; }
+    const localFrame = Math.floor(localSeconds * fps);
+    const fadeIn = selectedAudioClip.audioFadeInSeconds || 0;
+    const fadeOut = selectedAudioClip.audioFadeOutSeconds || 0;
+    const clipSeconds = selectedAudioClip.durationFrames / fps;
+    const envelope = Math.min(fadeIn > 0 ? localSeconds / fadeIn : 1, fadeOut > 0 ? (clipSeconds - localSeconds) / fadeOut : 1);
+    element.volume = selectedAudioTrack.muted || selectedAudioClip.muted ? 0 : Math.max(0, Math.min(1, studioPropertyValue(selectedAudioClip, "volume", localFrame) * envelope));
+  };
   const availableSources = sources.filter(source => !project.tracks.some(track => track.id === source.id || track.clips.some(clip => source.track.clips.some(item => item.id === clip.id))));
   const sourceFor = (track: StudioTrack, clip: StudioTrack["clips"][number]) => sources.find(source => source.track.kind === track.kind && source.track.clips.some(item => item.id === clip.id || ("mediaId" in item && "mediaId" in clip && item.mediaId === clip.mediaId) || ("snippetId" in item && "snippetId" in clip && item.snippetId === clip.snippetId) || ("overlayId" in item && "overlayId" in clip && item.overlayId === clip.overlayId) || ("source" in item && "source" in clip && item.source !== "text" && item.source === clip.source)));
   const updateTrack = (trackId: string, change: Partial<StudioTrack>) => onChange({ ...project, tracks: project.tracks.map(track => track.id === trackId ? { ...track, ...change } as StudioTrack : track) });
+  const updateAudioClip = (trackId: string, clipId: string, change: Partial<StudioAudioClip>) => onChange({ ...project, tracks: project.tracks.map(track => track.id !== trackId || track.kind !== "audio" ? track : { ...track, clips: track.clips.map(clip => clip.id === clipId ? { ...clip, ...change } : clip) }) });
   const updateVisualTransform = (trackId: string, clipId: string, patch: Partial<StudioVisualClip["transform"]>) => onChange({ ...project, tracks: project.tracks.map(track => track.id !== trackId || track.kind !== "visual" ? track : { ...track, clips: track.clips.map(clip => clip.id === clipId ? { ...clip, transform: { ...clip.transform, ...patch } } : clip) }) });
   const updateVisualColor = (trackId: string, clipId: string, key: keyof NonNullable<StudioVisualClip["color"]>, value: number) => onChange({ ...project, tracks: project.tracks.map(track => track.id !== trackId || track.kind !== "visual" ? track : { ...track, clips: track.clips.map(clip => clip.id === clipId ? { ...clip, color: { brightness: 100, contrast: 100, saturation: 100, temperature: 0, tint: 0, ...clip.color, [key]: value } } : clip) }) });
   const updateVisualTransition = (trackId: string, clipId: string, edge: "transitionIn" | "transitionOut", transition: StudioTransition | undefined) => {
@@ -112,7 +128,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
               const media = "mediaId" in clip && clip.mediaId ? mediaUrls[clip.mediaId] : undefined;
               return <div key={clip.id}><button type="button" aria-label={`${name}, ${sourceFor(track, clip)?.identity || clip.id}, ${clock(clip.startFrame / fps)} to ${clock((clip.startFrame + clip.durationFrames) / fps)}`} aria-pressed={selected} onClick={() => { setSelection({ trackId: track.id, clipId: clip.id }); setKeySelection(null); }} className={`absolute top-1.5 h-11 min-w-0 overflow-hidden rounded-md border text-left shadow-sm focus-visible:outline-2 focus-visible:outline-violet-500 ${selected ? "border-violet-300 ring-2 ring-violet-500" : "border-white/25"} ${track.kind === "audio" ? "bg-emerald-700 text-white" : track.kind === "text" ? "bg-fuchsia-700 text-white" : "bg-indigo-700 text-white"}`} style={{ left: frameToPx(clip.startFrame), width: Math.max(2, frameToPx(clip.durationFrames)) }}>
                 {media && ("mediaId" in clip && creative.backgroundMedia.find(item => item.mediaId === clip.mediaId)?.mediaType === "image" ? <img src={media} alt="" className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40" /> : <video src={media} muted playsInline preload="metadata" aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40" />)}
-                {track.kind === "audio" && "sourceInSeconds" in clip && waveform.duration > 0 && <svg aria-hidden="true" viewBox="0 0 100 40" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full opacity-40">{Array.from({ length: 72 }, (_, index) => { const sourceTime = clip.sourceInSeconds + (clip.sourceOutSeconds - clip.sourceInSeconds) * index / 72; const peak = waveform.peaks[Math.min(waveform.peaks.length - 1, Math.max(0, Math.floor(sourceTime / waveform.duration * waveform.peaks.length)))] || 0; const height = Math.max(2, peak * 36); return <rect key={index} x={index / 72 * 100} y={(40 - height) / 2} width={.9} height={height} fill="currentColor" />; })}</svg>}
+                {track.kind === "audio" && track.waveformVisible !== false && "sourceInSeconds" in clip && waveform.duration > 0 && <svg aria-hidden="true" viewBox="0 0 100 40" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full opacity-40">{Array.from({ length: 72 }, (_, index) => { const sourceTime = clip.sourceInSeconds + (clip.sourceOutSeconds - clip.sourceInSeconds) * index / 72; const peak = waveform.peaks[Math.min(waveform.peaks.length - 1, Math.max(0, Math.floor(sourceTime / waveform.duration * waveform.peaks.length)))] || 0; const height = Math.max(2, peak * 36); return <rect key={index} x={index / 72 * 100} y={(40 - height) / 2} width={.9} height={height} fill="currentColor" />; })}</svg>}
                 <span className="relative block truncate px-2 text-xs font-semibold">{name}</span><span className="relative block px-2 text-[10px] opacity-80">{(clip.durationFrames / fps).toFixed(1)}s</span>
               </button>{clip.keyframes.map(key => <button key={`${key.property}:${key.frame}`} type="button" title={`${key.property} at frame ${key.frame}: ${key.value}`} aria-label={`Select ${key.property} keyframe at frame ${key.frame}`} aria-pressed={selected && keySelection?.property === key.property && keySelection.frame === key.frame} onClick={() => { setSelection({ trackId: track.id, clipId: clip.id }); setKeySelection({ property: key.property, frame: key.frame }); setKeyProperty(key.property); setPlayhead(clip.startFrame + key.frame); }} className={`absolute z-10 h-3 w-3 -translate-x-1/2 rotate-45 border border-white bg-amber-400 focus-visible:outline-2 focus-visible:outline-violet-500 ${selected && keySelection?.property === key.property && keySelection.frame === key.frame ? "ring-2 ring-violet-500" : ""}`} style={{ left: frameToPx(clip.startFrame + key.frame), top: 1 + Math.max(0, (track.kind === "audio" ? ["volume"] : STUDIO_MOTION_PROPERTIES).indexOf(key.property)) * 8 }} />)}</div>;
             })}
@@ -121,7 +137,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
         </div>
       </div>
     </div>
-    <div className="flex flex-wrap items-center gap-3 p-3 text-xs text-neutral-500">{selection ? <span>Selected: {project.tracks.flatMap(track => track.clips.map(clip => ({ track, clip }))).filter(item => item.track.id === selection.trackId && item.clip.id === selection.clipId).map(item => `${clipName(item.track, item.clip)} · ${clock(item.clip.startFrame / fps)}–${clock((item.clip.startFrame + item.clip.durationFrames) / fps)}`)[0]}</span> : <span>Select a clip or tap the ruler to seek.</span>}{audioUrl && <audio controls preload="none" src={audioUrl} className="ml-auto h-9 max-w-full" />}</div>
+    <div className="flex flex-wrap items-center gap-3 p-3 text-xs text-neutral-500">{selection ? <span>Selected: {project.tracks.flatMap(track => track.clips.map(clip => ({ track, clip }))).filter(item => item.track.id === selection.trackId && item.clip.id === selection.clipId).map(item => `${clipName(item.track, item.clip)} · ${clock(item.clip.startFrame / fps)}–${clock((item.clip.startFrame + item.clip.durationFrames) / fps)}`)[0]}</span> : <span>Select a clip or tap the ruler to seek.</span>}{audioUrl && selectedAudioClip && selectedSnippet ? <audio controls preload="metadata" src={audioUrl} className="ml-auto h-9 max-w-full" onLoadedMetadata={event => { event.currentTarget.currentTime = selectedSnippet.startSeconds + selectedAudioClip.sourceInSeconds; syncAudioPreview(event.currentTarget); }} onPlay={event => syncAudioPreview(event.currentTarget)} onTimeUpdate={event => syncAudioPreview(event.currentTarget)} /> : audioUrl && <audio controls preload="none" src={audioUrl} className="ml-auto h-9 max-w-full" />}</div>
     {selection && (() => {
       const track = project.tracks.find(item => item.id === selection.trackId);
       const clip = track?.clips.find(item => item.id === selection.clipId);
@@ -160,6 +176,7 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
       const activeProperty = properties.includes(keyProperty as never) ? keyProperty : properties[0];
       const activeKey = keySelection && clip.keyframes.find(key => key.property === keySelection.property && key.frame === keySelection.frame);
       const valueAtPlayhead = studioPropertyValue(clip, activeProperty, localFrame);
+      const audioClip = track.kind === "audio" ? clip as StudioAudioClip : null;
       const [minValue, maxValue] = STUDIO_KEYFRAME_BOUNDS[activeKey?.property || activeProperty];
       const changeKey = (frame: number, value: number, interpolation: "hold" | "linear") => {
         const property = activeKey?.property || activeProperty;
@@ -196,6 +213,15 @@ export default function CreativeStudioTimeline({ creative, project, onChange, me
             })}
             <p className="col-span-2 text-[10px] text-neutral-500">Preview uses the selected clip and playhead frame for repeatable transition feedback.</p>
           </div>
+        </div>}
+        {audioClip && <div className="grid w-full grid-cols-2 gap-3 border-b border-neutral-200 py-3 sm:grid-cols-3">
+          <label className="flex items-center gap-2"><input aria-label="Show audio waveform" type="checkbox" checked={track.kind === "audio" && track.waveformVisible !== false} disabled={locked} onChange={event => updateTrack(track.id, { waveformVisible: event.target.checked })} />Show waveform</label>
+          <label className="grid gap-1">Gain · {(audioClip.volume * 100).toFixed(0)}% <input aria-label="Audio gain" type="range" min="0" max="1" step="0.01" value={audioClip.volume} disabled={locked} onChange={event => updateAudioClip(track.id, clip.id, { volume: Number(event.target.value) })} /></label>
+          <label className="flex items-center gap-2"><input aria-label="Mute audio clip" type="checkbox" checked={!!audioClip.muted} disabled={locked} onChange={event => updateAudioClip(track.id, clip.id, { muted: event.target.checked })} />Mute this clip</label>
+          <label className="grid gap-1">Fade in · seconds<input aria-label="Audio fade in seconds" type="number" min="0" max={(audioClip.durationFrames / fps).toFixed(2)} step="0.1" value={audioClip.audioFadeInSeconds ?? 0} disabled={locked} onChange={event => updateAudioClip(track.id, clip.id, { audioFadeInSeconds: Math.max(0, Math.min(audioClip.durationFrames / fps, Number(event.target.value) || 0)) })} className="rounded border bg-transparent p-2" /></label>
+          <label className="grid gap-1">Fade out · seconds<input aria-label="Audio fade out seconds" type="number" min="0" max={(audioClip.durationFrames / fps).toFixed(2)} step="0.1" value={audioClip.audioFadeOutSeconds ?? 0} disabled={locked} onChange={event => updateAudioClip(track.id, clip.id, { audioFadeOutSeconds: Math.max(0, Math.min(audioClip.durationFrames / fps, Number(event.target.value) || 0)) })} className="rounded border bg-transparent p-2" /></label>
+          <label className="grid gap-1">Ducking intent<select aria-label="Audio ducking intent" value={audioClip.duckingIntent || "none"} disabled={locked} onChange={event => updateAudioClip(track.id, clip.id, { duckingIntent: event.target.value as StudioAudioClip["duckingIntent"] })} className="rounded border bg-transparent p-2"><option value="none">No ducking</option><option value="under-voiceover">Lower under voiceover</option></select></label>
+          <p className="self-center text-[10px] text-neutral-500">Saved as mix instructions; ducking is intent only. The promoted song source stays intact.</p>
         </div>}
         <div className="flex w-full flex-wrap items-end gap-2 border-b border-neutral-200 py-3 dark:border-neutral-800">
           <span className="w-full font-medium">Property keyframes · clip frame {localFrame} · {clip.keyframes.length}/200</span>
