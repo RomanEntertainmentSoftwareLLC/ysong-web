@@ -163,10 +163,10 @@ export default function VisualsPane() {
 	const materialUploadTrackerRef=useRef(createVisualMaterialUploadTracker());
 	const reserveMaterialUpload=materialUploadTrackerRef.current;
 	const commitAssetScene=useCallback((update:(current:VisualSceneState)=>VisualSceneState)=>{
-		const next=update(sceneRef.current);
+		const next={...update(sceneRef.current),updatedAt:Date.now()};
 		sceneRef.current=next;
 		setScene(next);
-		writeVisualSceneBackup(next);
+		writeVisualSceneBackup(next,next.updatedAt);
 		sceneWriterRef.current(next);
 	},[]);
 	const sceneClipboardRef=useRef<SceneClipboard|null>(null);
@@ -179,7 +179,7 @@ export default function VisualsPane() {
 		let cancelled=false;
 		void bridgeApi.getVisualScene<VisualSceneState>().then(payload=>{
 			if(cancelled)return;
-			if(sceneRef.current!==initialSceneRef.current){sceneReadyRef.current=true;sceneDirtyRef.current=true;writeVisualSceneBackup(sceneRef.current);syncViewportScene();sceneWriterRef.current({...sceneRef.current,updatedAt:Date.now()});return;}
+			if(sceneRef.current!==initialSceneRef.current){const current={...sceneRef.current,updatedAt:Date.now()};sceneReadyRef.current=true;sceneDirtyRef.current=true;writeVisualSceneBackup(current,current.updatedAt);syncViewportScene();sceneWriterRef.current(current);return;}
 			const remote = payload?.scene as VisualSceneState | undefined;
 			const remoteValid = !!remote && typeof remote === "object" && Array.isArray(remote.layers);
 			const backup = readVisualSceneBackup();
@@ -187,7 +187,7 @@ export default function VisualsPane() {
 				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
 			hydratedSceneRef.current=next;
 			setScene(next); sceneReadyRef.current=true; writeVisualSceneBackup(next,next.updatedAt);
-			setSelectedId(current=>next.layers.some(l=>l.id===current)||next.cameras.some(c=>c.id===current)||current==="editor-camera"?current:next.layers[0]?.id||next.cameras[0]?.id||"");
+			setSelectedId(current=>next.layers.some(l=>l.id===current)||next.cameras.some(c=>c.id===current)||next.materials.some(m=>`material:${m.id}`===current)||current==="editor-camera"?current:next.layers[0]?.id||next.cameras[0]?.id||"");
 			if(!remoteValid || remote.version!==26 || next===backup) sceneWriterRef.current({...next,updatedAt:Date.now()});
 			if(!remoteValid && backup) setNotice("Recovered the last local Visuals scene because Bridge returned no valid scene. YSong did not replace it with demo content.");
 		}).catch(()=>{
@@ -208,13 +208,14 @@ export default function VisualsPane() {
 		syncViewportScene();
 		if(scene===hydratedSceneRef.current)return;
 		sceneDirtyRef.current=true;
-		writeVisualSceneBackup(scene);
+		const snapshot={...scene,updatedAt:Date.now()};
+		writeVisualSceneBackup(snapshot,snapshot.updatedAt);
 		const generation=++sceneSaveGenerationRef.current;
-		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)sceneWriterRef.current({...scene,updatedAt:Date.now()})},90);
+		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)sceneWriterRef.current(snapshot)},90);
 		return()=>clearTimeout(t);
 	},[scene,syncViewportScene]);
 	useEffect(()=>()=>{
-		if(sceneReadyRef.current&&sceneDirtyRef.current)sceneWriterRef.current({...sceneRef.current,updatedAt:Date.now()});
+		if(sceneReadyRef.current&&sceneDirtyRef.current){const snapshot={...sceneRef.current,updatedAt:Date.now()};writeVisualSceneBackup(snapshot,snapshot.updatedAt);sceneWriterRef.current(snapshot)}
 	},[]);
 	useEffect(()=>{
 		const host=viewportHostRef.current;if(!host)return;
@@ -356,12 +357,14 @@ export default function VisualsPane() {
 		const next=createBlankVisualScene(mode,name);
 		// Invalidate any delayed save from the previous project before replacing the runtime.
 		sceneSaveGenerationRef.current++;
+		sceneRef.current=next;
 		setScene(next);setSelectedId(next.cameras[0]?.id||"");setModelInfo(null);setLivePerformance(null);setPrimitivePlacement(null);setDirectorPlan(null);directorUndoRef.current=null;setPreviewProgramCamera(false);
-		writeVisualSceneBackup(next);
+		writeVisualSceneBackup(next,next.updatedAt);
 		// The embedded renderer owns its own Three.js runtime. Replace that state immediately
 		// instead of waiting for the debounced Bridge persistence round-trip.
 		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-replace",scene:next},window.location.origin);
-		sceneWriterRef.current({...next,updatedAt:Date.now()});
+		monitorFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-replace",scene:next},window.location.origin);
+		sceneWriterRef.current(next);
 		setNotice(`Created blank ${mode.toUpperCase()} project “${name}”.`);
 	};
 	const removeSelected=()=>{if(selectedMaterial){if(selectedMaterial.id==="material-default")return;setScene(prev=>({...prev,materials:prev.materials.filter(m=>m.id!==selectedMaterial.id),primitives:prev.primitives.map(p=>p.materialId===selectedMaterial.id?{...p,materialId:"material-default"}:p),secondaryDynamics:prev.secondaryDynamics.map(item=>item.materialId===selectedMaterial.id?{...item,materialId:""}:item),object:prev.object.materialId===selectedMaterial.id?{...prev.object,materialId:""}:prev.object}));setSelectedId("");return}if(selectedCamera){removeCamera(selectedCamera.id);return}if(!selected)return;setScene(prev=>{const layers=prev.layers.filter(l=>l.id!==selected.id);const primitives=selected.type==="primitive"&&selected.entityId?prev.primitives.filter(p=>p.id!==selected.entityId):prev.primitives;const shapes2d=selected.type==="shape2d"&&selected.entityId?prev.shapes2d.filter(p=>p.id!==selected.entityId):prev.shapes2d;const secondaryDynamics=selected.type==="secondary"&&selected.entityId?prev.secondaryDynamics.filter(item=>item.id!==selected.entityId):prev.secondaryDynamics;const object=selected.type==="object"?{...prev.object,model:"asset" as const,modelUrl:"",modelFileName:"",assetFiles:[],animation:"",morphTargets:{}}:prev.object;if(selected.type==="object")queueMicrotask(()=>setModelInfo(null));queueMicrotask(()=>setSelectedId(layers[0]?.id||""));return{...prev,layers,primitives,shapes2d,secondaryDynamics,object}})};
@@ -456,7 +459,18 @@ export default function VisualsPane() {
 		}catch(e){setNotice(e instanceof Error?e.message:"Could not import material.")}finally{setImporting("")}
 	};
 	const saveScene=async()=>{const name=presetName.trim()||window.prompt("Scene name",`Scene ${presets.length+1}`)?.trim();if(!name)return;try{const r=await bridgeApi.saveVisualPreset(name,{...scene,updatedAt:Date.now()});setPresetName("");setPresets(prev=>[r.preset,...prev.filter(p=>p.id!==r.preset.id)]);setNotice(`Saved visual scene “${name}”. It can now be assigned to YSong World playlist songs.`)}catch(e){setNotice(e instanceof Error?e.message:"Could not save scene.")}};
-	const loadScene=(preset:VisualScenePreset<VisualSceneState>)=>{const next=normalizeVisualScene(preset.scene);setScene(next);setSelectedId(next.layers[0]?.id||"");setNotice(`Loaded “${preset.name}”.`)};
+	const loadScene=(preset:VisualScenePreset<VisualSceneState>)=>{
+		const next={...normalizeVisualScene(preset.scene),updatedAt:Date.now()};
+		sceneSaveGenerationRef.current++;
+		sceneRef.current=next;
+		setScene(next);setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");
+		setModelInfo(null);setLivePerformance(null);setPrimitivePlacement(null);setDirectorPlan(null);directorUndoRef.current=null;setPreviewProgramCamera(false);
+		writeVisualSceneBackup(next,next.updatedAt);
+		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-replace",scene:next},window.location.origin);
+		monitorFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-replace",scene:next},window.location.origin);
+		sceneWriterRef.current(next);
+		setNotice(`Loaded “${preset.name}”.`);
+	};
 	const deleteScene=async(preset:VisualScenePreset<VisualSceneState>)=>{if(!confirm(`Delete visual scene “${preset.name}”?`))return;await bridgeApi.deleteVisualPreset(preset.id);refreshLibrary()};
 
 	const seek=(seconds:number)=>{

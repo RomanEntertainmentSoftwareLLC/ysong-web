@@ -2617,6 +2617,7 @@ export default function VisualOutput() {
 				setSceneHydrated(true);
 				setScene(replacement);
 				clearGlb();
+				resetSceneRuntime();
 				modelPlacementActive = false;
 				clearPlacement(false);
 				hoveredSelectableId = "";
@@ -4940,6 +4941,12 @@ export default function VisualOutput() {
 					runtime = { mesh, geometrySignature, materialId: p.materialId, body: null, bodySignature: "" };
 					primitiveRuntime.set(p.id, runtime);
 				} else {
+					const previousSelectableId = String(runtime.mesh.userData.ysongSelectableId || "");
+					if (previousSelectableId !== layer.id) {
+						selectableRoots.delete(previousSelectableId);
+						runtime.mesh.userData.ysongSelectableId = layer.id;
+						selectableRoots.set(layer.id, runtime.mesh);
+					}
 					if (runtime.geometrySignature !== geometrySignature) {
 						runtime.mesh.geometry.dispose();
 						runtime.mesh.geometry = makePrimitiveGeometry(p);
@@ -5007,6 +5014,14 @@ export default function VisualOutput() {
 
 		const modulationRuntime = new Map<string, number>();
 		let lastOverlayModulationAt = 0;
+		const resetSceneRuntime = () => {
+			for (const [id, runtime] of [...primitiveRuntime]) destroyPrimitiveRuntime(id, runtime);
+			for (const runtime of secondaryRuntime.values()) disposeSecondaryRuntime(runtime);
+			secondaryRuntime.clear();
+			for (const material of materialRuntime.values()) material.dispose();
+			materialRuntime.clear();
+			modulationRuntime.clear();
+		};
 
 		const render = (now: number) => {
 			if (disposed) return;

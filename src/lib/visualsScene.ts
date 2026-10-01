@@ -1488,6 +1488,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 			fov: numberOr((raw as Partial<VisualSceneState>).camera?.fov, numberOr(raw.object?.cameraFov, DEFAULT_VISUAL_SCENE.camera.fov)),
 			loop: (raw as Partial<VisualSceneState>).camera?.loop === true,
 			keyframes: Array.isArray((raw as Partial<VisualSceneState>).camera?.keyframes) ? ((raw as Partial<VisualSceneState>).camera!.keyframes as VisualCameraKeyframe[]).filter(Boolean).map(keyframe => ({
+				...keyframe,
 				id: keyframe.id || crypto.randomUUID(), time: Math.max(0, numberOr(keyframe.time, 0)),
 				positionX: numberOr(keyframe.positionX, 0), positionY: numberOr(keyframe.positionY, DEFAULT_VISUAL_SCENE.camera.positionY), positionZ: numberOr(keyframe.positionZ, DEFAULT_VISUAL_SCENE.camera.positionZ),
 				targetX: numberOr(keyframe.targetX, 0), targetY: numberOr(keyframe.targetY, 0), targetZ: numberOr(keyframe.targetZ, 0), fov: numberOr(keyframe.fov, DEFAULT_VISUAL_SCENE.camera.fov),
@@ -1609,12 +1610,15 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 	}
 
 	const rawCameras = Array.isArray(raw.cameras) ? raw.cameras : [];
-	normalized.cameras = (rawCameras.length ? rawCameras : [{
+	// Current projects may deliberately have no program camera (notably blank 2D
+	// projects). Only legacy scenes need the camera synthesized from `camera`.
+	const cameraSources = Array.isArray(raw.cameras) && numberOr(raw.version, 0) >= 21 ? rawCameras : (rawCameras.length ? rawCameras : [{
 		...DEFAULT_VISUAL_SCENE.cameras[0],
 		positionX: normalized.camera.positionX, positionY: normalized.camera.positionY, positionZ: normalized.camera.positionZ,
 		targetX: normalized.camera.targetX, targetY: normalized.camera.targetY, targetZ: normalized.camera.targetZ,
 		fov: normalized.camera.fov, loop: normalized.camera.loop, keyframes: normalized.camera.keyframes,
-	}]).filter(Boolean).map((camera, index) => {
+	}]);
+	normalized.cameras = cameraSources.filter(Boolean).map((camera, index) => {
 		const fallback = DEFAULT_VISUAL_SCENE.cameras[0];
 		const source = camera as Partial<VisualProgramCamera>;
 		return {
@@ -1649,7 +1653,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 			})).sort((a,b)=>a.time-b.time) : [],
 		} satisfies VisualProgramCamera;
 	});
-	if (!normalized.cameras.some(camera => camera.id === normalized.activeCameraId)) normalized.activeCameraId = normalized.cameras[0]?.id || DEFAULT_VISUAL_SCENE.activeCameraId;
+	if (!normalized.cameras.some(camera => camera.id === normalized.activeCameraId)) normalized.activeCameraId = normalized.cameras[0]?.id || "";
 	normalized.cameraCuts = normalized.cameraCuts.filter(cut => normalized.cameras.some(camera => camera.id === cut.cameraId));
 	if ((raw.version ?? 0) < 12) {
 		// Old builds accidentally persisted finite ranges on core layers, making them
@@ -1694,6 +1698,20 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 	if (!normalized.materials.some(material=>material.id==="material-default")) normalized.materials.unshift(structuredClone(DEFAULT_VISUAL_MATERIAL));
 	const validMaterialIds=new Set(normalized.materials.map(material=>material.id));
 	normalized.primitives=normalized.primitives.map(primitive=>validMaterialIds.has(primitive.materialId)?primitive:{...primitive,materialId:"material-default"});
+	normalized.secondaryDynamics=normalized.secondaryDynamics.map(item=>item.materialId&&!validMaterialIds.has(item.materialId)?{...item,materialId:""}:item);
+	if (normalized.object.materialId&&!validMaterialIds.has(normalized.object.materialId)) normalized.object.materialId="";
+	const primitiveIds=new Set(normalized.primitives.map(item=>item.id));
+	const shapeIds=new Set(normalized.shapes2d.map(item=>item.id));
+	const secondaryIds=new Set(normalized.secondaryDynamics.map(item=>item.id));
+	// A layer's entity ID is its durable link to the rendered object. Drop broken
+	// links rather than leaving selectable hierarchy rows with no runtime object.
+	normalized.layers=normalized.layers.filter(layer=>
+		layer.type==="primitive"?!!layer.entityId&&primitiveIds.has(layer.entityId):
+		layer.type==="shape2d"?!!layer.entityId&&shapeIds.has(layer.entityId):
+		layer.type==="secondary"?!!layer.entityId&&secondaryIds.has(layer.entityId):true);
+	normalized.ikConstraints=normalized.ikConstraints.map(item=>item.targetMode==="primitive"&&!primitiveIds.has(item.targetEntityId)?{...item,targetMode:"point",targetEntityId:""}:item);
+	normalized.secondaryDynamics=normalized.secondaryDynamics.map(item=>item.anchorMode==="primitive"&&!primitiveIds.has(item.anchorEntityId)?{...item,anchorMode:"point",anchorEntityId:""}:item);
+	normalized.cameras=normalized.cameras.map(camera=>camera.targetMode==="primitive"&&!primitiveIds.has(camera.targetEntityId)?{...camera,targetMode:"point",targetEntityId:""}:camera);
 	for (const primitive of normalized.primitives) {
 		if (!normalized.layers.some(layer=>layer.type==="primitive"&&layer.entityId===primitive.id)) normalized.layers.push({id:`layer-${primitive.id}`,type:"primitive",name:primitive.name,visible:primitive.visible,locked:primitive.locked,opacity:1,entityId:primitive.id,timeline:{start:0,duration:0,trimIn:0,trimOut:0,fadeIn:0,fadeOut:0}});
 	}

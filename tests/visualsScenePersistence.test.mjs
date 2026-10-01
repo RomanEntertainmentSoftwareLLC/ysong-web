@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createBlankVisualScene, makeVisualMaterial, makeVisualPrimitive, makeVisualSecondary, makeVisualShape2D, normalizeVisualScene } from "../src/lib/visualsScene.ts";
+
+test("a saved blank 2D project reopens without an invented program camera", () => {
+	const scene = createBlankVisualScene("2d", "Blank");
+	const reopened = normalizeVisualScene(JSON.parse(JSON.stringify(scene)));
+	assert.deepEqual(reopened.cameras, []);
+	assert.equal(reopened.activeCameraId, "");
+	assert.deepEqual(reopened.layers, []);
+});
+
+test("scene objects, environment, camera, materials and reactivity survive a save/reopen round trip", () => {
+	const scene = createBlankVisualScene("3d", "Persistence");
+	const material = makeVisualMaterial("Copper");
+	material.baseColor = "#b87333";
+	material.roughness = .37;
+	material.baseColorMap = { url: "/media/copper.png", fileName: "copper.png" };
+	const primitive = makeVisualPrimitive("torus", "Ring");
+	primitive.positionX = 3.25;
+	primitive.rotationY = .72;
+	primitive.scaleZ = 1.8;
+	primitive.materialId = material.id;
+	const layer = { id: `layer-${primitive.id}`, type: "primitive", name: primitive.name, visible: true, locked: false, opacity: .7, entityId: primitive.id };
+	scene.materials.push(material);
+	scene.primitives.push(primitive);
+	scene.layers.push(layer);
+	const shape = makeVisualShape2D("ellipse");
+	shape.positionX = .6;
+	scene.shapes2d.push(shape);
+	scene.layers.push({ id: `layer-${shape.id}`, type: "shape2d", name: shape.name, visible: true, opacity: 1, entityId: shape.id });
+	const secondary = makeVisualSecondary("rope");
+	secondary.audioImpulse = 1.6;
+	scene.secondaryDynamics.push(secondary);
+	scene.layers.push({ id: `layer-${secondary.id}`, type: "secondary", name: secondary.name, visible: true, opacity: 1, entityId: secondary.id });
+	scene.sky.rotationY = 1.2;
+	scene.stage.fogAmount = .42;
+	scene.audioModulation.enabled = true;
+	scene.audioModulation.bindings.push({ id: "binding-ring", enabled: true, name: "Ring", source: "bass", target: `primitive:${primitive.id}:rotationY`, amount: 2, attack: .1, release: .3, threshold: 0, invert: false, curve: "linear" });
+	scene.cameras[0].positionX = 8;
+	scene.cameras[0].targetMode = "primitive";
+	scene.cameras[0].targetEntityId = primitive.id;
+	scene.camera.keyframes.push({ id: "legacy-camera-key", time: 2, positionX: 1, positionY: 2, positionZ: 3, targetX: 0, targetY: 0, targetZ: 0, fov: 50, exposure: 1.4, easing: "easeInOut" });
+	const reopened = normalizeVisualScene(JSON.parse(JSON.stringify(scene)));
+	assert.equal(reopened.project.id, scene.project.id);
+	assert.equal(reopened.primitives[0].id, primitive.id);
+	assert.equal(reopened.primitives[0].positionX, 3.25);
+	assert.equal(reopened.primitives[0].rotationY, .72);
+	assert.equal(reopened.primitives[0].scaleZ, 1.8);
+	assert.equal(reopened.layers[0].entityId, primitive.id);
+	assert.equal(reopened.shapes2d[0].positionX, .6);
+	assert.equal(reopened.secondaryDynamics[0].audioImpulse, 1.6);
+	assert.equal(reopened.materials.find(item => item.id === material.id).baseColorMap.url, "/media/copper.png");
+	assert.equal(reopened.sky.rotationY, 1.2);
+	assert.equal(reopened.stage.fogAmount, .42);
+	assert.equal(reopened.cameras[0].positionX, 8);
+	assert.equal(reopened.cameras[0].targetEntityId, primitive.id);
+	assert.equal(reopened.camera.keyframes[0].exposure, 1.4);
+	assert.equal(reopened.camera.keyframes[0].easing, "easeInOut");
+	assert.equal(reopened.audioModulation.bindings[0].target, `primitive:${primitive.id}:rotationY`);
+	assert.deepEqual(normalizeVisualScene(JSON.parse(JSON.stringify(reopened))), reopened);
+});
+
+test("reopening removes stale entity and camera references", () => {
+	const scene = createBlankVisualScene("3d", "Broken links");
+	scene.layers.push({ id: "orphan", type: "primitive", name: "Missing", visible: true, opacity: 1, entityId: "gone" });
+	scene.cameras[0].targetMode = "primitive";
+	scene.cameras[0].targetEntityId = "gone";
+	scene.activeCameraId = "removed-camera";
+	scene.cameraCuts.push({ id: "stale-cut", time: 1, cameraId: "removed-camera" });
+	const reopened = normalizeVisualScene(JSON.parse(JSON.stringify(scene)));
+	assert.equal(reopened.layers.length, 0);
+	assert.equal(reopened.cameras[0].targetMode, "point");
+	assert.equal(reopened.cameras[0].targetEntityId, "");
+	assert.equal(reopened.activeCameraId, reopened.cameras[0].id);
+	assert.deepEqual(reopened.cameraCuts, []);
+});
