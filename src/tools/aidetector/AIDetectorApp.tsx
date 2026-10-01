@@ -51,18 +51,21 @@ function humanSize(bytes: number) {
 }
 
 function verdictLabel(report: DetectorReport) {
+  if (report.verdict_label) return report.verdict_label;
   if (report.verdict === "likely_human") return "Likely human-produced";
   if (report.verdict === "likely_ai" || report.verdict === "ai_like") return "Likely AI-generated";
   return "Indeterminate";
 }
 
 function verdictNote(report: DetectorReport) {
-  if (report.strong_provenance) return "Explicit generator/provenance evidence found in the file. Structured provenance is interpreted locally; signatures are not cryptographically verified yet.";
+  if (report.verdict_note) return report.verdict_note;
+  if (report.strong_provenance) return `Explicit generator/provenance evidence found in the file. ${report.provenance_caveat || "Structured provenance is interpreted locally; signatures are not cryptographically verified."}`;
   if (report.verdict === "uncertain") return "Signal evidence is mixed or too weak to separate cleanly · not provenance-confirmed.";
   return "Signal evidence assessment · not provenance-confirmed.";
 }
 
 function verdictExplanation(report: DetectorReport) {
+  if (report.verdict_explanation) return report.verdict_explanation;
   if (report.strong_provenance) return "Explicit provenance plus signal evidence supports AI origin.";
   if (report.strong_signal_fingerprint) return "A persistent decoder-style spectral comb supplies strong architecture-level evidence even though explicit provenance is absent.";
   if (report.verdict === "likely_human") return "The measured behavior leans human-produced, but absence of AI evidence is not proof of human authorship.";
@@ -175,7 +178,7 @@ export default function AIDetectorApp({ onBack }: Props) {
             <button type="button" onClick={onBack} className="mb-4 text-xs text-neutral-500 transition hover:text-violet-500">← Back to Tools</button>
             <div className="text-[11px] uppercase tracking-[.24em] text-violet-500">Origin Lens · local evidence scan</div>
             <h1 className="mt-1 !text-3xl md:!text-4xl !font-semibold tracking-tight">AI Music Detector</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-500 dark:text-neutral-400">YSong v{version} combines provenance with spectral, timing, dynamics, stereo and cross-section evidence. It estimates origin without pretending waveform evidence is legal proof.</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-500 dark:text-neutral-400">YSong v{report?.report_metadata?.detector_version || version} combines provenance with spectral, timing, dynamics, stereo and cross-section evidence. It estimates origin without pretending waveform evidence is legal proof.</p>
           </div>
           <div className={`rounded-full border px-3 py-1.5 text-xs ${health === "online" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500" : health === "offline" ? "border-rose-500/30 bg-rose-500/10 text-rose-500" : "border-neutral-300 dark:border-neutral-700 text-neutral-500"}`}>
             {health === "online" ? "● Local detector online" : health === "offline" ? "● Local detector offline" : "● Starting local detector…"}
@@ -208,7 +211,7 @@ export default function AIDetectorApp({ onBack }: Props) {
               <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.2em] text-violet-500">2 · Verdict</div><h2 className="mt-1 text-xl font-semibold">Origin assessment</h2></div><span className="text-[11px] text-neutral-500">{report.mode} · {report.analysis_profile.sampled_windows} windows · {report.elapsed_seconds.toFixed(2)}s</span></div>
               <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-center">
                 <div className="grid h-36 w-36 shrink-0 place-items-center rounded-full p-[10px]" style={{ background: `conic-gradient(${scoreAccent} ${report.ai_evidence_score}%, rgba(148,163,184,.16) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-white text-center dark:bg-neutral-900"><div><div className="text-4xl font-semibold tabular-nums">{report.ai_evidence_score.toFixed(1)}</div><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">AI evidence</div></div></div></div>
-                <div><div className="text-2xl font-semibold">{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{report.evidence_agreement.toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
+                <div><div className="text-2xl font-semibold">{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{(report.evidence_strength_pct ?? report.evidence_agreement).toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
               </div>
               <div className="mt-6 grid grid-cols-3 text-[10px] uppercase tracking-wide text-neutral-500"><span>Human-leaning</span><span className="text-center">Indeterminate</span><span className="text-right">AI-leaning</span></div>
               <details className="mt-5 border-t border-neutral-200 pt-4 text-sm dark:border-neutral-800">
@@ -216,7 +219,7 @@ export default function AIDetectorApp({ onBack }: Props) {
                 <p className="mt-2 text-[11px] leading-5 text-neutral-500">These are internal signal diagnostics, not probabilities or confirmation of who created the audio. Generic signal patterns can occur in both AI and human productions.</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {(["generic_ai_support", "human_counterevidence", "evidence_quality"] as const).map(key => {
-                    const value = report.measurements?.[key];
+                    const value = report.calibration_diagnostics?.[key] ?? report.measurements?.[key];
                     return typeof value === "number" && Number.isFinite(value) ? <div key={key} className="flex items-center justify-between gap-3 rounded-lg bg-neutral-100/80 px-3 py-2 text-xs dark:bg-neutral-950/70"><span className="text-neutral-500">{metricLabels[key]}</span><strong className="tabular-nums">{formatMetric(key, value)}</strong></div> : null;
                   })}
                 </div>
@@ -249,7 +252,7 @@ export default function AIDetectorApp({ onBack }: Props) {
             </div></section>
           </div>
 
-          <section className="mt-5 flex flex-col gap-4 rounded-3xl border border-neutral-200 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-900/55 md:flex-row md:items-center md:justify-between md:p-6"><div><div className="text-[10px] uppercase tracking-[.2em] text-violet-500">Report</div><h2 className="mt-1 text-xl font-semibold">Keep the evidence, not just the verdict.</h2><p className="mt-1 text-sm text-neutral-500">JSON includes all six layers, measurements, sampled windows, provenance clues and calibration diagnostics.</p></div><a href={aiDetectorReportUrl(report.analysis_id)} download className="shrink-0 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 text-sm font-medium text-violet-500 hover:bg-violet-500/15">Download JSON report</a></section>
+            <section className="mt-5 flex flex-col gap-4 rounded-3xl border border-neutral-200 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-900/55 md:flex-row md:items-center md:justify-between md:p-6"><div><div className="text-[10px] uppercase tracking-[.2em] text-violet-500">Report</div><h2 className="mt-1 text-xl font-semibold">Keep the evidence, not just the verdict.</h2><p className="mt-1 text-sm text-neutral-500">JSON includes the displayed verdict and evidence strength, all six layers, calibration diagnostics, provenance caveats and detector version.</p></div><a href={aiDetectorReportUrl(report.analysis_id)} download className="shrink-0 rounded-xl border border-violet-500/35 bg-violet-500/10 px-4 py-2.5 text-sm font-medium text-violet-500 hover:bg-violet-500/15">Download JSON report</a></section>
 
           <section className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.07] px-4 py-3 text-xs leading-5 text-amber-700 dark:text-amber-300"><strong>Experimental evidence ensemble:</strong> Evidence strength is not the probability a track is AI-generated. Human DAW productions can be quantized, compressed and looped; AI audio can be edited, remastered or combined with human material. Missing metadata never proves human authorship, and this build does not claim to decode proprietary watermarks such as Google SynthID.</section>
         </>}

@@ -5,14 +5,18 @@ export type DetectorHealth = { ok: boolean; service: string; version: string };
 export type DetectorLayer = { id: number; name: string; score: number; reliability: number; detail: string };
 export type DetectorReport = {
   schema: string;
+  report_metadata?: { product: string; detector_version: string; report_schema_version: number };
   analysis_id: string;
   mode: "fast" | "deep" | string;
   elapsed_seconds: number;
   analysis_profile: { sampled_windows: number; decode_sample_rate: number; fft_size: number; segment_seconds: number };
   verdict: "likely_ai" | "ai_like" | "likely_human" | "uncertain" | string;
   verdict_label: string;
+  verdict_explanation?: string;
+  verdict_note?: string;
   ai_evidence_score: number;
   evidence_agreement: number;
+  evidence_strength_pct?: number;
   confidence: number;
   strong_provenance: boolean;
   strong_signal_fingerprint: boolean;
@@ -28,6 +32,8 @@ export type DetectorReport = {
   };
   layers: DetectorLayer[];
   reasons: string[];
+  calibration_diagnostics?: Record<string, number>;
+  provenance_caveat?: string;
   measurements: Record<string, number>;
   visuals: { spectrum_db: number[]; energy_db: number[]; fakeprint?: number[] };
   windows: Array<{ start: number; duration: number }>;

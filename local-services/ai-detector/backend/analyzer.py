@@ -866,6 +866,27 @@ def analyze(path: Path, mode: str = "fast") -> dict[str, Any]:
     feat.update(comb)
     layers, score, agreement, reasons, strong_provenance, strong_fingerprint, diagnostics = score_layers(feat, container)
     key, label = verdict(score, strong_provenance, strong_fingerprint)
+    provenance_caveat = (
+        "Structured provenance is interpreted locally; signatures are not cryptographically verified. "
+        "Missing metadata or watermark evidence does not establish human authorship."
+    )
+    if key == "likely_ai" and strong_provenance:
+        explanation = "Explicit provenance plus signal evidence supports AI origin."
+    elif key == "ai_like" and strong_fingerprint:
+        explanation = "A persistent decoder-style spectral comb supplies strong architecture-level evidence even though explicit provenance is absent."
+    elif key == "likely_human":
+        explanation = "The measured behavior leans human-produced, but absence of AI evidence is not proof of human authorship."
+    elif key == "ai_like":
+        explanation = "Several signal traits lean AI-like, but generic waveform heuristics alone cannot confirm origin."
+    else:
+        explanation = "The evidence does not separate cleanly. YSong leaves the result indeterminate when cues disagree or remain weak."
+
+    if strong_provenance:
+        verdict_note = "Explicit generator/provenance evidence found in the file. " + provenance_caveat
+    elif key == "uncertain":
+        verdict_note = "Signal evidence is mixed or too weak to separate cleanly; not provenance-confirmed."
+    else:
+        verdict_note = "Signal evidence assessment; not provenance-confirmed."
     elapsed = time.perf_counter() - t0
 
     cautions = [
@@ -875,9 +896,13 @@ def analyze(path: Path, mode: str = "fast") -> dict[str, Any]:
         "A missing watermark or metadata tag does not prove human authorship.",
         "This build does not claim to decode proprietary watermarks such as Google's SynthID.",
     ]
-
     return {
-        "schema": "ysong-ai-detector-report-v6",
+        "schema": "ysong-ai-detector-report-v7",
+        "report_metadata": {
+            "product": "YSong AI Music Detector",
+            "detector_version": "0.6.0",
+            "report_schema_version": 7,
+        },
         "analysis_id": uuid.uuid4().hex,
         "mode": mode,
         "elapsed_seconds": round(elapsed, 3),
@@ -889,8 +914,11 @@ def analyze(path: Path, mode: str = "fast") -> dict[str, Any]:
         },
         "verdict": key,
         "verdict_label": label,
+        "verdict_explanation": explanation,
+        "verdict_note": verdict_note,
         "ai_evidence_score": score,
         "evidence_agreement": agreement,
+        "evidence_strength_pct": agreement,
         "confidence": agreement,  # legacy UI/API compatibility; no longer described as probability/confidence
         "strong_provenance": strong_provenance,
         "strong_signal_fingerprint": strong_fingerprint,
@@ -913,6 +941,8 @@ def analyze(path: Path, mode: str = "fast") -> dict[str, Any]:
         },
         "layers": layers,
         "reasons": reasons,
+        "calibration_diagnostics": diagnostics,
+        "provenance_caveat": provenance_caveat,
         "measurements": {
             "crest_db": round(feat["crest_db"], 2),
             "dynamic_spread_db": round(feat["dynamic_spread_db"], 2),
