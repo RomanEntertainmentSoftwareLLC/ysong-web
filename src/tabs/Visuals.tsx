@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { applyVisualTransform, selectedVisualTransform, type VisualTransform, type VisualTransformMode, type VisualTransformSpace } from "../lib/visualsTransform";
 import "./VisualsResponsive.css";
 import { requestWorldTransport, useWorldPlayer } from "../components/WorldPlayer";
 import { getPlaybackOwner, subscribePlaybackOwner, type PlaybackOwner } from "../lib/playbackOwner";
@@ -144,6 +145,11 @@ export default function VisualsPane() {
 	const [editorFxPreview,setEditorFxPreview]=useState(true);
 	const [editorCamera,setEditorCamera]=useState<EditorCameraSnapshot>({position:{x:0,y:.35,z:7.4},rotation:{x:0,y:0,z:0},fov:52});
 	const [editorFreeRoamActive,setEditorFreeRoamActive]=useState(false);
+	const [transformMode,setTransformMode]=useState<VisualTransformMode>("translate");
+	const [transformSpace,setTransformSpace]=useState<VisualTransformSpace>("world");
+	const [transformSnap,setTransformSnap]=useState(0);
+	const [transformUndoAvailable,setTransformUndoAvailable]=useState(false);
+	const transformUndoRef=useRef<{id:string;transform:VisualTransform}|null>(null);
 	const [primitivePlacement,setPrimitivePlacement]=useState<PrimitivePlacementRequest|null>(null);
 	const [viewportBounds,setViewportBounds]=useState({width:0,height:0});
 	const [sceneContextMenu,setSceneContextMenu]=useState<SceneContextMenu|null>(null);
@@ -181,6 +187,9 @@ export default function VisualsPane() {
 		syncVisualSceneToFrames(sceneRef.current,frames,window.location.origin);
 		for(const target of frames)if(target===viewportFrameRef.current)target?.contentWindow?.postMessage({type:"ysong-editor-selection",id:selectedIdRef.current},window.location.origin);
 	},[]);
+	useEffect(()=>{
+		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-transform-tool",mode:transformMode,space:transformSpace,snap:transformSnap},window.location.origin);
+	},[transformMode,transformSpace,transformSnap,previewProgramCamera,editorFxPreview]);
 	useEffect(()=>{
 		let cancelled=false;
 		void bridgeApi.getVisualScene<VisualSceneState>().then(payload=>{
@@ -241,11 +250,22 @@ export default function VisualsPane() {
 		const onMessage=(event:MessageEvent)=>{
 			if(event.origin!==window.location.origin||!event.data||typeof event.data!=="object")return;
 			if(event.data.type==="ysong-viewport-ready"){
-				for(const frame of [viewportFrameRef.current,monitorFrameRef.current])if(frame&&event.source===frame.contentWindow){syncViewportScene(frame);return;}
+				for(const frame of [viewportFrameRef.current,monitorFrameRef.current])if(frame&&event.source===frame.contentWindow){syncViewportScene(frame);if(frame===viewportFrameRef.current)frame.contentWindow?.postMessage({type:"ysong-editor-transform-tool",mode:transformMode,space:transformSpace,snap:transformSnap},window.location.origin);return;}
 			}
 			if(event.data.type==="ysong-visual-select"&&event.source===viewportFrameRef.current?.contentWindow&&typeof event.data.id==="string"){
 				const id=resolveVisualSelection(sceneRef.current,event.data.id);
 				if(id)setSelectedId(id);
+			}
+			if(event.data.type==="ysong-visual-transform"&&event.source===viewportFrameRef.current?.contentWindow&&typeof event.data.id==="string"){
+				const transform=event.data.transform as VisualTransform|null;
+				if(!transform||!Object.values(transform).every(value=>typeof value==="number"&&Number.isFinite(value)))return;
+				const current=sceneRef.current;
+				if(!selectedVisualTransform(current,event.data.id))return;
+				const next=applyVisualTransform(current,event.data.id,transform);
+				if(next===current)return;
+				transformUndoRef.current={id:event.data.id,transform:selectedVisualTransform(current,event.data.id)!};
+				setTransformUndoAvailable(true);
+				setScene(next);
 			}
 			if(event.data.type==="ysong-editor-camera"&&event.data.position&&event.data.rotation)setEditorCamera(event.data as EditorCameraSnapshot & {type:string});
 			if(event.data.type==="ysong-editor-free-roam")setEditorFreeRoamActive(event.data.active===true);
@@ -278,7 +298,7 @@ export default function VisualsPane() {
 			}
 		};
 		window.addEventListener("message",onMessage);return()=>window.removeEventListener("message",onMessage);
-	},[syncViewportScene]);
+	},[syncViewportScene,transformMode,transformSpace,transformSnap]);
 	useEffect(()=>{
 		let raf=0,lastSample=0;
 		const tick=(now:number)=>{
@@ -307,6 +327,7 @@ export default function VisualsPane() {
 	const selectedPrimitive=selected?.type==="primitive"?scene.primitives.find(primitive=>primitive.id===selected.entityId)||null:null;
 	const selectedShape=selected?.type==="shape2d"?scene.shapes2d.find(shape=>shape.id===selected.entityId)||null:null;
 	const selectedSecondary=selected?.type==="secondary"?scene.secondaryDynamics.find(item=>item.id===selected.entityId)||null:null;
+	const transformAvailable=!!selectedVisualTransform(scene,selectedId)&&!(scene.physics.enabled&&scene.physics.mode==="simulate");
 	const activeCamera=scene.cameras.find(camera=>camera.id===scene.activeCameraId)||scene.cameras[0]||null;
 	const dawSeconds=session?barsToSeconds(session.playheadBar-1,session):0;
 	const dawDuration=session?barsToSeconds(session.endBar-1,session):0;
@@ -606,6 +627,12 @@ export default function VisualsPane() {
 			</aside>
 
 			<main className="visuals-viewport relative min-h-0 overflow-hidden bg-[#050609] p-3">
+				{!previewProgramCamera?<div className="absolute left-5 top-12 z-40 flex max-w-[calc(100%-165px)] flex-wrap items-center gap-1 rounded-md border border-white/15 bg-[#10151d]/95 p-1 text-[10px] shadow-xl" aria-label="Transform gizmo tools">
+					{([ ["translate","Move"], ["rotate","Rotate"], ["scale","Scale"] ] as const).map(([mode,label])=><button key={mode} type="button" disabled={!transformAvailable} aria-pressed={transformMode===mode} onClick={()=>{setTransformMode(mode);setTransformSnap(0)}} className={`min-h-8 rounded px-2 ${transformMode===mode?"bg-violet-500/25 text-violet-100":"text-neutral-300 hover:bg-white/10"} disabled:opacity-35`}>{label}</button>)}
+					<button type="button" disabled={!transformAvailable} onClick={()=>setTransformSpace(value=>value==="world"?"local":"world")} className="min-h-8 rounded border border-white/10 px-2 text-neutral-300 disabled:opacity-35" title="Toggle world or local axes">{transformSpace==="world"?"World":"Local"}</button>
+					<label className="flex items-center gap-1 px-1 text-neutral-400">Snap <select aria-label="Transform snap increment" value={transformSnap} onChange={event=>setTransformSnap(Number(event.target.value))} className="min-h-8 rounded border border-white/10 bg-[#121620] px-1 text-neutral-200"><option value={0}>Off</option>{(transformMode==="rotate"?[5,15,45]:transformMode==="scale"?[.1,.25,.5]:[.1,.5,1]).map(value=><option key={value} value={value}>{value}{transformMode==="rotate"?"°":""}</option>)}</select></label>
+					<button type="button" disabled={!transformUndoAvailable} onClick={()=>{const previous=transformUndoRef.current;if(previous){setScene(current=>applyVisualTransform(current,previous.id,previous.transform));transformUndoRef.current=null;setTransformUndoAvailable(false)}}} className="min-h-8 rounded px-2 text-neutral-300 hover:bg-white/10 disabled:opacity-35" title="Undo last gizmo drag">Undo</button>
+				</div>:null}
 				<div className="absolute left-5 top-4 z-30 flex max-w-[calc(100%-150px)] items-center gap-2 overflow-hidden text-[10px] font-semibold uppercase tracking-[.16em] text-neutral-400"><span className="shrink-0">Live Viewport</span><span className="shrink-0 rounded bg-black/50 px-1.5 py-.5 text-neutral-500">{previewProgramCamera?"PROGRAM PREVIEW":"SCENE VIEW"}</span><span className="truncate rounded bg-black/50 px-1.5 py-.5 text-neutral-600">{previewProgramCamera?"ACTIVE CAMERA / OBS VIEW":editorFreeRoamActive?`FX ${editorFxPreview?"ON":"OFF"} · FREE ROAM · ESC/CLICK EXIT · WASD + MOUSE · Q/E VERTICAL`:`FX ${editorFxPreview?"ON":"OFF"} · CLICK VIEWPORT FOR FREE ROAM`}</span></div>
 				<div ref={viewportHostRef} className="relative h-full min-h-0 w-full overflow-hidden rounded-lg border border-white/10 bg-black">
 					<div className={previewProgramCamera?"absolute inset-0 grid place-items-center bg-black":"absolute inset-0"}>

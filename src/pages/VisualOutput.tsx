@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { TGALoader } from "three/examples/jsm/loaders/TGALoader.js";
@@ -57,6 +58,7 @@ import {
 } from "../lib/visualsScene";
 import { deterministicCameraShake, resolveVisualProgramCamera, sampleVisualProgramCamera } from "../lib/visualsCamera";
 import { pickVisibleEditorObject } from "../lib/visualsEditorPicking";
+import { applyVisualTransform, selectedVisualTransform, type VisualTransform, type VisualTransformMode, type VisualTransformSpace } from "../lib/visualsTransform";
 import { isCurrentVisualMaterialTexture, type MaterialTextureKey } from "../lib/visualMaterialUpload";
 import { activeVisualAnimationClips, animationLayerAllowsTarget, sampleIKWeight } from "../lib/visualsPerformance";
 import {
@@ -2315,6 +2317,64 @@ export default function VisualOutput() {
 		const raycaster = new THREE.Raycaster();
 		const pointer = new THREE.Vector2();
 		const selectableRoots = new Map<string, THREE.Object3D>();
+		const transformProxy = new THREE.Object3D();
+		threeScene.add(transformProxy);
+		const transformControls = editorFreeRoam ? new TransformControls(camera, canvas) : null;
+		if (transformControls) {
+			transformControls.setSize(1.15);
+			threeScene.add(transformControls.getHelper());
+			canvas.style.touchAction = "none";
+		}
+		let transformDragging = false;
+		let transformDirty = false;
+		let transformStart: VisualTransform | null = null;
+		let transformId = "";
+		const syncTransformGizmo = () => {
+			if (!transformControls || transformDragging || placementState || modelPlacementActive || document.pointerLockElement === canvas) {
+				if (!transformDragging) transformControls?.detach();
+				return;
+			}
+			const value = selectedVisualTransform(sceneRef.current, selectedSelectableId);
+			if (!value || sceneRef.current.physics.enabled && sceneRef.current.physics.mode === "simulate") {
+				transformControls.detach();
+				return;
+			}
+			transformProxy.position.set(value.positionX, value.positionY, value.positionZ);
+			transformProxy.rotation.set(value.rotationX, value.rotationY, value.rotationZ);
+			transformProxy.scale.set(value.scaleX, value.scaleY, value.scaleZ);
+			if (transformControls.object !== transformProxy) transformControls.attach(transformProxy);
+		};
+		transformControls?.addEventListener("dragging-changed", event => {
+			transformDragging = Boolean(event.value);
+			if (transformDragging) {
+				transformId = selectedSelectableId;
+				transformStart = selectedVisualTransform(sceneRef.current, transformId);
+				transformDirty = false;
+				if (document.pointerLockElement === canvas) document.exitPointerLock();
+			} else {
+				suppressEditorClick = true;
+				if (transformDirty && transformStart)
+					window.parent.postMessage({ type: "ysong-visual-transform", id: transformId, transform: selectedVisualTransform(sceneRef.current, transformId) }, window.location.origin);
+				transformDirty = false;
+				transformStart = null;
+			}
+		});
+		transformControls?.addEventListener("objectChange", () => {
+			if (!transformDragging || !transformStart) return;
+			const value: VisualTransform = {
+				positionX: transformProxy.position.x, positionY: transformProxy.position.y, positionZ: transformProxy.position.z,
+				rotationX: transformProxy.rotation.x, rotationY: transformProxy.rotation.y, rotationZ: transformProxy.rotation.z,
+				scaleX: transformProxy.scale.x, scaleY: transformProxy.scale.y, scaleZ: transformProxy.scale.z,
+			};
+			const layer = sceneRef.current.layers.find(item => item.id === transformId);
+			if (layer?.type === "object") {
+				const axis = transformControls.axis || "X";
+				const uniform = axis.includes("Y") ? value.scaleY : axis.includes("Z") ? value.scaleZ : value.scaleX;
+				value.scaleX = value.scaleY = value.scaleZ = uniform;
+			}
+			sceneRef.current = applyVisualTransform(sceneRef.current, transformId, value);
+			transformDirty = true;
+		});
 		type PlacementRuntime = {
 			primitive: VisualPrimitiveType;
 			color: string;
@@ -2632,6 +2692,19 @@ export default function VisualOutput() {
 			if (event.data.type === "ysong-editor-selection" && typeof event.data.id === "string") {
 				const id = event.data.id;
 				selectedSelectableId = sceneRef.current.layers.some(layer => layer.id === id) || sceneRef.current.cameras.some(programCamera => programCamera.id === id) ? id : "";
+				syncTransformGizmo();
+				return;
+			}
+			if (event.data.type === "ysong-editor-transform-tool" && transformControls) {
+				const mode = event.data.mode as VisualTransformMode;
+				const space = event.data.space as VisualTransformSpace;
+				const snap = Number(event.data.snap);
+				if (mode === "translate" || mode === "rotate" || mode === "scale") transformControls.setMode(mode);
+				if (space === "local" || space === "world") transformControls.setSpace(space);
+				transformControls.setTranslationSnap(snap > 0 ? snap : null);
+				transformControls.setRotationSnap(snap > 0 ? snap * Math.PI / 180 : null);
+				transformControls.setScaleSnap(snap > 0 ? snap : null);
+				syncTransformGizmo();
 				return;
 			}
 			if (event.data.type === "ysong-editor-view-program-camera") {
@@ -6127,6 +6200,7 @@ export default function VisualOutput() {
 			}
 
 			ensurePrimitives(currentScene, currentTransportPosition, modulation);
+			syncTransformGizmo();
 			threeScene.updateMatrixWorld(true);
 			if (objectIsPerformer)
 				applyIKConstraints(currentScene, currentTransportPosition, importedModelActive && !!glb.root);
@@ -6775,6 +6849,10 @@ export default function VisualOutput() {
 			canvas.removeEventListener("dragover", onViewportDragOver);
 			canvas.removeEventListener("drop", onViewportDrop);
 			clearPlacement(false);
+			transformControls?.detach();
+			transformControls?.dispose();
+			transformControls?.getHelper().removeFromParent();
+			transformProxy.removeFromParent();
 			modelPlacementActive = false;
 			window.removeEventListener("keydown", onKeyDown);
 			window.removeEventListener("dblclick", toggleFullscreen);
