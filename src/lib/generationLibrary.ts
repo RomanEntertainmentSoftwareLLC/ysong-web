@@ -13,6 +13,16 @@ export type GenerationArtifact = {
   durationSec?: number;
 };
 
+export type GenerationOperation = "initial" | "retry" | "variation" | "stem-regeneration" | "edit";
+export type GenerationLineage = {
+  rootId: string;
+  parentId?: string;
+  version: number;
+  operation: GenerationOperation;
+  /** IDs and source text captured when this version was created; never follow mutable parent state. */
+  sourceReferences: { generationId?: string; artifactIds: string[]; prompt: string; origin?: string };
+};
+
 export type GenerationRecord = {
   id: string;
   status: GenerationStatus;
@@ -24,6 +34,7 @@ export type GenerationRecord = {
   error?: string;
   folderId?: string;
   songResult?: SongGenerationResult;
+  lineage?: GenerationLineage;
 };
 
 export type GenerationFolder = { id: string; name: string; createdAt: number; updatedAt: number };
@@ -49,6 +60,11 @@ function normalizeRecord(value: unknown): GenerationRecord | null {
     source: { prompt: item.source.prompt, ...(typeof item.source.lyrics === "string" ? { lyrics: item.source.lyrics } : {}), ...(typeof item.source.style === "string" ? { style: item.source.style } : {}), ...(typeof item.source.origin === "string" ? { origin: item.source.origin } : {}) },
     artifacts: artifacts.map((artifact) => ({ ...artifact, ...(typeof artifact.durationSec === "number" && Number.isFinite(artifact.durationSec) && artifact.durationSec > 0 ? { durationSec: artifact.durationSec } : {}) })), ...(typeof item.error === "string" ? { error: item.error } : {}), ...(typeof item.folderId === "string" && item.folderId ? { folderId: item.folderId } : {}),
     ...(item.songResult ? { songResult: parseSongGenerationResult(item.songResult) ?? undefined } : {}),
+    ...(item.lineage && typeof item.lineage.rootId === "string" && item.lineage.rootId && Number.isInteger(item.lineage.version) && item.lineage.version > 0 &&
+      ["initial", "retry", "variation", "stem-regeneration", "edit"].includes(item.lineage.operation) &&
+      item.lineage.sourceReferences && Array.isArray(item.lineage.sourceReferences.artifactIds) && typeof item.lineage.sourceReferences.prompt === "string"
+      ? { lineage: { rootId: item.lineage.rootId, ...(typeof item.lineage.parentId === "string" ? { parentId: item.lineage.parentId } : {}), version: item.lineage.version, operation: item.lineage.operation, sourceReferences: { ...(typeof item.lineage.sourceReferences.generationId === "string" ? { generationId: item.lineage.sourceReferences.generationId } : {}), artifactIds: item.lineage.sourceReferences.artifactIds.filter((id): id is string => typeof id === "string"), prompt: item.lineage.sourceReferences.prompt, ...(typeof item.lineage.sourceReferences.origin === "string" ? { origin: item.lineage.sourceReferences.origin } : {}) } } }
+      : {}),
   };
 }
 
@@ -69,7 +85,25 @@ export function saveGeneration(record: GenerationRecord): GenerationRecord {
 }
 
 export function upsertGeneration(input: Omit<GenerationRecord, "updatedAt"> & { updatedAt?: number }): GenerationRecord {
-  return saveGeneration({ ...input, updatedAt: input.updatedAt ?? Date.now() });
+  const existing = listGenerations().find((item) => item.id === input.id);
+  // Status updates for one job may fill in output fields, but cannot erase already saved artifacts or provenance.
+  const artifacts = [...(existing?.artifacts ?? [])];
+  for (const artifact of input.artifacts) if (!artifacts.some((saved) => saved.id === artifact.id)) artifacts.push(artifact);
+  const lineage = input.lineage ?? existing?.lineage ?? { rootId: input.id, version: 1, operation: "initial" as const,
+    sourceReferences: { artifactIds: [], prompt: input.source.prompt, ...(input.source.origin ? { origin: input.source.origin } : {}) } };
+  return saveGeneration({ ...input, ...(existing ? { source: existing.source } : {}), artifacts, lineage, updatedAt: input.updatedAt ?? Date.now() });
+}
+
+/** Create an immutable child version. Parent records and their artifact references are never rewritten. */
+export function createGenerationVersion(parentId: string, operation: Exclude<GenerationOperation, "initial">, changes: Pick<GenerationRecord, "title" | "status" | "source" | "artifacts"> & Partial<Pick<GenerationRecord, "songResult" | "error">> & { id?: string }): GenerationRecord {
+  const parent = listGenerations().find((item) => item.id === parentId);
+  if (!parent) throw new Error("Parent generation not found.");
+  const id = changes.id ?? crypto.randomUUID();
+  const rootId = parent.lineage?.rootId ?? parent.id;
+  const siblings = listGenerations().filter((item) => (item.lineage?.rootId ?? item.id) === rootId);
+  const lineage: GenerationLineage = { rootId, parentId: parent.id, version: Math.max(0, ...siblings.map((item) => item.lineage?.version ?? 1)) + 1, operation,
+    sourceReferences: { generationId: parent.id, artifactIds: parent.artifacts.map((artifact) => artifact.id), prompt: parent.source.prompt, ...(parent.source.origin ? { origin: parent.source.origin } : {}) } };
+  return upsertGeneration({ ...changes, id, createdAt: Date.now(), updatedAt: Date.now(), source: changes.source, artifacts: changes.artifacts, lineage });
 }
 
 function changed() { window.dispatchEvent(new CustomEvent("ysong:generations-changed")); }
