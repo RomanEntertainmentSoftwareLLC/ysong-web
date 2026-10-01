@@ -1,4 +1,5 @@
 import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api";
+import { buildCritiqueEvidence, validateAiCritiqueSummary, type AiCritiqueSummary } from "./evidenceContract";
 
 type JsonErrorPayload = { detail?: unknown; message?: unknown; error?: unknown };
 
@@ -82,17 +83,10 @@ export function critiqueReportUrl(assetId: string) {
   return `${VOCAL_API_BASE}/v1/files/reports/${encodeURIComponent(assetId)}/critique`;
 }
 
-export type AiCritiqueSummary = {
-  headline: string;
-  summary: string;
-  readiness_score: number | null;
-  strengths: string[];
-  priorities: string[];
-  caveats: string[];
-  model?: string;
-};
+export type { AiCritiqueSummary } from "./evidenceContract";
 
 export async function requestAiCritiqueSummary(report: CritiqueReport): Promise<AiCritiqueSummary> {
+  const evidence = buildCritiqueEvidence(report);
   let token = "";
   try { token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token") || ""; } catch { /* unavailable */ }
   const response = await fetch("/api/critique/ai-summary", {
@@ -101,7 +95,7 @@ export async function requestAiCritiqueSummary(report: CritiqueReport): Promise<
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ report }),
+    body: JSON.stringify({ evidence }),
   });
   const text = await response.text();
   let payload: unknown = null;
@@ -110,5 +104,6 @@ export async function requestAiCritiqueSummary(report: CritiqueReport): Promise<
     const errorPayload = asErrorPayload(payload);
     throw new Error(String(errorPayload.message || errorPayload.error || `AI critic HTTP ${response.status}`));
   }
-  return payload as AiCritiqueSummary;
+  validateAiCritiqueSummary(payload, evidence);
+  return payload;
 }
