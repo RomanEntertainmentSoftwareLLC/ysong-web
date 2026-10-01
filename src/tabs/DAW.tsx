@@ -1,5 +1,6 @@
 // src/tabs/DAW.tsx
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import "./daw-tablet.css";
 import { createPortal } from "react-dom";
 import type { TabRendererProps } from "./core";
 import { YSButton } from "../components/YSButton";
@@ -658,6 +659,7 @@ export default function DAW(_props: TabRendererProps) {
 		} catch {}
 		return typeof window === "undefined" ? true : window.innerWidth >= 720;
 	});
+	const [touchEditMode, setTouchEditMode] = useState(false);
 
 	useEffect(() => {
 		try { sessionStorage.setItem("ysong:daw:trackPanelOpen", trackPanelOpen ? "1" : "0"); } catch {}
@@ -1515,6 +1517,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	// Playhead placement should use the element you clicked on (ruler or lanes)
 	const setPlayheadFromEvent = (e: React.PointerEvent) => {
+		if (e.pointerType === "touch" && !touchEditMode) return;
 		seekTransport(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, bars));
 	};
 
@@ -1554,6 +1557,11 @@ export default function DAW(_props: TabRendererProps) {
 	const [dropPreview, setDropPreview] = useState<DropPreview | null>(null);
 
 	const beginClipMove = (clipId: string) => (e: React.PointerEvent) => {
+		if (e.pointerType === "touch" && !touchEditMode) {
+			const clip = clips.find((c) => c.id === clipId);
+			if (clip) { setSelectedTrackId(clip.trackId); setSelectedClipId(clip.id); }
+			return;
+		}
 		e.stopPropagation();
 		e.preventDefault();
 
@@ -1804,6 +1812,7 @@ export default function DAW(_props: TabRendererProps) {
 	const dragRef = useRef<DragType>(null);
 
 	const beginDrag = (kind: DragType) => (e: React.PointerEvent) => {
+		if (e.pointerType === "touch" && !touchEditMode) return;
 		dragRef.current = kind;
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 		e.preventDefault();
@@ -5138,9 +5147,9 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	return (
-		<div className="h-full min-h-0 flex flex-col relative">
+		<div className={`daw-workspace h-full min-h-0 flex flex-col relative ${touchEditMode ? "daw-touch-edit" : ""}`}>
 			{/* App-style menu bar. Project file commands live here instead of consuming transport space. */}
-			<div className="relative z-50 h-8 shrink-0 px-1 flex items-center gap-1 border-t border-b border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/65 select-none">
+			<div className="daw-menu-bar relative z-50 h-8 shrink-0 px-1 flex items-center gap-1 border-t border-b border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/65 select-none">
 				<div className="relative h-full flex items-center" ref={fileMenuRef}>
 					<button
 						type="button"
@@ -5195,11 +5204,11 @@ export default function DAW(_props: TabRendererProps) {
 				</div>
 			)}
 			{/* Main split */}
-			<div className="flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
+			<div className="daw-main-split flex-1 min-h-0 flex overflow-hidden border-t border-neutral-200/20 dark:border-neutral-800">
 				{/* Left: independently collapsible DAW track panel. On smaller/mobile displays this defaults
 				    to a narrow rail so the timeline keeps the majority of the screen. */}
 				<div
-					className={`${trackPanelOpen ? "w-[min(300px,72vw)] md:w-[300px]" : "w-10"} shrink-0 border-r border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/30 flex flex-col min-h-0 transition-[width] duration-200`}
+					className={`daw-track-panel ${trackPanelOpen ? "daw-track-panel-open w-[min(300px,72vw)] md:w-[300px]" : "w-10"} shrink-0 border-r border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/30 flex flex-col min-h-0 transition-[width] duration-200`}
 				>
 					<div className="flex flex-col border-b border-neutral-200/20 dark:border-neutral-800">
 						<div className={`h-12 flex items-center bg-neutral-950/40 border-b border-neutral-200/10 dark:border-neutral-800 ${trackPanelOpen ? "px-2 gap-2" : "justify-center"}`}>
@@ -5222,7 +5231,8 @@ export default function DAW(_props: TabRendererProps) {
 							<YSButton
 								type="button"
 								onClick={() => setTrackPanelOpen((v) => !v)}
-								className="h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md border"
+								className="daw-panel-toggle h-7 w-7 shrink-0 inline-flex items-center justify-center rounded-md border"
+								aria-label={trackPanelOpen ? "Collapse track list" : "Expand track list"}
 								title={trackPanelOpen ? "Collapse track list" : "Expand track list"}
 							>
 								<span className="text-base leading-none">{trackPanelOpen ? "‹" : "›"}</span>
@@ -5271,7 +5281,7 @@ export default function DAW(_props: TabRendererProps) {
 							return (
 								<div
 									key={t.id}
-									className={`relative flex flex-col justify-start px-2 py-1.5 border-b border-neutral-200/10 dark:border-neutral-800 ${selected ? "bg-neutral-100/5" : ""}`}
+									className={`daw-track-header relative flex flex-col justify-start px-2 py-1.5 border-b border-neutral-200/10 dark:border-neutral-800 ${selected ? "bg-neutral-100/5" : ""}`}
 									style={{ height: trackH }}
 									onPointerDown={() => { setSelectedTrackId(t.id); setSelectedClipId(null); }}
 								>
@@ -5388,7 +5398,7 @@ export default function DAW(_props: TabRendererProps) {
 									<div className="w-full mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden" title="Live track level">
 										<div className="h-full rounded-full transition-[width] duration-75" style={{ width: `${Math.round(meter * 100)}%`, background: "linear-gradient(90deg, #34d399 0%, #facc15 72%, #fb7185 100%)" }} />
 									</div>
-									<div className="absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize" onPointerDown={beginLaneResize(t.id)} onPointerMove={onLaneResizeMove} onPointerUp={endLaneResize} onPointerCancel={endLaneResize} title="Resize track height" />
+									<div className="daw-lane-resize absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize" onPointerDown={beginLaneResize(t.id)} onPointerMove={onLaneResizeMove} onPointerUp={endLaneResize} onPointerCancel={endLaneResize} title="Resize track height" />
 								</div>
 							);
 						})}
@@ -5412,7 +5422,8 @@ export default function DAW(_props: TabRendererProps) {
 				<div className="flex-1 min-w-0 bg-neutral-950/10 flex flex-col min-h-0">
 					{/* Toolbar (locked horizontally) */}
 					<div className="shrink-0 z-30 bg-neutral-950/70 backdrop-blur border-b border-neutral-200/20 dark:border-neutral-800">
-						<div className="h-12 px-2 py-1 flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+						<div className="daw-timeline-toolbar h-12 px-2 py-1 flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+							<button type="button" className="daw-touch-mode" aria-pressed={touchEditMode} onClick={() => setTouchEditMode((value) => !value)} title="Switch between touch scrolling and clip editing">{touchEditMode ? "Edit clips" : "Scroll timeline"}</button>
 							<div className="flex items-center gap-1 pr-2 border-r border-white/10">
 								<YSButton disabled={!canUndo} onClick={undo} className="w-8 h-7 p-0 rounded-md justify-center disabled:opacity-25" title="Undo (Ctrl+Z)">↶</YSButton>
 								<YSButton disabled={!canRedo} onClick={redo} className="w-8 h-7 p-0 rounded-md justify-center disabled:opacity-25" title="Redo (Ctrl+Y / Ctrl+Shift+Z)">↷</YSButton>
@@ -5508,7 +5519,7 @@ export default function DAW(_props: TabRendererProps) {
 					<div
 						ref={timelineRef}
 						onScroll={onTimelineScroll}
-						className="flex-1 min-h-0 overflow-auto"
+						className="daw-timeline-scroll flex-1 min-h-0 overflow-auto"
 						style={{ scrollbarGutter: "stable" } as any}
 					>
 						{/* Ruler row (sticky vertically, scrolls horizontally with content) */}
@@ -5523,7 +5534,7 @@ export default function DAW(_props: TabRendererProps) {
 									style={
 										{
 											...timelineWideStyle,
-											touchAction: "none",
+										touchAction: touchEditMode ? "none" : "pan-x",
 										} as any
 									}
 									onPointerDown={(e) => setPlayheadFromEvent(e)}
@@ -5585,7 +5596,7 @@ export default function DAW(_props: TabRendererProps) {
 										className="absolute top-[6px] z-30"
 										style={{
 											left: loopLeftPx - 10,
-											touchAction: "none",
+									touchAction: touchEditMode ? "none" : "pan-x",
 											cursor: "ew-resize",
 										}}
 										onPointerDown={beginDrag("L")}
@@ -5603,7 +5614,7 @@ export default function DAW(_props: TabRendererProps) {
 										className="absolute top-[6px] z-30"
 										style={{
 											left: barToLeftPx(loopR) - 10,
-											touchAction: "none",
+									touchAction: touchEditMode ? "none" : "pan-x",
 											cursor: "ew-resize",
 										}}
 										onPointerDown={beginDrag("R")}
@@ -5621,7 +5632,7 @@ export default function DAW(_props: TabRendererProps) {
 										className="absolute top-[6px] z-30"
 										style={{
 											left: endLeftPx - 10,
-											touchAction: "none",
+									touchAction: touchEditMode ? "none" : "pan-x",
 											cursor: "ew-resize",
 										}}
 										onPointerDown={beginDrag("E")}
@@ -5836,6 +5847,7 @@ export default function DAW(_props: TabRendererProps) {
 														zIndex: 20,
 														borderRadius: loopable ? 14 : 0,
 														background: `linear-gradient(135deg, hsla(${hue}, 82%, 42%, 0.98), hsla(${(hue + 26) % 360}, 82%, 28%, 0.98))`,
+														touchAction: touchEditMode ? "none" : "pan-x pan-y",
 														boxShadow:
 															"inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -14px 24px rgba(0,0,0,0.14)",
 													}}
@@ -5930,13 +5942,13 @@ export default function DAW(_props: TabRendererProps) {
 														<>
 															{/* Fade handles follow their current fade boundaries. */}
 															<div
-																className="absolute top-0 z-50 w-3 h-3 -translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute top-0 z-50 w-3 h-3 -translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
 																style={{ left: `${fadeInPct}%` }}
 																onPointerDown={beginClipFade(c.id, "fadeIn")}
 																title="Fade in (drag; ALT bypasses snap)"
 															/>
 															<div
-																className="absolute top-0 z-50 w-3 h-3 translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute top-0 z-50 w-3 h-3 translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
 																style={{ right: `${fadeOutPct}%` }}
 																onPointerDown={beginClipFade(c.id, "fadeOut")}
 																title="Fade out (drag; ALT bypasses snap)"
@@ -5944,7 +5956,7 @@ export default function DAW(_props: TabRendererProps) {
 
 															{/* Thin full-height right edge = trim. */}
 															<div
-																className={`absolute top-0 right-0 h-full w-[9px] z-40 cursor-ew-resize transition-opacity ${isSelected ? "opacity-70" : "opacity-0 group-hover:opacity-70"}`}
+													className={`daw-clip-handle absolute top-0 right-0 h-full w-[9px] z-40 cursor-ew-resize transition-opacity ${isSelected ? "opacity-70" : "opacity-0 group-hover:opacity-70"}`}
 																onPointerDown={beginClipResizeR(c.id)}
 																title="Trim source boundary (does NOT change stretch ratio; ALT bypasses snap)"
 																style={{ background: "linear-gradient(to left, rgba(255,255,255,0.30), rgba(255,255,255,0))" }}
@@ -5952,7 +5964,7 @@ export default function DAW(_props: TabRendererProps) {
 
 															{/* Bottom-right grip = time stretch, preserving pitch. */}
 															<div
-																className={`absolute bottom-1 right-1 z-[60] h-5 min-w-5 px-1 rounded bg-fuchsia-950/90 border border-fuchsia-200/60 text-fuchsia-50 text-[10px] leading-[18px] text-center cursor-ew-resize transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+													className={`daw-clip-handle absolute bottom-1 right-1 z-[60] h-5 min-w-5 px-1 rounded bg-fuchsia-950/90 border border-fuchsia-200/60 text-fuchsia-50 text-[10px] leading-[18px] text-center cursor-ew-resize transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
 																onPointerDown={beginClipStretchR(c.id)}
 																title="Time stretch / preserve pitch (25%-400%). Use this ↔ grip; the thin right edge is Trim."
 															>↔</div>
@@ -5961,14 +5973,14 @@ export default function DAW(_props: TabRendererProps) {
 													{isMidiClip && (
 														<>
 															<div
-																className="absolute top-0 right-0 h-full w-[8px] z-40 cursor-ew-resize opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute top-0 right-0 h-full w-[8px] z-40 cursor-ew-resize opacity-0 group-hover:opacity-100"
 																onPointerDown={beginClipResizeR(c.id)}
 																title="Resize MIDI clip"
 																style={{ background: "linear-gradient(to left, rgba(255,255,255,0.18), rgba(255,255,255,0))" }}
 															/>
 															<button
 																type="button"
-																className="absolute bottom-1 right-2 z-[60] h-5 px-1.5 rounded bg-violet-950/85 border border-violet-200/40 text-violet-50 text-[10px] opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute bottom-1 right-2 z-[60] h-5 px-1.5 rounded bg-violet-950/85 border border-violet-200/40 text-violet-50 text-[10px] opacity-0 group-hover:opacity-100"
 																onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
 																onClick={(e) => { e.stopPropagation(); setMidiEditorClipId(c.id); }}
 																title="Open MIDI editor"
@@ -5980,7 +5992,7 @@ export default function DAW(_props: TabRendererProps) {
 										})}
 										{t.type === "audio" && (
 											<div
-												className="absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize z-20"
+											className="daw-lane-resize absolute left-0 right-0 bottom-0 h-[8px] cursor-ns-resize z-20"
 												onPointerDown={beginLaneResize(t.id)}
 												onPointerMove={onLaneResizeMove}
 												onPointerUp={endLaneResize}

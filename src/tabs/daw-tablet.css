@@ -1,0 +1,154 @@
+.daw-touch-mode {
+  display: none;
+}
+
+@media (any-pointer: coarse) {
+  .daw-touch-mode {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid rgb(255 255 255 / 20%);
+    border-radius: 8px;
+    background: rgb(255 255 255 / 8%);
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .daw-touch-mode[aria-pressed="true"] {
+    border-color: rgb(103 232 249 / 65%);
+    background: rgb(8 145 178 / 35%);
+  }
+}
+
+@media (pointer: coarse) {
+  .mixer-workspace > div:first-child {
+    min-height: 44px;
+    overflow-x: auto;
+  }
+
+  .daw-menu-bar {
+    min-height: 44px;
+  }
+
+  .daw-menu-bar > div:last-child {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .mixer-workspace > div:first-child > div:last-child {
+    flex: none;
+  }
+
+  .daw-menu-bar button {
+    min-height: 40px;
+  }
+
+  .daw-timeline-scroll,
+  .mixer-scroll {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .daw-timeline-toolbar {
+    min-height: 48px;
+  }
+
+  .daw-timeline-toolbar button,
+  .daw-timeline-toolbar select,
+  .mixer-workspace > div:first-child button {
+    min-height: 40px;
+  }
+
+  .daw-clip-handle,
+  .daw-lane-resize {
+    pointer-events: none;
+  }
+
+  .daw-touch-edit .daw-clip-handle,
+  .daw-touch-edit .daw-lane-resize {
+    pointer-events: auto;
+    opacity: 1;
+    touch-action: none;
+  }
+
+  .daw-touch-edit .daw-clip-handle {
+    min-width: 24px;
+    min-height: 24px;
+  }
+
+  .daw-touch-edit .daw-clip-handle[title^="Trim"],
+  .daw-touch-edit .daw-clip-handle[title^="Resize MIDI"] {
+    width: 20px;
+  }
+
+  .daw-touch-edit .daw-lane-resize {
+    height: 18px;
+  }
+
+  .mixer-scroll {
+    scroll-snap-type: x proximity;
+  }
+
+  .mixer-channel,
+  .mixer-master {
+    scroll-snap-align: start;
+  }
+
+  .mixer-knob {
+    width: 40px;
+    height: 40px;
+  }
+
+  .mixer-toggle,
+  .mixer-channel button,
+  .mixer-master button {
+    min-height: 36px;
+  }
+
+  .daw-device-inspector {
+    align-self: flex-end;
+    width: 100%;
+    height: min(70dvh, 700px);
+    border-top: 1px solid rgb(255 255 255 / 20%);
+    border-left: 0;
+    border-radius: 16px 16px 0 0;
+  }
+}
+
+@media (pointer: coarse) and (min-width: 600px) and (max-width: 1366px) {
+  .daw-track-panel-open {
+    width: clamp(240px, 31vw, 280px);
+  }
+
+  .daw-track-panel:not(.daw-track-panel-open) {
+    width: 52px;
+  }
+
+  .daw-track-header {
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .daw-track-header button,
+  .daw-track-header select,
+  .daw-panel-toggle {
+    min-height: 36px;
+  }
+
+  .daw-panel-toggle {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .mixer-channel {
+    width: 216px;
+  }
+
+  .mixer-master {
+    position: static;
+  }
+}

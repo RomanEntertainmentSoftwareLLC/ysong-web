@@ -85,7 +85,7 @@ export default function FxChainPanel({ trackName, instrument, effects, browserEf
   return (
     <div className="fixed inset-0 z-[250] flex justify-end" role="dialog" aria-modal="true" aria-label={`${trackName} effects chain`}>
       <button className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} aria-label="Close effects chain" />
-      <aside className="relative h-full w-[min(420px,94vw)] bg-neutral-950 border-l border-white/10 shadow-2xl flex flex-col">
+      <aside className="daw-device-inspector relative h-full w-[min(420px,94vw)] bg-neutral-950 border-l border-white/10 shadow-2xl flex flex-col">
         <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-[10px] uppercase tracking-[0.18em] opacity-50">Effects Chain</div>

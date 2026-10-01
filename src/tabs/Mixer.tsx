@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import "./daw-tablet.css";
 import { useTabManager } from "./core";
 import { YSButton } from "../components/YSButton";
 import {
@@ -40,7 +41,7 @@ function MiniKnob({ label, value, min, max, step, onChange, display }: {
         aria-valuenow={value}
         aria-valuetext={display ? display(value) : String(value)}
         title={`${label}: ${display ? display(value) : value}`}
-        className="relative mt-1 h-8 w-8 rounded-full border border-white/10 bg-[radial-gradient(circle_at_34%_28%,#555,#222_38%,#0c0c0c_72%)] shadow-[inset_0_1px_2px_rgba(255,255,255,.12),0_3px_8px_rgba(0,0,0,.45)] cursor-ns-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/80"
+        className="mixer-knob relative mt-1 h-8 w-8 rounded-full border border-white/10 bg-[radial-gradient(circle_at_34%_28%,#555,#222_38%,#0c0c0c_72%)] shadow-[inset_0_1px_2px_rgba(255,255,255,.12),0_3px_8px_rgba(0,0,0,.45)] cursor-ns-resize touch-none outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/80"
         onPointerDown={(e) => {
           e.preventDefault();
           drag.current = { y: e.clientY, value, pointerId: e.pointerId };
@@ -73,7 +74,7 @@ function MiniKnob({ label, value, min, max, step, onChange, display }: {
 
 function Toggle({ active, label, onClick, tone = "cyan" }: { active: boolean; label: string; onClick: () => void; tone?: "cyan" | "amber" | "rose" }) {
   const activeClass = tone === "amber" ? "bg-amber-300 text-black border-amber-100" : tone === "rose" ? "bg-rose-400 text-black border-rose-200" : "bg-cyan-300 text-black border-cyan-100";
-  return <button type="button" aria-pressed={active} onClick={onClick} className={`h-6 min-w-9 px-1.5 rounded border text-[8px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80 ${active ? activeClass : "border-white/10 bg-black/20 opacity-65 hover:opacity-100"}`}>{label}</button>;
+  return <button type="button" aria-pressed={active} onClick={onClick} className={`mixer-toggle h-6 min-w-9 px-1.5 rounded border text-[8px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80 ${active ? activeClass : "border-white/10 bg-black/20 opacity-65 hover:opacity-100"}`}>{label}</button>;
 }
 
 function Section({ title, accent, children }: { title: string; accent: string; children: ReactNode }) {
@@ -96,7 +97,7 @@ function ChannelStrip({ track, onOpenFx }: { track: DawSessionTrackSnapshot; onO
   const patchSend = (index: number, update: { level?: number; pre?: boolean }) => sendDawSessionCommand({ type: "set-send", trackId: track.id, index, ...update });
   const meterPct = clamp(track.meter, 0, 1) * 100;
   return (
-    <div className="w-[184px] shrink-0 border-r border-black/80 bg-[#171a1c] text-neutral-100 shadow-[inset_-1px_0_rgba(255,255,255,.03)]">
+    <div className="mixer-channel w-[184px] shrink-0 border-r border-black/80 bg-[#171a1c] text-neutral-100 shadow-[inset_-1px_0_rgba(255,255,255,.03)]">
       <div className="h-9 px-2 flex items-center gap-2 border-b border-black" style={{ background: trackAccent(track) }}>
         <div className="min-w-0 flex-1 text-black">
           <div className="truncate text-[11px] font-bold" title={track.name}>{track.name}</div>
@@ -199,7 +200,7 @@ function FxMasterPanel({ snapshot }: { snapshot: DawSessionSnapshot }) {
   const sends = ["Plate / Hall", "Ping Pong", "Chorus", "Parallel", "Send 5", "Send 6", "Send 7", "Send 8"];
   const meter = clamp(snapshot.masterMeter, 0, 1) * 100;
   return (
-    <div className="w-[246px] shrink-0 bg-[#15181a] border-l-2 border-amber-300/20 text-neutral-100 sticky right-0 z-20 shadow-[-18px_0_30px_rgba(0,0,0,.3)]">
+    <div className="mixer-master w-[246px] shrink-0 bg-[#15181a] border-l-2 border-amber-300/20 text-neutral-100 sticky right-0 z-20 shadow-[-18px_0_30px_rgba(0,0,0,.3)]">
       <div className="h-9 px-2 flex items-center justify-between bg-gradient-to-r from-neutral-700 to-neutral-900 border-b border-black"><div><div className="text-[10px] font-bold tracking-[0.16em] text-amber-100">YC-9000</div><div className="text-[8px] opacity-55">FX / MASTER SECTION</div></div><img src="/ysong-logo-darkmode.png" className="w-6 h-6 object-contain" alt="YSong" /></div>
       <Section title="MASTER COMPRESSOR" accent="#765e44">
         <div className="rounded border border-black bg-[#111] p-1.5">
@@ -241,12 +242,12 @@ export default function MixerPane() {
   }
 
   return (
-    <div className="h-full min-h-0 bg-[#0e1113] text-neutral-100 flex flex-col overflow-hidden">
+    <div className="mixer-workspace h-full min-h-0 bg-[#0e1113] text-neutral-100 flex flex-col overflow-hidden">
       <div className="h-10 shrink-0 px-3 flex items-center gap-3 border-b border-black bg-[linear-gradient(180deg,#272c2f,#15181a)] shadow-lg">
         <div className="min-w-0"><div className="text-[11px] font-bold tracking-[0.18em] text-amber-100">YSong YC-9000 DIGITAL MIXING CONSOLE</div><div className="text-[9px] opacity-45 truncate">{snapshot.projectName}</div></div>
         <div className="ml-auto flex items-center gap-2 text-[9px]"><span className={`h-2 w-2 rounded-full ${snapshot.bridgeAvailable === false ? "bg-amber-400" : "bg-emerald-400"}`} /><span className="opacity-60">{snapshot.bridgeAvailable === false ? "PREVIEW MODE · BRIDGE OFFLINE" : "STUDIO SESSION"}</span><span className="opacity-35">{snapshot.bpm} BPM · {snapshot.sigNum}/{snapshot.sigDen}</span><YSButton className="h-7 px-2 rounded-md text-[10px]" onClick={() => sendDawSessionCommand({ type: "transport-toggle" })}>{snapshot.playing ? "❚❚ Pause" : "▶ Play"}</YSButton><YSButton className="h-7 px-2 rounded-md text-[10px]" onClick={() => sendDawSessionCommand({ type: "transport-stop" })}>■ Stop</YSButton></div>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="mixer-scroll flex-1 min-h-0 overflow-auto">
         <div className="min-w-max flex items-start">
           {snapshot.tracks.map((track) => <ChannelStrip key={track.id} track={track} onOpenFx={() => openTrackFx(track.id)} />)}
           <FxMasterPanel snapshot={snapshot} />
