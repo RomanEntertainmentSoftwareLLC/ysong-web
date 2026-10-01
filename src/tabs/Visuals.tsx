@@ -50,6 +50,7 @@ import {
 } from "../lib/visualsScene";
 import { buildVisualCameraShots, resolveVisualProgramCamera, sampleVisualProgramCamera } from "../lib/visualsCamera";
 import { syncVisualSceneToFrames } from "../lib/visualsViewportSync";
+import { resolveVisualSelection } from "../lib/visualsSelection";
 import { createVisualSceneWriter } from "../lib/visualSceneWriter";
 import { applyVisualMaterialUpload, createVisualMaterialUploadTracker } from "../lib/visualMaterialUpload";
 import { visualAnimationCueDuration, visualAnimationSpans } from "../lib/visualsPerformance";
@@ -116,7 +117,10 @@ export default function VisualsPane() {
 	sceneRef.current=scene;
 	const initialSceneRef=useRef(scene);
 	const hydratedSceneRef=useRef<VisualSceneState|null>(null);
-	const [selectedId,setSelectedId]=useState("");
+	const [requestedSelectedId,setSelectedId]=useState("");
+	const selectedId=resolveVisualSelection(scene,requestedSelectedId);
+	const selectedIdRef=useRef(selectedId);
+	selectedIdRef.current=selectedId;
 	const [audio,setAudio]=useState<VisualAudioFrame>(ZERO_AUDIO);
 	const [audioConnected,setAudioConnected]=useState(false);
 	const [session,setSession]=useState<DawSessionSnapshot|null>(null);
@@ -173,7 +177,9 @@ export default function VisualsPane() {
 
 	const refreshLibrary=()=>void bridgeApi.getVisualLibrary<VisualSceneState>().then(r=>setPresets(r.presets||[])).catch(()=>{});
 	const syncViewportScene=useCallback((frame?:HTMLIFrameElement|null)=>{
-		syncVisualSceneToFrames(sceneRef.current,frame?[frame]:[viewportFrameRef.current,monitorFrameRef.current],window.location.origin);
+		const frames=frame?[frame]:[viewportFrameRef.current,monitorFrameRef.current];
+		syncVisualSceneToFrames(sceneRef.current,frames,window.location.origin);
+		for(const target of frames)if(target===viewportFrameRef.current)target?.contentWindow?.postMessage({type:"ysong-editor-selection",id:selectedIdRef.current},window.location.origin);
 	},[]);
 	useEffect(()=>{
 		let cancelled=false;
@@ -187,7 +193,8 @@ export default function VisualsPane() {
 				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
 			hydratedSceneRef.current=next;
 			setScene(next); sceneReadyRef.current=true; writeVisualSceneBackup(next,next.updatedAt);
-			setSelectedId(current=>next.layers.some(l=>l.id===current)||next.cameras.some(c=>c.id===current)||next.materials.some(m=>`material:${m.id}`===current)||current==="editor-camera"?current:next.layers[0]?.id||next.cameras[0]?.id||"");
+			// Rehydration is a scene replacement: an old ID must not silently select a new object.
+			setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");
 			if(!remoteValid || remote.version!==26 || next===backup) sceneWriterRef.current({...next,updatedAt:Date.now()});
 			if(!remoteValid && backup) setNotice("Recovered the last local Visuals scene because Bridge returned no valid scene. YSong did not replace it with demo content.");
 		}).catch(()=>{
@@ -214,6 +221,9 @@ export default function VisualsPane() {
 		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)sceneWriterRef.current(snapshot)},90);
 		return()=>clearTimeout(t);
 	},[scene,syncViewportScene]);
+	useEffect(()=>{
+		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-selection",id:selectedId},window.location.origin);
+	},[selectedId]);
 	useEffect(()=>()=>{
 		if(sceneReadyRef.current&&sceneDirtyRef.current){const snapshot={...sceneRef.current,updatedAt:Date.now()};writeVisualSceneBackup(snapshot,snapshot.updatedAt);sceneWriterRef.current(snapshot)}
 	},[]);
@@ -233,11 +243,16 @@ export default function VisualsPane() {
 			if(event.data.type==="ysong-viewport-ready"){
 				for(const frame of [viewportFrameRef.current,monitorFrameRef.current])if(frame&&event.source===frame.contentWindow){syncViewportScene(frame);return;}
 			}
-			if(event.data.type==="ysong-visual-select"&&typeof event.data.id==="string")setSelectedId(event.data.id);
+			if(event.data.type==="ysong-visual-select"&&event.source===viewportFrameRef.current?.contentWindow&&typeof event.data.id==="string"){
+				const id=resolveVisualSelection(sceneRef.current,event.data.id);
+				if(id)setSelectedId(id);
+			}
 			if(event.data.type==="ysong-editor-camera"&&event.data.position&&event.data.rotation)setEditorCamera(event.data as EditorCameraSnapshot & {type:string});
 			if(event.data.type==="ysong-editor-free-roam")setEditorFreeRoamActive(event.data.active===true);
-			if(event.data.type==="ysong-visual-contextmenu"&&typeof event.data.id==="string"){
-				const rect=viewportFrameRef.current?.getBoundingClientRect();const id=event.data.id;const kind=event.data.kind==="camera"?"camera":"layer";setSelectedId(id);setSceneContextMenu({x:(rect?.left||0)+(Number(event.data.clientX)||0),y:(rect?.top||0)+(Number(event.data.clientY)||0),kind,id});
+			if(event.data.type==="ysong-visual-contextmenu"&&event.source===viewportFrameRef.current?.contentWindow&&typeof event.data.id==="string"){
+				const rect=viewportFrameRef.current?.getBoundingClientRect();const id=resolveVisualSelection(sceneRef.current,event.data.id);
+				if(!id||(!sceneRef.current.layers.some(l=>l.id===id)&&!sceneRef.current.cameras.some(c=>c.id===id)))return;
+				const kind=sceneRef.current.cameras.some(c=>c.id===id)?"camera":"layer";setSelectedId(id);setSceneContextMenu({x:(rect?.left||0)+(Number(event.data.clientX)||0),y:(rect?.top||0)+(Number(event.data.clientY)||0),kind,id});
 			}
 			if(event.data.type==="ysong-model-files-drop"&&Array.isArray(event.data.files)){
 				const files=event.data.files.filter((file:unknown):file is File=>file instanceof Blob&&typeof (file as File).name==="string") as File[];
@@ -358,7 +373,7 @@ export default function VisualsPane() {
 		// Invalidate any delayed save from the previous project before replacing the runtime.
 		sceneSaveGenerationRef.current++;
 		sceneRef.current=next;
-		setScene(next);setSelectedId(next.cameras[0]?.id||"");setModelInfo(null);setLivePerformance(null);setPrimitivePlacement(null);setDirectorPlan(null);directorUndoRef.current=null;setPreviewProgramCamera(false);
+		setScene(next);setSelectedId(next.cameras[0]?.id||"");setSceneContextMenu(null);setModelInfo(null);setLivePerformance(null);setPrimitivePlacement(null);setDirectorPlan(null);directorUndoRef.current=null;setPreviewProgramCamera(false);
 		writeVisualSceneBackup(next,next.updatedAt);
 		// The embedded renderer owns its own Three.js runtime. Replace that state immediately
 		// instead of waiting for the debounced Bridge persistence round-trip.
@@ -367,7 +382,7 @@ export default function VisualsPane() {
 		sceneWriterRef.current(next);
 		setNotice(`Created blank ${mode.toUpperCase()} project “${name}”.`);
 	};
-	const removeSelected=()=>{if(selectedMaterial){if(selectedMaterial.id==="material-default")return;setScene(prev=>({...prev,materials:prev.materials.filter(m=>m.id!==selectedMaterial.id),primitives:prev.primitives.map(p=>p.materialId===selectedMaterial.id?{...p,materialId:"material-default"}:p),secondaryDynamics:prev.secondaryDynamics.map(item=>item.materialId===selectedMaterial.id?{...item,materialId:""}:item),object:prev.object.materialId===selectedMaterial.id?{...prev.object,materialId:""}:prev.object}));setSelectedId("");return}if(selectedCamera){removeCamera(selectedCamera.id);return}if(!selected)return;setScene(prev=>{const layers=prev.layers.filter(l=>l.id!==selected.id);const primitives=selected.type==="primitive"&&selected.entityId?prev.primitives.filter(p=>p.id!==selected.entityId):prev.primitives;const shapes2d=selected.type==="shape2d"&&selected.entityId?prev.shapes2d.filter(p=>p.id!==selected.entityId):prev.shapes2d;const secondaryDynamics=selected.type==="secondary"&&selected.entityId?prev.secondaryDynamics.filter(item=>item.id!==selected.entityId):prev.secondaryDynamics;const object=selected.type==="object"?{...prev.object,model:"asset" as const,modelUrl:"",modelFileName:"",assetFiles:[],animation:"",morphTargets:{}}:prev.object;if(selected.type==="object")queueMicrotask(()=>setModelInfo(null));queueMicrotask(()=>setSelectedId(layers[0]?.id||""));return{...prev,layers,primitives,shapes2d,secondaryDynamics,object}})};
+	const removeSelected=()=>{if(selectedMaterial){if(selectedMaterial.id==="material-default")return;setScene(prev=>({...prev,materials:prev.materials.filter(m=>m.id!==selectedMaterial.id),primitives:prev.primitives.map(p=>p.materialId===selectedMaterial.id?{...p,materialId:"material-default"}:p),secondaryDynamics:prev.secondaryDynamics.map(item=>item.materialId===selectedMaterial.id?{...item,materialId:""}:item),object:prev.object.materialId===selectedMaterial.id?{...prev.object,materialId:""}:prev.object}));setSelectedId(current=>current===selectedId?"":current);return}if(selectedCamera){removeCamera(selectedCamera.id);return}if(!selected)return;setScene(prev=>{const layers=prev.layers.filter(l=>l.id!==selected.id);const primitives=selected.type==="primitive"&&selected.entityId?prev.primitives.filter(p=>p.id!==selected.entityId):prev.primitives;const shapes2d=selected.type==="shape2d"&&selected.entityId?prev.shapes2d.filter(p=>p.id!==selected.entityId):prev.shapes2d;const secondaryDynamics=selected.type==="secondary"&&selected.entityId?prev.secondaryDynamics.filter(item=>item.id!==selected.entityId):prev.secondaryDynamics;const object=selected.type==="object"?{...prev.object,model:"asset" as const,modelUrl:"",modelFileName:"",assetFiles:[],animation:"",morphTargets:{}}:prev.object;if(selected.type==="object")queueMicrotask(()=>setModelInfo(null));queueMicrotask(()=>setSelectedId(current=>current===selected.id?layers[0]?.id||"":current));return{...prev,layers,primitives,shapes2d,secondaryDynamics,object}})};
 
 	const canClipboardSelected=()=>!!selectedCamera||!!selected&&["media","primitive","shape2d","secondary"].includes(selected.type);
 	const copySelectedObject=()=>{
@@ -398,7 +413,7 @@ export default function VisualsPane() {
 		const camera:VisualProgramCamera={...structuredClone(base),id,name:`Program Camera ${scene.cameras.length+1}`,keyframes:[],positionX:fromEditor?editorCamera.position.x:base.positionX,positionY:fromEditor?editorCamera.position.y:base.positionY,positionZ:fromEditor?editorCamera.position.z:base.positionZ,targetX:fromEditor?editorCamera.position.x+forward.x*5:base.targetX,targetY:fromEditor?editorCamera.position.y+forward.y*5:base.targetY,targetZ:fromEditor?editorCamera.position.z+forward.z*5:base.targetZ,rotationX:fromEditor?editorCamera.rotation.x:base.rotationX,rotationY:fromEditor?editorCamera.rotation.y:base.rotationY,rotationZ:fromEditor?editorCamera.rotation.z:base.rotationZ,fov:fromEditor?editorCamera.fov:base.fov};
 		setScene(prev=>({...prev,cameras:[...prev.cameras,camera]}));setSelectedId(id);
 	};
-	const removeCamera=(id:string)=>setScene(prev=>{if(prev.cameras.length<=1)return prev;const cameras=prev.cameras.filter(c=>c.id!==id);const activeCameraId=prev.activeCameraId===id?(cameras[0]?.id||""):prev.activeCameraId;const cameraCuts=prev.cameraCuts.filter(c=>c.cameraId!==id);queueMicrotask(()=>setSelectedId(activeCameraId));return{...prev,cameras,activeCameraId,cameraCuts}});
+	const removeCamera=(id:string)=>setScene(prev=>{if(prev.cameras.length<=1)return prev;const cameras=prev.cameras.filter(c=>c.id!==id);const activeCameraId=prev.activeCameraId===id?(cameras[0]?.id||""):prev.activeCameraId;const cameraCuts=prev.cameraCuts.filter(c=>c.cameraId!==id);queueMicrotask(()=>setSelectedId(current=>current===id?activeCameraId:current));return{...prev,cameras,activeCameraId,cameraCuts}});
 	const patchCamera=(id:string,patch:Partial<VisualProgramCamera>)=>setScene(prev=>({...prev,cameras:prev.cameras.map(camera=>camera.id===id?{...camera,...patch}:camera)}));
 	const cutToCamera=(id:string,time=positionSeconds)=>setScene(prev=>{const cut:VisualCameraCut={id:`cut-${crypto.randomUUID()}`,time:Math.max(0,time),cameraId:id};return{...prev,activeCameraId:prev.activeCameraId||id,cameraCuts:[...prev.cameraCuts.filter(existing=>Math.abs(existing.time-cut.time)>.02),cut].sort((a,b)=>a.time-b.time)}});
 
@@ -463,7 +478,7 @@ export default function VisualsPane() {
 		const next={...normalizeVisualScene(preset.scene),updatedAt:Date.now()};
 		sceneSaveGenerationRef.current++;
 		sceneRef.current=next;
-		setScene(next);setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");
+		setScene(next);setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");setSceneContextMenu(null);
 		setModelInfo(null);setLivePerformance(null);setPrimitivePlacement(null);setDirectorPlan(null);directorUndoRef.current=null;setPreviewProgramCamera(false);
 		writeVisualSceneBackup(next,next.updatedAt);
 		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-scene-replace",scene:next},window.location.origin);
@@ -615,7 +630,7 @@ export default function VisualsPane() {
 
 type TimelineTool = "select" | "pencil" | "razor" | "erase" | "hand";
 
-function VisualTimeline({scene,setScene,selectedId,setSelectedId,position,duration,playing,source,title,seek,toggle,stop,previous,next,session}:{scene:VisualSceneState;setScene:React.Dispatch<React.SetStateAction<VisualSceneState>>;selectedId:string;setSelectedId:(id:string)=>void;position:number;duration:number;playing:boolean;source:string;title:string;seek:(s:number)=>void;toggle:()=>void;stop:()=>void;previous?:()=>void;next?:()=>void;session:DawSessionSnapshot|null}){
+function VisualTimeline({scene,setScene,selectedId,setSelectedId,position,duration,playing,source,title,seek,toggle,stop,previous,next,session}:{scene:VisualSceneState;setScene:React.Dispatch<React.SetStateAction<VisualSceneState>>;selectedId:string;setSelectedId:React.Dispatch<React.SetStateAction<string>>;position:number;duration:number;playing:boolean;source:string;title:string;seek:(s:number)=>void;toggle:()=>void;stop:()=>void;previous?:()=>void;next?:()=>void;session:DawSessionSnapshot|null}){
 	const scrollRef=useRef<HTMLDivElement|null>(null);
 	const labelScrollRef=useRef<HTMLDivElement|null>(null);
 	const scrubbingRef=useRef(false);
@@ -798,7 +813,7 @@ function VisualTimeline({scene,setScene,selectedId,setSelectedId,position,durati
 		if(!layer||layer.locked)return prev;
 		const primitives=layer.type==="primitive"&&layer.entityId?prev.primitives.filter(item=>item.id!==layer.entityId):prev.primitives;
 		const shapes2d=layer.type==="shape2d"&&layer.entityId?prev.shapes2d.filter(item=>item.id!==layer.entityId):prev.shapes2d;
-		queueMicrotask(()=>{if(selectedId===id)setSelectedId("")});
+		queueMicrotask(()=>setSelectedId(current=>current===id?"":current));
 		return{...prev,layers:prev.layers.filter(item=>item.id!==id),primitives,shapes2d};
 	});
 	const splitLayerAt=(id:string,time:number)=>{

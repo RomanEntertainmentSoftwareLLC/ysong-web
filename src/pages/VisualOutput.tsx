@@ -1751,6 +1751,7 @@ export default function VisualOutput() {
 		let editorFast = false;
 		let editorPanning = false;
 		let hoveredSelectableId = "";
+		let selectedSelectableId = "";
 		let suppressEditorClick = false;
 		let modelPlacementActive = false;
 		const modelPlacementPreview = new THREE.Vector3();
@@ -2604,6 +2605,8 @@ export default function VisualOutput() {
 			if (event.origin !== window.location.origin || !event.data || typeof event.data !== "object") return;
 			if (event.data.type === "ysong-scene-sync" && event.data.scene && typeof event.data.scene === "object") {
 				const replacement = normalizeVisualScene(event.data.scene as VisualSceneState);
+				if (!replacement.layers.some(layer => layer.id === selectedSelectableId) && !replacement.cameras.some(programCamera => programCamera.id === selectedSelectableId)) selectedSelectableId = "";
+				if (!replacement.layers.some(layer => layer.id === hoveredSelectableId) && !replacement.cameras.some(programCamera => programCamera.id === hoveredSelectableId)) hoveredSelectableId = "";
 				sceneRef.current = replacement;
 				sceneHydratedRef.current = true;
 				setSceneHydrated(true);
@@ -2612,6 +2615,8 @@ export default function VisualOutput() {
 			}
 			if (event.data.type === "ysong-scene-replace" && event.data.scene && typeof event.data.scene === "object") {
 				const replacement = normalizeVisualScene(event.data.scene as VisualSceneState);
+				selectedSelectableId = "";
+				hoveredSelectableId = "";
 				sceneRef.current = replacement;
 				sceneHydratedRef.current = true;
 				setSceneHydrated(true);
@@ -2622,6 +2627,11 @@ export default function VisualOutput() {
 				clearPlacement(false);
 				hoveredSelectableId = "";
 				canvas.style.cursor = "crosshair";
+				return;
+			}
+			if (event.data.type === "ysong-editor-selection" && typeof event.data.id === "string") {
+				const id = event.data.id;
+				selectedSelectableId = sceneRef.current.layers.some(layer => layer.id === id) || sceneRef.current.cameras.some(programCamera => programCamera.id === id) ? id : "";
 				return;
 			}
 			if (event.data.type === "ysong-editor-view-program-camera") {
@@ -2641,7 +2651,7 @@ export default function VisualOutput() {
 				return;
 			}
 			if (event.data.type === "ysong-editor-focus-selection") {
-				const id = String(event.data.id || "");
+				const id = selectedSelectableId;
 				const cameraHelper = cameraHelpers.get(id);
 				const root = selectableRoots.get(id) || cameraHelper?.root;
 				if (root) {
