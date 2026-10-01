@@ -1,0 +1,35 @@
+.visuals-compact-nav,
+.visuals-touch-camera { display: none; }
+
+@media (max-width: 1279px) {
+  .visuals-header { padding-inline: 12px; gap: 8px; }
+  .visuals-header > div:last-child { min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+  .visuals-header > div:last-child > * { flex-shrink: 0; }
+  .visuals-compact-nav { display: flex; flex-shrink: 0; gap: 6px; overflow-x: auto; padding: 6px 10px; border-bottom: 1px solid rgb(255 255 255 / .1); background: #0e1118; }
+  .visuals-compact-nav button { flex: 0 0 auto; min-height: 40px; padding: 0 12px; border: 1px solid rgb(255 255 255 / .12); border-radius: 6px; font-size: 12px; color: #d4d4d4; background: rgb(255 255 255 / .04); }
+  .visuals-compact-nav button[aria-expanded="true"], .visuals-compact-nav button[aria-pressed="true"] { border-color: rgb(167 139 250 / .5); background: rgb(139 92 246 / .18); color: white; }
+  .visuals-editor .visuals-layout { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .visuals-editor .visuals-layout[data-timeline-open="true"] { grid-template-rows: minmax(0, 1fr) minmax(180px, 35%); }
+  .visuals-layout .visuals-viewport { grid-column: 1; grid-row: 1; min-width: 0; }
+  .visuals-hierarchy, .visuals-inspector { position: absolute; z-index: 60; top: 0; bottom: 0; width: min(330px, 88%); box-shadow: 0 8px 30px #000a; visibility: hidden; pointer-events: none; }
+  .visuals-hierarchy { left: 0; }
+  .visuals-inspector { right: 0; }
+  .visuals-layout[data-panel="hierarchy"] .visuals-hierarchy, .visuals-layout[data-panel="inspector"] .visuals-inspector { visibility: visible; pointer-events: auto; }
+  .visuals-layout .visuals-timeline { grid-column: 1; grid-row: 2; display: none; min-width: 0; overflow: hidden; }
+  .visuals-layout[data-timeline-open="true"] .visuals-timeline { display: block; }
+  .visuals-touch-camera { position: absolute; z-index: 40; left: 12px; bottom: 12px; display: grid; grid-template-columns: repeat(3, 40px); gap: 4px; }
+  .visuals-touch-camera button { min-width: 40px; min-height: 40px; border: 1px solid rgb(255 255 255 / .25); border-radius: 6px; background: #10151de8; color: #e5e5e5; font-size: 14px; touch-action: manipulation; }
+  .visuals-touch-camera button:nth-child(5), .visuals-touch-camera button:nth-child(6) { font-size: 10px; }
+  .visuals-viewport .select-none button { min-height: 32px; }
+}
+
+@media (max-width: 639px) {
+  .visuals-header { height: 48px; }
+  .visuals-header > div:first-child { max-width: 120px; }
+  .visuals-header > div:first-child > div:first-child, .visuals-header > div:last-child > span { display: none; }
+  .visuals-viewport { padding: 4px; }
+  .visuals-viewport > div:first-child { display: none; }
+  .visuals-viewport .select-none svg { width: 72px; height: 72px; }
+  .visuals-viewport .select-none button { min-height: 36px; }
+  .visuals-editor .visuals-layout[data-timeline-open="true"] { grid-template-rows: minmax(0, 1fr) minmax(180px, 45%); }
+}

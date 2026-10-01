@@ -1852,6 +1852,13 @@ export default function VisualOutput() {
 			updateEditorAxes();
 			camera.lookAt(camera.position.clone().add(editorForward));
 		};
+		const moveEditorCamera = (right: number, forward: number, up: number) => {
+			if (!editorFreeRoam) return;
+			updateEditorAxes();
+			camera.position.addScaledVector(editorRight, THREE.MathUtils.clamp(right, -1, 1) * 0.5);
+			camera.position.addScaledVector(editorForward, THREE.MathUtils.clamp(forward, -1, 1) * 0.5);
+			camera.position.y += THREE.MathUtils.clamp(up, -1, 1) * 0.5;
+		};
 		const onEditorKeyDown = (event: KeyboardEvent) => {
 			if (!editorFreeRoam) return;
 			if (event.code === "Home") {
@@ -2626,6 +2633,10 @@ export default function VisualOutput() {
 			}
 			if (event.data.type === "ysong-editor-view-orbit") {
 				orbitEditorOrientation(Number(event.data.dx) || 0, Number(event.data.dy) || 0);
+				return;
+			}
+			if (event.data.type === "ysong-editor-view-move") {
+				moveEditorCamera(Number(event.data.right) || 0, Number(event.data.forward) || 0, Number(event.data.up) || 0);
 				return;
 			}
 			if (event.data.type === "ysong-editor-focus-selection") {
