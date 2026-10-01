@@ -12,6 +12,7 @@ import { upsertGeneration } from "../lib/generationLibrary";
 import { listSingerCharacters, saveSingerCharacter, singerIdentity, type SingerCharacter } from "../lib/singerLibrary";
 
 const STORAGE_KEY = "ysong:create-song:draft:v3";
+const RECOVERY_KEY = "ysong:create-song:recovery:v1";
 type Draft = { title: string; lyrics: string; style: string; instrumental: boolean; bpm: string; key: string; duration: string; bandId: string; singerIds: string[] };
 const emptyDraft: Draft = { title: "", lyrics: "", style: "", instrumental: false, bpm: "", key: "", duration: "", bandId: "", singerIds: [] };
 
@@ -266,6 +267,12 @@ export default function CreateSongPane(_props: TabRendererProps) {
   const [plugins, setPlugins] = useState<BridgePlugin[]>([]);
   const [engine, setEngine] = useState<MusicEngineStatus | null>(null);
   const [plan, setPlan] = useState<PlanDraft | null>(null);
+  const [recovery, setRecovery] = useState<{ plan: PlanDraft; manifest: GeneratedSessionManifest } | null>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(RECOVERY_KEY) || "null");
+      return saved?.plan?.tracks && saved?.manifest?.tracks && saved?.manifest?.result?.parts ? saved : null;
+    } catch { return null; }
+  });
   const [planApproved, setPlanApproved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -273,6 +280,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
   const [error, setError] = useState("");
 
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draft)); } catch {} }, [draft]);
+  useEffect(() => { try { if (recovery) localStorage.setItem(RECOVERY_KEY, JSON.stringify(recovery)); else localStorage.removeItem(RECOVERY_KEY); } catch {} }, [recovery]);
   useEffect(() => {
     const load = () => void listBandProfiles().then(setBands).catch(() => {});
     load();
@@ -351,12 +359,17 @@ export default function CreateSongPane(_props: TabRendererProps) {
     if (generating) return;
     setGenerating(true); setError("");
     try {
-      if (!plan || !planApproved) {
+      const retrying = !!recovery;
+      const activePlan = recovery?.plan ?? plan;
+      if (!activePlan || (!retrying && !planApproved)) {
         setError("Review and approve the session blueprint before generation. YSong will not create a pile of tracks from an unapproved plan.");
         return;
       }
-      const activePlan = plan;
-      const audioTracks = activePlan.tracks.filter((t) => t.mode === "audio");
+      const priorManifest = recovery?.manifest;
+      const priorById = new Map((priorManifest?.tracks ?? []).map((track) => [track.id, track]));
+      const priorResult = priorManifest?.result;
+      const pendingIds = new Set(priorResult?.parts.filter((part) => part.status === "failed").map((part) => part.id) ?? activePlan.tracks.map((track) => track.id));
+      const audioTracks = activePlan.tracks.filter((t) => t.mode === "audio" && pendingIds.has(t.id));
       let generationEngine: MusicEngineStatus | undefined;
       if (audioTracks.length) {
         const status = await getMusicEngineStatus();
@@ -365,11 +378,12 @@ export default function CreateSongPane(_props: TabRendererProps) {
         if (!status.reachable) throw new Error(status.message || `MiniMax Music 3 is not reachable through ${status.provider === "audio_cpp" ? "the local audio.cpp runtime" : (status.baseUrl || "the configured endpoint")}.`);
       }
 
-      const completed: GeneratedSessionTrack[] = [];
-      const failures = new Map<string, { code: "generation_failed" | "upload_failed"; message: string }>();
-      const sharedSeed = Math.floor(Math.random() * 2_000_000_000);
+      const completed: GeneratedSessionTrack[] = activePlan.tracks.filter((track) => !pendingIds.has(track.id)).map((track) => priorById.get(track.id) ?? track);
+      const failures = new Map<string, { code: "generation_failed" | "upload_failed"; message: string }>(priorResult?.parts.flatMap((part) => part.status === "failed" && !pendingIds.has(part.id) ? [[part.id, part.failure!] as const] : []) ?? []);
+      const sharedSeed = priorResult?.source.seed ?? Math.floor(Math.random() * 2_000_000_000);
       for (let i = 0; i < activePlan.tracks.length; i++) {
         const track = activePlan.tracks[i];
+        if (!pendingIds.has(track.id)) continue;
         if (track.mode === "midi") {
           setProgress(`Building editable MIDI/VST track ${i + 1}/${activePlan.tracks.length}: ${track.name}`);
           completed.push(track);
@@ -402,11 +416,12 @@ export default function CreateSongPane(_props: TabRendererProps) {
         }
       }
 
-      const manifest: GeneratedSessionManifest = { v: 1, sessionId: crypto.randomUUID(), createdAt: Date.now(), ...activePlan, tracks: completed };
+      const manifest: GeneratedSessionManifest = { v: 1, sessionId: priorManifest?.sessionId ?? crypto.randomUUID(), createdAt: priorManifest?.createdAt ?? Date.now(), ...activePlan, tracks: [...completed, ...activePlan.tracks.filter((track) => pendingIds.has(track.id)).map((track) => completed.find((item) => item.id === track.id) ?? track)] };
       const result = resultFromGeneratedSession(manifest,
         { origin: "create-song", prompt: activePlan.structuredCaption || "", seed: sharedSeed },
         { provider: generationEngine?.provider || "ysong-midi", name: generationEngine?.model || "structured-midi" }, failures);
       manifest.result = result;
+      setRecovery(result.status === "complete" ? null : { plan: activePlan, manifest });
       if (result.status === "failed") {
         upsertGeneration({ id: result.id, status: "failed", title: manifest.projectName, createdAt: result.createdAt,
           source: { prompt: result.source.prompt, origin: "create-song" }, artifacts: [], songResult: result,
@@ -414,7 +429,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
         throw new Error("All generated parts failed. No project was created.");
       }
       stageGeneratedSession(manifest);
-      setProgress(result.status === "partial" ? "Partial session saved. Opening the available tracks in YSong…" : "Session generated. Opening the editable YSong project…");
+      setProgress(result.status === "partial" ? "Partial session saved. Ready parts are kept; retry the missing parts below." : "Session generated. Opening the editable YSong project…");
       const existingDaw = tabs.find((t) => t.type === "daw");
       const dawId = existingDaw?.id ?? openTab({ type: "daw", title: "DAW", pinned: true });
       activateTab(dawId);
@@ -456,7 +471,8 @@ export default function CreateSongPane(_props: TabRendererProps) {
         <Field label="Style"><textarea value={draft.style} onChange={(e) => patch({ style: e.target.value })} placeholder="Genre, instruments, mood, vocal style, production direction…" className="input min-h-[120px] resize-y" /></Field>
         <div className="grid grid-cols-3 gap-2"><Field label="BPM"><input value={draft.bpm} onChange={(e) => patch({ bpm: e.target.value })} placeholder="Auto" className="input" /></Field><Field label="Key / mode"><input value={draft.key} onChange={(e) => patch({ key: e.target.value })} placeholder="E Phrygian" className="input" /></Field><Field label="Length"><input value={draft.duration} onChange={(e) => patch({ duration: e.target.value })} placeholder="Auto" className="input" /></Field></div>
         <div className="text-[11px] text-neutral-500">Installed VST3 instruments visible to the producer: {usableVsts.length}. If none fits a part, YSong asks MiniMax for a separate audio track instead of silently substituting General MIDI.</div>
-        <div className="flex flex-wrap gap-2"><button onClick={() => void planSession()} disabled={busy || generating || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-indigo-500/25 border border-indigo-400/30 disabled:opacity-35">{busy ? "Planning…" : "Plan editable session"}</button>{plan && !planApproved && <button onClick={() => { setPlanApproved(true); setProgress("Session blueprint approved. Generation is now unlocked, but nothing has been created yet."); }} disabled={busy || generating} className="rounded-xl px-4 py-2 bg-emerald-500/15 border border-emerald-400/30 disabled:opacity-35">Approve blueprint</button>}<button onClick={() => void generateSession()} disabled={busy || generating || !plan || !planApproved || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-35">{generating ? "Generating…" : "Generate Session"}</button></div>
+        <div className="flex flex-wrap gap-2"><button onClick={() => void planSession()} disabled={busy || generating || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-indigo-500/25 border border-indigo-400/30 disabled:opacity-35">{busy ? "Planning…" : "Plan editable session"}</button>{plan && !planApproved && <button onClick={() => { setPlanApproved(true); setProgress("Session blueprint approved. Generation is now unlocked, but nothing has been created yet."); }} disabled={busy || generating} className="rounded-xl px-4 py-2 bg-emerald-500/15 border border-emerald-400/30 disabled:opacity-35">Approve blueprint</button>}{recovery && <button type="button" onClick={() => void generateSession()} disabled={busy || generating} className="rounded-xl px-4 py-2 bg-amber-500/15 border border-amber-400/30 text-amber-100 disabled:opacity-35">{generating ? "Retrying missing parts…" : `Retry ${recovery.manifest.result?.parts.filter((part) => part.status === "failed").length ?? 0} missing part(s)`}</button>}<button onClick={() => void generateSession()} disabled={busy || generating || !plan || !planApproved || (!draft.style.trim() && !draft.lyrics.trim())} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-35">{generating ? "Generating…" : "Generate Session"}</button></div>
+        {recovery?.manifest.result && <div role="status" className="rounded-xl border border-amber-400/20 bg-amber-400/[.05] p-3 text-xs"><div className="font-medium text-amber-100">Partial result · {recovery.manifest.result.parts.filter((part) => part.status === "ready").length} parts ready</div><div className="mt-2 space-y-1">{recovery.manifest.result.parts.map((part) => <div key={part.id} className={part.status === "ready" ? "text-emerald-200" : "text-amber-200"}>{part.status === "ready" ? "Ready" : "Needs retry"} · {part.name}{part.failure ? `: ${part.failure.message}` : ""}</div>)}</div><p className="mt-2 text-neutral-400">Retry runs only missing parts. Ready audio and editable MIDI are preserved.</p></div>}
         {(progress || error) && <div className={`rounded-xl border px-3 py-2 text-xs ${error ? "border-red-400/25 bg-red-400/[.06] text-red-200" : "border-white/10 bg-white/[.03] text-neutral-300"}`}>{error || progress}</div>}
       </section>
       <section className="rounded-2xl border border-white/10 bg-white/[0.035] min-h-[560px] p-5">
