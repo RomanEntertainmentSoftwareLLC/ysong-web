@@ -1,0 +1,147 @@
+.ys-rooms {
+  position: relative;
+  overflow: hidden;
+}
+
+.ys-rooms-main > .flex-1 {
+  min-height: 0;
+}
+
+.ys-rooms-main .whitespace-pre-wrap {
+  overflow-wrap: anywhere;
+}
+
+.ys-rooms-people-button,
+.ys-rooms-people-heading,
+.ys-rooms-people-backdrop {
+  display: none;
+}
+
+@media (max-width: 1279px) {
+  .ys-rooms-list {
+    width: 200px;
+  }
+
+  .ys-rooms-venue {
+    max-height: 30dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ys-rooms-video {
+    max-height: 34dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ys-rooms-video-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+    max-height: none;
+    overflow: visible;
+  }
+
+  .ys-rooms-people-button {
+    display: grid;
+  }
+
+  .ys-rooms-people-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    width: 100%;
+    background: rgb(0 0 0 / 0.45);
+  }
+
+  .ys-rooms-people {
+    display: none;
+    position: absolute;
+    z-index: 21;
+    inset-block: 0;
+    right: 0;
+    width: min(320px, 90vw);
+    background: var(--ys-surface);
+    box-shadow: -12px 0 30px rgb(0 0 0 / 0.2);
+  }
+
+  .ys-rooms-people-open {
+    display: block;
+  }
+
+  .ys-rooms-people-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border-bottom: 1px solid var(--ys-border);
+  }
+
+  .ys-rooms-people-heading button {
+    width: 2rem;
+    height: 2rem;
+    font-size: 1.25rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .ys-rooms-list {
+    width: 100%;
+    border-right: 0;
+  }
+
+  .ys-rooms-active .ys-rooms-list,
+  .ys-rooms:not(.ys-rooms-active) .ys-rooms-main {
+    display: none;
+  }
+
+  .ys-rooms-header {
+    padding-inline: 0.5rem;
+  }
+
+  .ys-rooms-add-persona {
+    padding-inline: 0.5rem;
+  }
+
+  .ys-rooms-add-persona span {
+    display: none;
+  }
+
+  .ys-rooms-venue {
+    max-height: 25dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ys-rooms-video {
+    max-height: 38dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.5rem;
+  }
+
+  .ys-rooms-video-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    max-height: none;
+    overflow: visible;
+  }
+
+  .ys-rooms-video-controls select {
+    max-width: min(8rem, 32vw);
+  }
+
+  .ys-rooms-main > .shrink-0:last-child > div {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 767px) and (orientation: landscape) {
+  .ys-rooms-venue {
+    max-height: 28dvh;
+  }
+
+  .ys-rooms-video {
+    max-height: 34dvh;
+  }
+}

@@ -113,16 +113,16 @@ export default function RoomVideoStage({ roomId, members, meUserId, meDisplayNam
     disconnected: "Room video disconnected.",
   };
 
-  return <section aria-label="Room video" data-room-id={roomId} className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 py-3">
+  return <section aria-label="Room video" data-room-id={roomId} className="ys-rooms-video shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 py-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div><h3 className="text-sm font-semibold">Room video</h3><p className="text-xs opacity-60" role="status">{connectionText[connection]}</p></div>
       <span className="text-[10px] opacity-60">Local preview stays on this device</span>
     </div>
-    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-52 overflow-y-auto">
+    <div className="ys-rooms-video-grid mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-52 overflow-y-auto">
       <VideoTile stream={stream} label={`${meDisplayName || "You"} (preview)`} local />
       {remote.map((member) => <VideoTile key={member.userId} stream={participants.find((participant) => participant.userId === member.userId)?.stream ?? null} label={member.name} />)}
     </div>
-    <div className="mt-3 flex flex-wrap items-center gap-2">
+    <div className="ys-rooms-video-controls mt-3 flex flex-wrap items-center gap-2">
       {!previewRequested ? <button type="button" onClick={() => setPreviewRequested(true)} className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs text-white">Start preview</button> : <>
         <button type="button" onClick={() => { setPreviewRequested(false); setStream(null); setCapture("idle"); setError(""); }} className="rounded-lg border px-3 py-1.5 text-xs">Stop preview</button>
         <button type="button" aria-pressed={cameraOn} onClick={() => setCameraOn((value) => !value)} className="rounded-lg border px-3 py-1.5 text-xs">Camera {cameraOn ? "on" : "off"}</button>

@@ -4,6 +4,7 @@ import Avatar from "../components/Avatar";
 import RoomVenuePanel from "../components/RoomVenuePanel";
 import RoomVideoStage from "../components/RoomVideoStage";
 import RoomPrerollOverlay from "../components/RoomPrerollOverlay";
+import "./RoomsResponsive.css";
 import { bridgeApi, normalizeVisualAdvertisingSettings } from "../lib/bridgeApi";
 import { requestYSongRoomPrerollAd, type YSongVideoPrerollDecision } from "../lib/ysongAds";
 import { listRoomVirtualParticipants, removeRoomPersonaSlot, type RoomVirtualParticipant } from "../lib/roomPersonaParticipants";
@@ -68,6 +69,11 @@ function mentionedPersonaIds(text: string, personas: RoomPersona[]) {
   }).map((p) => p.id);
 }
 
+function roomError(error: unknown, fallback: string) {
+  return error && typeof error === "object" && "message" in error && typeof error.message === "string" && error.message
+    ? error.message : fallback;
+}
+
 function RoomCreateModal({ onClose, onCreated }: { onClose:()=>void; onCreated:(r:RoomSummary)=>void }) {
   const [name,setName]=useState("");
   const [description,setDescription]=useState("");
@@ -79,7 +85,7 @@ function RoomCreateModal({ onClose, onCreated }: { onClose:()=>void; onCreated:(
     if(!name.trim()){setError("Room name required.");return;}
     setSaving(true);setError("");
     try{const r=await createRoom({name:name.trim(),description:description.trim(),visibility});onCreated(r.room);}
-    catch(e:any){setError(e?.message||"Could not create room.");}
+    catch(e:unknown){setError(roomError(e,"Could not create room."));}
     finally{setSaving(false);}
   }
 
@@ -103,6 +109,7 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
   const [error,setError]=useState("");
   const [inviteName,setInviteName]=useState("");
   const [inviteBusy,setInviteBusy]=useState(false);
+  const [peopleOpen,setPeopleOpen]=useState(false);
   const [mention,setMention]=useState<{start:number;end:number;query:string}|null>(null);
   const [mentionIndex,setMentionIndex]=useState(0);
   const bottomRef=useRef<HTMLDivElement|null>(null);
@@ -119,14 +126,14 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
         if(valid&&valid.id!==activeRoomId)setActiveRoomId(valid.id);
         if(!valid&&wanted===activeRoomId)setActiveRoomId("");
       }
-    }catch(e:any){setError(e?.message||"Could not load rooms.");}
+    }catch(e:unknown){setError(roomError(e,"Could not load rooms."));}
   }
 
   async function refreshDetail(roomId=activeRoomId){
     if(!roomId){setDetail(null);setVirtualParticipants([]);return;}
     setVirtualParticipants(listRoomVirtualParticipants(roomId));
     try{const d=await getRoom(roomId);setDetail(d);setRooms(prev=>prev.map(r=>r.id===d.room.id?d.room:r));}
-    catch(e:any){setError(e?.message||"Could not load room.");}
+    catch(e:unknown){setError(roomError(e,"Could not load room."));}
   }
 
   useEffect(()=>{
@@ -180,7 +187,7 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
   }
 
   function openPersonaDrawer(){window.dispatchEvent(new CustomEvent("ysong:open-drawer",{detail:{id:"personas"}}));}
-  function showRoomList(){setActiveRoomId("");setDetail(null);setInput("");setMention(null);}
+  function showRoomList(){setPeopleOpen(false);setActiveRoomId("");setDetail(null);setInput("");setMention(null);}
 
   function updateMention(value:string,cursor:number){
     const before=value.slice(0,cursor);
@@ -216,27 +223,27 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
           await new Promise(r=>setTimeout(r,Math.min(1500,450+Math.random()*700)));
           setDetail(d=>d?{...d,messages:mergeMessages(d.messages,[m])}:d);
         }
-      }).catch((e:any)=>setError(e?.message||"Room AI reply failed.")).finally(()=>setAiThinking(false));
-    }catch(e:any){setError(e?.message||"Could not send message.");}
+      }).catch((e:unknown)=>setError(roomError(e,"Room AI reply failed."))).finally(()=>setAiThinking(false));
+    }catch(e:unknown){setError(roomError(e,"Could not send message."));}
   }
 
   async function doJoin(){if(!detail)return;await joinRoom(detail.room.id);await refreshRooms(detail.room.id);await refreshDetail(detail.room.id);}
-  async function doInvite(){if(!detail||!inviteName.trim())return;setInviteBusy(true);try{await inviteRoomMember(detail.room.id,inviteName.trim());setInviteName("");await refreshDetail();}catch(e:any){setError(e?.message||"Could not add member.");}finally{setInviteBusy(false);}}
+  async function doInvite(){if(!detail||!inviteName.trim())return;setInviteBusy(true);try{await inviteRoomMember(detail.room.id,inviteName.trim());setInviteName("");await refreshDetail();}catch(e:unknown){setError(roomError(e,"Could not add member."));}finally{setInviteBusy(false);}}
   async function changeMode(p:RoomPersona,mode:RoomPersona["participationMode"]){if(!detail)return;await setRoomPersonaMode(detail.room.id,p.id,mode);await refreshDetail();}
   async function removePersona(p:RoomPersona){if(!detail)return;await removeRoomPersona(detail.room.id,p.id);window.dispatchEvent(new Event("ysong:room-personas-changed"));await refreshDetail();}
   function removeVirtualParticipant(personaId:string){if(!detail)return;removeRoomPersonaSlot(detail.room.id,personaId);setVirtualParticipants(listRoomVirtualParticipants(detail.room.id));}
 
-  return <div className="h-full min-h-0 flex bg-neutral-50/40 dark:bg-neutral-950/20">
-    <aside className="w-[230px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 min-h-0 flex flex-col">
+  return <div className={`ys-rooms h-full min-h-0 flex bg-neutral-50/40 dark:bg-neutral-950/20 ${activeRoomId ? "ys-rooms-active" : ""}`}>
+    <aside className="ys-rooms-list w-[230px] shrink-0 border-r border-neutral-200 dark:border-neutral-800 min-h-0 flex flex-col">
       <div className="px-3 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between"><div><div className="text-sm font-semibold">Rooms</div><div className="text-[10px] opacity-50">Chat + live venues + AI</div></div><button onClick={()=>setCreateOpen(true)} className="h-8 w-8 rounded-lg grid place-items-center hover:bg-black/5 dark:hover:bg-white/10" title="Create room"><Icon name="plus"/></button></div>
       <div className="flex-1 overflow-y-auto p-2 space-y-4"><div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Your rooms</div>{joinedRooms.length?joinedRooms.map(r=><button key={r.id} onClick={()=>void openRoom(r)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12 text-violet-700 dark:text-violet-200":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><span className="opacity-55">{r.visibility==="private"?<Icon name="lock" size={13}/>:<Icon name="globe" size={13}/>}</span><span className="text-sm font-medium truncate">{r.name}</span></div><div className="mt-1 flex items-center gap-2 text-[10px] opacity-45"><span className="truncate">{r.description||r.role}</span>{r.liveActive&&<span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-.5 text-[8px] font-bold text-red-400">LIVE</span>}</div></button>):<div className="px-2 py-3 text-xs opacity-45">No rooms yet.</div>}</div>
         {publicRooms.length>0&&<div><div className="px-2 text-[10px] uppercase tracking-[.12em] opacity-45 mb-1">Public rooms</div>{publicRooms.map(r=><button key={r.id} onClick={()=>void openRoom(r)} className={`w-full rounded-xl p-2.5 text-left mb-1 ${activeRoomId===r.id?"bg-violet-500/12":"hover:bg-black/5 dark:hover:bg-white/5"}`}><div className="flex items-center gap-2"><Icon name="globe" size={13}/><span className="text-sm truncate">{r.name}</span>{r.liveActive&&<span className="ml-auto rounded-full bg-red-500/15 px-1.5 py-.5 text-[8px] font-bold text-red-400">LIVE</span>}</div></button>)}</div>}
       </div>
     </aside>
 
-    <section className="flex-1 min-w-0 min-h-0 flex flex-col">
+    <section className="ys-rooms-main flex-1 min-w-0 min-h-0 flex flex-col">
       {!detail?<div className="h-full grid place-items-center text-center p-8"><div className="max-w-xl"><div className="text-4xl mb-3">💬</div><h2 className="text-lg font-semibold">YSong Rooms</h2><p className="text-sm opacity-55 max-w-md mx-auto mt-1">Choose a room on the left, discover a public room, or create a new group chat with humans and AI personas.</p><div className="mt-5 flex justify-center gap-2"><button onClick={()=>setCreateOpen(true)} className="rounded-xl bg-violet-600 text-white px-4 py-2 text-sm">Create Room</button>{rooms.length>0&&<button onClick={()=>void refreshRooms()} className="rounded-xl border px-4 py-2 text-sm">Refresh rooms</button>}</div></div></div>:<>
-        <header className="h-14 shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 flex items-center justify-between gap-3"><div className="min-w-0 flex items-center gap-2"><button onClick={showRoomList} className="h-8 w-8 shrink-0 rounded-lg border grid place-items-center hover:bg-black/5 dark:hover:bg-white/5" title="Back to rooms"><Icon name="back" size={14}/></button><div className="min-w-0"><div className="flex items-center gap-2"><span className="opacity-50">{detail.room.visibility==="private"?<Icon name="lock" size={15}/>:<Icon name="globe" size={15}/>}</span><h2 className="font-semibold truncate">{detail.room.name}</h2></div><div className="text-[11px] opacity-50 truncate">{detail.room.description||"YSong room"}</div></div></div><div className="flex gap-2"><button disabled={!detail.room.joined} onClick={openPersonaDrawer} className="rounded-xl border px-3 py-1.5 text-xs flex items-center gap-1.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"><Icon name="bot" size={14}/>Add persona</button><button onClick={()=>void refreshDetail()} className="h-8 w-8 rounded-lg border grid place-items-center" title="Refresh"><Icon name="refresh" size={14}/></button></div></header>
+        <header className="ys-rooms-header h-14 shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 flex items-center justify-between gap-3"><div className="min-w-0 flex items-center gap-2"><button onClick={showRoomList} className="h-8 w-8 shrink-0 rounded-lg border grid place-items-center hover:bg-black/5 dark:hover:bg-white/5" title="Back to rooms" aria-label="Back to rooms"><Icon name="back" size={14}/></button><div className="min-w-0"><div className="flex items-center gap-2"><span className="opacity-50">{detail.room.visibility==="private"?<Icon name="lock" size={15}/>:<Icon name="globe" size={15}/>}</span><h2 className="font-semibold truncate">{detail.room.name}</h2></div><div className="text-[11px] opacity-50 truncate">{detail.room.description||"YSong room"}</div></div></div><div className="flex shrink-0 gap-2"><button disabled={!detail.room.joined} onClick={openPersonaDrawer} className="ys-rooms-add-persona rounded-xl border px-3 py-1.5 text-xs flex items-center gap-1.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"><Icon name="bot" size={14}/><span>Add persona</span></button><button type="button" onClick={()=>setPeopleOpen(true)} className="ys-rooms-people-button h-8 w-8 rounded-lg border grid place-items-center" aria-label="Show room people and personas" aria-expanded={peopleOpen}><Icon name="users" size={14}/></button><button onClick={()=>void refreshDetail()} className="h-8 w-8 rounded-lg border grid place-items-center" title="Refresh" aria-label="Refresh room"><Icon name="refresh" size={14}/></button></div></header>
         {detail.room.joined&&<RoomVenuePanel detail={detail} meUserId={meUserId}/>}
         {detail.room.joined&&activeRoomId===detail.room.id&&<RoomVideoStage key={detail.room.id} roomId={detail.room.id} members={detail.members} meUserId={meUserId} meDisplayName={meDisplayName}/>}
         {detail.room.joined&&virtualParticipants.length>0&&<div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2"><div className="text-[10px] uppercase tracking-wide opacity-55 mb-1">Virtual participants · on this device</div><div className="flex flex-wrap gap-2">{virtualParticipants.map(p=><div key={p.personaId} className="flex items-center gap-2 rounded-xl border border-neutral-200 dark:border-neutral-800 px-2 py-1" title={`Stable persona ID: ${p.personaId}`}><Avatar src={p.avatarPath} name={p.name} size={28}/><div className="min-w-0"><div className="text-xs font-medium">{p.name} <span className="opacity-55">· {p.kind}</span></div><div className="text-[10px] opacity-55">{p.status==="unavailable"?"Unavailable":p.avatarPath?"Identity only · no AI replies":"Identity only · artwork pending · no AI replies"}</div></div><button type="button" onClick={()=>removeVirtualParticipant(p.personaId)} className="px-1 text-xs opacity-55 hover:opacity-100" aria-label={`Remove ${p.name} from room`}>×</button></div>)}</div></div>}
@@ -247,7 +254,8 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
         </>}</>}
     </section>
 
-    {detail&&<aside className="w-[270px] shrink-0 border-l border-neutral-200 dark:border-neutral-800 min-h-0 overflow-y-auto hidden xl:block"><div className="p-3 border-b border-neutral-200 dark:border-neutral-800"><div className="text-[10px] uppercase tracking-[.12em] opacity-45 mb-2 flex items-center gap-1.5"><Icon name="users" size={13}/>Humans</div><div className="space-y-2">{detail.members.map(m=><div key={m.userId} className="flex items-center gap-2"><Avatar src={m.userId===meUserId?meAvatarUrl:""} name={m.name} size={30}/><div className="min-w-0"><div className="text-xs font-medium truncate">{m.name}</div><div className="text-[9px] opacity-45 capitalize">{m.role}</div></div></div>)}</div>{["owner","admin"].includes(detail.room.role||"")&&<div className="mt-3 flex gap-1"><input value={inviteName} onChange={(e)=>setInviteName(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&void doInvite()} placeholder="Add by username" className="min-w-0 flex-1 rounded-lg border bg-transparent px-2 py-1.5 text-xs"/><button disabled={inviteBusy||!inviteName.trim()} onClick={()=>void doInvite()} className="h-8 w-8 grid place-items-center rounded-lg border disabled:opacity-40"><Icon name="plus" size={13}/></button></div>}</div>
+    {detail&&peopleOpen&&<button type="button" className="ys-rooms-people-backdrop" onClick={()=>setPeopleOpen(false)} aria-label="Close room people and personas"/>}
+    {detail&&<aside className={`ys-rooms-people w-[270px] shrink-0 border-l border-neutral-200 dark:border-neutral-800 min-h-0 overflow-y-auto ${peopleOpen ? "ys-rooms-people-open" : ""}`} aria-label="Room people and personas"><div className="ys-rooms-people-heading"><span>Room people and personas</span><button type="button" onClick={()=>setPeopleOpen(false)} aria-label="Close room people and personas">×</button></div><div className="p-3 border-b border-neutral-200 dark:border-neutral-800"><div className="text-[10px] uppercase tracking-[.12em] opacity-45 mb-2 flex items-center gap-1.5"><Icon name="users" size={13}/>Humans</div><div className="space-y-2">{detail.members.map(m=><div key={m.userId} className="flex items-center gap-2"><Avatar src={m.userId===meUserId?meAvatarUrl:""} name={m.name} size={30}/><div className="min-w-0"><div className="text-xs font-medium truncate">{m.name}</div><div className="text-[9px] opacity-45 capitalize">{m.role}</div></div></div>)}</div>{["owner","admin"].includes(detail.room.role||"")&&<div className="mt-3 flex gap-1"><input value={inviteName} onChange={(e)=>setInviteName(e.target.value)} onKeyDown={(e)=>e.key==="Enter"&&void doInvite()} placeholder="Add by username" className="min-w-0 flex-1 rounded-lg border bg-transparent px-2 py-1.5 text-xs"/><button disabled={inviteBusy||!inviteName.trim()} onClick={()=>void doInvite()} className="h-8 w-8 grid place-items-center rounded-lg border disabled:opacity-40"><Icon name="plus" size={13}/></button></div>}</div>
       <div className="p-3"><div className="flex items-center justify-between mb-2"><div className="text-[10px] uppercase tracking-[.12em] opacity-45 flex items-center gap-1.5"><Icon name="bot" size={13}/>Server AI participants</div></div>{detail.personas.length?detail.personas.map(p=><div key={p.id} className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-2 mb-2"><div className="flex items-center gap-2"><Avatar src={p.avatarUrl||p.avatarPath} name={p.name} size={34}/><div className="min-w-0 flex-1"><div className="text-xs font-medium truncate">{p.name}</div><div className="text-[9px] opacity-45 truncate">{p.specialty}</div></div><button onClick={()=>void removePersona(p)} className="h-7 w-7 grid place-items-center rounded-lg opacity-45 hover:opacity-100 hover:text-red-500" title="Remove from room">×</button></div><select value={p.participationMode} onChange={(e)=>void changeMode(p,e.target.value as RoomPersona["participationMode"])} className="mt-2 w-full rounded-lg border bg-transparent px-2 py-1 text-[10px]"><option value="active">Active</option><option value="listening">Listening</option><option value="mention_only">Mention only</option><option value="muted">Muted</option></select></div>):<div className="rounded-xl border border-dashed p-4 text-xs opacity-55">Server AI participants appear here when supported.</div>}
       {detail.room.role==="owner"&&<div className="mt-5 pt-4 border-t border-neutral-200 dark:border-neutral-800 space-y-2"><button onClick={async()=>{const next=detail.room.visibility==="public"?"private":"public";await updateRoom(detail.room.id,{visibility:next});await refreshDetail();await refreshRooms(detail.room.id);}} className="w-full rounded-lg border px-2 py-1.5 text-xs text-left">Make room {detail.room.visibility==="public"?"private":"public"}</button><button onClick={async()=>{if(confirm("Delete this room and its messages?")){await deleteRoom(detail.room.id);showRoomList();await refreshRooms();}}} className="w-full rounded-lg border border-red-500/30 text-red-500 px-2 py-1.5 text-xs flex items-center gap-2"><Icon name="trash" size={13}/>Delete room</button></div>}
       {detail.room.role!=="owner"&&detail.room.joined&&<button onClick={async()=>{await leaveRoom(detail.room.id);showRoomList();await refreshRooms();}} className="mt-5 w-full rounded-lg border px-2 py-1.5 text-xs">Leave room</button>}</div></aside>}

@@ -305,7 +305,7 @@ export default function RoomVenuePanel({ detail, meUserId }: { detail: RoomDetai
 
   if (!venue) return <div className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-3 text-xs opacity-50">Loading Room stage…</div>;
 
-  return <div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-950/95 text-white">
+  return <div className="ys-rooms-venue shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-950/95 text-white">
     <div className="mx-auto max-w-[1180px] p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0"><div className="flex items-center gap-2"><span className={`h-2.5 w-2.5 rounded-full ${venue.active ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,.8)]" : "bg-neutral-600"}`}/><span className="text-[10px] font-bold uppercase tracking-[.18em] text-neutral-500">{venue.active ? "Live Venue" : "Room Stage"}</span>{venue.active && <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-.5 text-[9px] font-semibold text-red-300">LIVE</span>}</div><div className="mt-1 truncate text-sm font-semibold">{stageName}</div><div className="truncate text-[10px] text-neutral-500">{stageSubtitle}{venue.hostName ? ` · hosted by ${venue.hostName}` : ""}</div></div>
