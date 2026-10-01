@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import type { TabRendererProps } from "./core";
 import { YSButton } from "../components/YSButton";
 import MidiEditor, { type MidiEditableClip } from "../components/MidiEditor";
+import MidiToVocalPanel from "../components/MidiToVocalPanel";
+import { copyVocalSetup, type VocalSetup } from "../lib/midiToVocal";
 import TransportConsole from "../components/TransportConsole";
 import OnScreenKeyboard from "../components/OnScreenKeyboard";
 import FxChainPanel from "../components/FxChainPanel";
@@ -113,6 +115,7 @@ type ProjectAsset = {
 };
 
 type Clip = {
+	vocalSetup?: VocalSetup;
 	id: string;
 	trackId: string;
 	name: string;
@@ -1379,6 +1382,7 @@ export default function DAW(_props: TabRendererProps) {
 			trackId,
 			startBar: clamp(startBar, 1, Math.max(1, bars + 1 - source.lengthBars)),
 			midiNotes: cloneNotes,
+			vocalSetup: copyVocalSetup(source.vocalSetup, source.midiNotes ?? [], cloneNotes ?? []),
 			midiPitchBend: cloneAutomation(source.midiPitchBend),
 			midiModulation: cloneAutomation(source.midiModulation),
 			midiScales: cloneScales,
@@ -5191,6 +5195,9 @@ export default function DAW(_props: TabRendererProps) {
 					))}
 				</div>
 			) : null}
+			{clips.filter((clip) => clip.id === selectedClipId && !clip.assetId && clip.midiNotes).map((clip) => (
+				<MidiToVocalPanel key={`${activeProjectId}:${clip.id}`} clip={clip} timebase={{ bpm, sigNum, sigDen }} onChange={(vocalSetup) => setClips((previous) => previous.map((item) => item.id === clip.id ? { ...item, vocalSetup } : item))} />
+			))}
 			{vocalMidiStatus && (
 				<div className="shrink-0 flex items-center gap-2 border-b border-cyan-300/15 bg-cyan-400/[0.06] px-3 py-1.5 text-[11px] text-cyan-50">
 					<div className="min-w-0 flex-1">
