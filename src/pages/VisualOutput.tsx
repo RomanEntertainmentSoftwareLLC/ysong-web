@@ -3422,8 +3422,12 @@ export default function VisualOutput() {
 			root.traverse((object) => {
 				const mesh = object as THREE.Mesh;
 				if (!mesh.isMesh) return;
+				if (mesh.geometry?.isBufferGeometry && !mesh.geometry.getAttribute("normal"))
+					mesh.geometry.computeVertexNormals();
 				const source = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-				const converted = source.map((material) => toPbrMaterial(material));
+				const converted = (source.length ? source : [undefined]).map((material) =>
+					toPbrMaterial(material ?? new THREE.MeshStandardMaterial({ color: 0x9aa0aa })),
+				);
 				mesh.material = Array.isArray(mesh.material) ? converted : converted[0];
 			});
 		};
@@ -3471,7 +3475,7 @@ export default function VisualOutput() {
 				}
 				return best > 0 ? chosen : undefined;
 			};
-			const attach = (finalPass: boolean) => {
+			const attach = () => {
 				if (glb.root !== root || disposed) return;
 				const pending = new Map<string, { url: string; materials: THREE.MeshStandardMaterial[] }>();
 				root.traverse((object) => {
@@ -3481,27 +3485,34 @@ export default function VisualOutput() {
 						const material = raw as THREE.MeshStandardMaterial;
 						if (!material?.isMeshStandardMaterial) continue;
 						if (textureHasRenderableImage(material.map)) continue;
-						if (material.map && !finalPass) continue; // give referenced FBX textures a short chance to finish
 						const chosen = chooseCandidate(material);
 						if (chosen) {
-							const bucket = pending.get(chosen.url) || { url: chosen.url, materials: [] };
-							bucket.materials.push(material);
-							pending.set(chosen.url, bucket);
-							continue;
-						}
-						if (finalPass) {
+							// A failed referenced map must not keep the mesh black while the fallback loads.
 							material.map = null;
 							material.color.set(0x9aa0aa);
-							material.metalness = Math.min(material.metalness, 0.2);
-							material.roughness = Math.max(material.roughness, 0.48);
 							material.needsUpdate = true;
 							const base = glb.materialBase.get(material);
 							if (base) {
 								base.map = null;
 								base.color.set(0x9aa0aa);
-								base.metalness = material.metalness;
-								base.roughness = material.roughness;
 							}
+							const bucket = pending.get(chosen.url) || { url: chosen.url, materials: [] };
+							bucket.materials.push(material);
+							pending.set(chosen.url, bucket);
+							continue;
+						}
+						if (!material.map) continue; // keep authored solid-color materials intact
+						material.map = null;
+						material.color.set(0x9aa0aa);
+						material.metalness = Math.min(material.metalness, 0.2);
+						material.roughness = Math.max(material.roughness, 0.48);
+						material.needsUpdate = true;
+						const base = glb.materialBase.get(material);
+						if (base) {
+							base.map = null;
+							base.color.set(0x9aa0aa);
+							base.metalness = material.metalness;
+							base.roughness = material.roughness;
 						}
 					}
 				});
@@ -3510,7 +3521,7 @@ export default function VisualOutput() {
 						bucket.url,
 						true,
 						(texture) => {
-							if (glb.root !== root) {
+							if (glb.root !== root || disposed) {
 								texture.dispose();
 								return;
 							}
@@ -3526,7 +3537,7 @@ export default function VisualOutput() {
 							}
 						},
 						() => {
-							if (!finalPass) return;
+							if (glb.root !== root || disposed) return;
 							for (const material of bucket.materials) {
 								material.map = null;
 								material.color.set(0x9aa0aa);
@@ -3541,8 +3552,7 @@ export default function VisualOutput() {
 					);
 				}
 			};
-			attach(false);
-			window.setTimeout(() => attach(true), 450);
+			attach();
 		};
 
 		const finalizeLoadedModel = (
@@ -3703,6 +3713,15 @@ export default function VisualOutput() {
 			lastGlbUrl = "";
 			const missingFiles = new Set<string>();
 			let lastInfo: VisualModelInfo | undefined;
+			let loadedRoot: THREE.Group | null = null;
+			let assetsSettled = false;
+			let fallbackAttached = false;
+			const attachSettledFallback = () => {
+				if (!assetsSettled || !loadedRoot || fallbackAttached || generation !== modelLoadGeneration || disposed)
+					return;
+				fallbackAttached = true;
+				attachPackageFallbackColorMaps(loadedRoot, assetFiles, fileName);
+			};
 			const manager = makeModelLoadingManager(assetFiles, (missingUrl) => {
 				const normalized = normalizeAssetPath(missingUrl);
 				if (normalized === normalizeAssetPath(url)) return;
@@ -3712,13 +3731,18 @@ export default function VisualOutput() {
 					channel.postMessage(lastInfo);
 				}
 			});
+			manager.onLoad = () => {
+				assetsSettled = true;
+				attachSettledFallback();
+			};
 			const onLoaded = (root: THREE.Group, clips: THREE.AnimationClip[]) => {
 				if (generation !== modelLoadGeneration || disposed) {
 					disposeObject3D(root);
 					return;
 				}
 				lastInfo = finalizeLoadedModel(root, clips, loadKey, fileName, missingFiles);
-				attachPackageFallbackColorMaps(root, assetFiles, fileName);
+				loadedRoot = root;
+				attachSettledFallback();
 			};
 			const onError = (caught: unknown) => {
 				if (generation !== modelLoadGeneration) return;
