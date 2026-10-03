@@ -20,6 +20,8 @@ export default function UploadMusicPane() {
 	const [explicit, setExplicit] = useState(false);
 	const [previouslyReleased, setPreviouslyReleased] = useState(false);
 	const [isrc, setIsrc] = useState("");
+	const [releaseDate, setReleaseDate] = useState("");
+	const [recordLabel, setRecordLabel] = useState("");
 	const [rightsConfirmed, setRightsConfirmed] = useState(false);
 	const [trackNumber, setTrackNumber] = useState(1);
 	const [durationSeconds, setDurationSeconds] = useState<number | null>(null);
@@ -28,7 +30,13 @@ export default function UploadMusicPane() {
 	const [error, setError] = useState("");
 
 	useEffect(() => {
-		fetchAccountArtists().then((r) => { const list = r.artists || []; setArtists(list); setArtistId((id) => id || list[0]?.id || ""); }).catch(() => {});
+		let cancelled = false;
+		const refresh = () => {
+			fetchAccountArtists().then((r) => { if (cancelled) return; const list = r.artists || []; setArtists(list); setArtistId((id) => list.some(a => a.id === id) ? id : list[0]?.id || ""); }).catch(() => {});
+		};
+		refresh();
+		window.addEventListener("ysong:bands-changed", refresh);
+		return () => { cancelled = true; window.removeEventListener("ysong:bands-changed", refresh); };
 	}, []);
 
 	useEffect(() => {
@@ -85,6 +93,8 @@ export default function UploadMusicPane() {
 				trackNumber: Math.max(1, trackNumber || 1),
 				durationSeconds,
 				isrc: isrc.trim(),
+				...(releaseDate ? { releaseDate } : {}),
+				...(recordLabel.trim() ? { recordLabel: recordLabel.trim() } : {}),
 				previouslyReleased,
 				rightsConfirmed,
 				audioObjectKey: audioUpload.objectKey,
@@ -140,6 +150,11 @@ export default function UploadMusicPane() {
 							<Field label="Release History"><select value={previouslyReleased ? "released" : "unreleased"} onChange={(e) => setPreviouslyReleased(e.target.value === "released")} className="input"><option value="unreleased">Unreleased original</option><option value="released">Previously released</option></select></Field>
 							<Field label={`ISRC${previouslyReleased ? " *" : ""}`} hint={previouslyReleased ? "Required" : "Optional"}><input value={isrc} onChange={(e) => setIsrc(e.target.value.toUpperCase())} className="input font-mono" placeholder="US-ABC-26-12345" /></Field>
 						</div>
+						<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+							<Field label="Release Date" hint="Optional"><input type="date" value={releaseDate} onChange={(e) => setReleaseDate(e.target.value)} className="input" /></Field>
+							<Field label="Record Label" hint="Optional"><input value={recordLabel} maxLength={180} onChange={(e) => setRecordLabel(e.target.value)} className="input" placeholder="Record label" /></Field>
+						</div>
+						{releaseType === "album" && <p className="text-xs text-neutral-400">Date and label apply to the whole album. Leave them blank to keep an existing album’s metadata.</p>}
 						<label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={explicit} onChange={(e) => setExplicit(e.target.checked)} /> Explicit content</label>
 						<label className="flex items-start gap-2 text-sm rounded-xl border border-neutral-800 bg-neutral-950/40 p-3"><input className="mt-1" type="checkbox" checked={rightsConfirmed} onChange={(e) => setRightsConfirmed(e.target.checked)} /><span>I own or control the rights necessary to publish this recording on YSong World. <span className="text-neutral-500">Copyright/fingerprint screening will be added to the publishing gate.</span></span></label>
 						<div className="pt-2 flex flex-wrap items-center gap-3">

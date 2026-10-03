@@ -21,6 +21,7 @@ import { apiGet, apiPost } from "./lib/authApi";
 import DevViewportBadge from "./components/DevViewportBadge";
 import VisualOutput from "./pages/VisualOutput";
 import PromotionLanding from "./pages/PromotionLanding";
+import Pricing from "./pages/Pricing";
 
 type CurrentUser = {
 	id: string;
@@ -145,6 +146,7 @@ function App() {
 				<Route path="/" element={<HomeResponsive />} />
 				<Route path="/legal" element={<Legal />} />
 				<Route path="/privacy" element={<Privacy />} />
+                <Route path="/pricing" element={<Pricing />} />
 				<Route path="/login" element={<Login />} />
 				<Route path="/signup" element={<Signup />} />
 				<Route path="/verify" element={<Verify />} />

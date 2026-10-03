@@ -12,6 +12,7 @@ import {
   type BandProfile,
 } from "../lib/bandLibrary";
 import { listSingerCharacters, type SingerCharacter } from "../lib/singerLibrary";
+import LinkExistingReleases from "../components/LinkExistingReleases";
 
 type BandDraft = Omit<BandProfile, "createdAt" | "updatedAt">;
 const blank = (): BandDraft => ({
@@ -39,6 +40,9 @@ export default function BandCreationPane(_props: TabRendererProps) {
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [linking, setLinking] = useState(false);
+  const [linkCreating, setLinkCreating] = useState(false);
+  const [linkMessage, setLinkMessage] = useState("");
 
   const refreshBands = async () => {
     try { setBands(await listBandProfiles()); } catch {}
@@ -48,6 +52,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     if (!id) return;
     const found = await getBandProfile(id).catch(() => null);
     if (!found) return;
+    setLinking(false); setLinkMessage("");
     setBand({
       id: found.id,
       type: found.type === "solo" ? "solo" : "band",
@@ -97,7 +102,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
       if (id) void loadBand(id);
     };
     const onChanged = () => void refreshBands();
-    const onNew = () => { setBand(blank()); setSaved(false); setError(""); setActiveBandId(null); };
+    const onNew = () => { setBand(blank()); setSaved(false); setError(""); setActiveBandId(null); setLinking(false); setLinkMessage(""); };
     window.addEventListener("ysong:band-open", onOpen as EventListener);
     window.addEventListener("ysong:band-new", onNew);
     window.addEventListener("ysong:bands-changed", onChanged);
@@ -127,7 +132,7 @@ export default function BandCreationPane(_props: TabRendererProps) {
     patch({ image: file, imageName: file.name, avatarObjectKey: "" });
   };
 
-  const save = async () => {
+  const persistBand = async () => {
     setBusy(true); setError("");
     try {
       const next = await saveBandProfile({
@@ -137,11 +142,17 @@ export default function BandCreationPane(_props: TabRendererProps) {
       setBand({ ...next, image: next.image ?? null, imageName: next.imageName ?? "" });
       setSaved(true);
       await refreshBands();
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not save this band."); }
+      return next.id;
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not save this band."); throw e; }
     finally { setBusy(false); }
   };
 
-  const makeNew = () => { setBand(blank()); setActiveBandId(null); setSaved(false); setError(""); };
+  const save = async () => {
+    if (!bands.some(b => b.id === band.id)) { setLinkCreating(true); setLinking(true); setLinkMessage(""); return; }
+    await persistBand().catch(() => {});
+  };
+
+  const makeNew = () => { setBand(blank()); setActiveBandId(null); setSaved(false); setError(""); setLinking(false); setLinkMessage(""); };
 
   const remove = async () => {
     if (!bands.some((b) => b.id === band.id)) { makeNew(); return; }
@@ -175,11 +186,12 @@ export default function BandCreationPane(_props: TabRendererProps) {
       <section className="space-y-4 min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><div className="text-xs uppercase tracking-[.22em] text-fuchsia-300">Identity workshop</div><h1 className="text-3xl font-semibold mt-1">Band Creation</h1><p className="text-sm text-neutral-400 mt-2">Build real reusable artist identities. Saved identities are synced to your account and reused by Create Song and YSong World publishing.</p></div>
-          <button type="button" onClick={makeNew} className="rounded-xl px-3 py-2 border border-white/10 hover:bg-white/5">+ New Artist / Band</button>
+          <button type="button" disabled={busy || linking} onClick={makeNew} className="rounded-xl px-3 py-2 border border-white/10 hover:bg-white/5 disabled:opacity-40">+ New Artist / Band</button>
         </div>
 
         <div className="grid lg:grid-cols-[minmax(0,1fr)_260px] gap-5">
           <div className="space-y-4 min-w-0">
+            <fieldset disabled={busy || linking} className="space-y-4">
             <Field label="Identity type"><select className="input" value={band.type || "band"} onChange={(e) => patch({ type: e.target.value as "solo" | "band" })}><option value="band">Band</option><option value="solo">Solo artist</option></select></Field>
             <Field label="Band / artist name"><input className="input" value={band.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Band name" /></Field>
             <Field label="Sound / genre"><input className="input" value={band.genre} onChange={(e) => patch({ genre: e.target.value })} placeholder="Dark synthpop, orchestral metal, house…" /></Field>
@@ -201,14 +213,18 @@ export default function BandCreationPane(_props: TabRendererProps) {
             <Field label="Band story / bio"><textarea className="input min-h-[150px]" value={band.bio} onChange={(e) => patch({ bio: e.target.value })} placeholder="Identity, lore, attitude, visual language…" /></Field>
             <Field label="Logo / symbol direction"><textarea className="input min-h-[100px]" value={band.symbol} onChange={(e) => patch({ symbol: e.target.value })} placeholder="Describe the mark, icon, crest, symbol, typography…" /></Field>
             <div className="flex gap-4"><Field label="Primary"><input type="color" value={band.primary} onChange={(e) => patch({ primary: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field><Field label="Accent"><input type="color" value={band.accent} onChange={(e) => patch({ accent: e.target.value })} className="h-11 w-20 rounded-lg bg-transparent" /></Field></div>
+            </fieldset>
             {error && <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div>}
-            <div className="flex flex-wrap gap-2"><button onClick={() => void save()} disabled={busy} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-40">{busy ? "Saving…" : saved ? "Saved to My Library" : band.type === "solo" ? "Save Artist" : "Save Band"}</button><button onClick={openArtwork} className="rounded-xl px-4 py-2 border border-white/10">Open in Artwork Studio</button><button onClick={() => void duplicate()} disabled={!bands.some((b) => b.id === band.id)} className="rounded-xl px-3 py-2 border border-white/10 disabled:opacity-30">Duplicate</button><button onClick={() => void remove()} className="rounded-xl px-3 py-2 border border-red-400/20 text-red-300">Delete</button></div>
+            {linkMessage && <p role="status" className="text-sm text-fuchsia-200">{linkMessage}</p>}
+            {linking && <LinkExistingReleases key={band.id} name={band.name.trim() || "Untitled Band"} creating={linkCreating} ensureArtist={persistBand} onDone={message => { setLinking(false); setLinkMessage(message); }} />}
+            {bands.some(b => b.id === band.id) && !linking && <button type="button" disabled={busy} onClick={() => { setLinkCreating(false); setLinking(true); setLinkMessage(""); }} className="rounded-xl px-4 py-2 border border-fuchsia-400/30">Link Existing Releases</button>}
+            <fieldset disabled={busy || linking} className="flex flex-wrap gap-2"><button onClick={() => void save()} disabled={busy} className="rounded-xl px-4 py-2 bg-fuchsia-500/20 border border-fuchsia-400/30 disabled:opacity-40">{busy ? "Saving…" : saved ? "Saved to My Library" : band.type === "solo" ? "Save Artist" : "Save Band"}</button><button onClick={openArtwork} className="rounded-xl px-4 py-2 border border-white/10">Open in Artwork Studio</button><button onClick={() => void duplicate()} disabled={!bands.some((b) => b.id === band.id)} className="rounded-xl px-3 py-2 border border-white/10 disabled:opacity-30">Duplicate</button><button onClick={() => void remove()} className="rounded-xl px-3 py-2 border border-red-400/20 text-red-300">Delete</button></fieldset>
           </div>
 
           <aside className="rounded-2xl border border-white/10 bg-white/[.025] p-3 self-start">
             <div className="text-xs uppercase tracking-widest text-neutral-500 mb-2">Saved bands</div>
             <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
-              {bands.length ? bands.map((b) => <BandMini key={b.id} band={b} active={b.id === band.id} onClick={() => void loadBand(b.id)} />) : <div className="text-xs text-neutral-500 p-3 border border-dashed border-white/10 rounded-xl">No saved bands yet.</div>}
+              <fieldset disabled={busy || linking}>{bands.length ? bands.map((b) => <BandMini key={b.id} band={b} active={b.id === band.id} onClick={() => void loadBand(b.id)} />) : <div className="text-xs text-neutral-500 p-3 border border-dashed border-white/10 rounded-xl">No saved bands yet.</div>}</fieldset>
             </div>
           </aside>
         </div>

@@ -5,6 +5,7 @@ import { loadUserSettings, saveUserSettings, type UserSettingsResponse } from ".
 import { YSButton } from "../components/YSButton";
 import BridgeSettings from "../components/BridgeSettings";
 import MidiSettings from "../components/MidiSettings";
+import AccountPlan from "../components/AccountPlan";
 
 /* ---------------- Entry ---------------- */
 export default function SettingsPane() {
@@ -301,6 +302,7 @@ function SettingsCore() {
 					</header>
 
 
+					<AccountPlan administration />
 					<Section title="Appearance" subtitle="Choose how YSong looks on your device.">
 						<DarkModeRow
 							dark={dark}

@@ -10,9 +10,13 @@ import { classifyVocalRole, stageGeneratedSession, type GeneratedMidiRegion, typ
 import { resultFromGeneratedSession } from "../lib/songGenerationContract";
 import { upsertGeneration } from "../lib/generationLibrary";
 import { listSingerCharacters, saveSingerCharacter, singerIdentity, type SingerCharacter } from "../lib/singerLibrary";
+import AccountPlan from "../components/AccountPlan";
+import GenerationJobs from "../components/GenerationJobs";
+import { apiGet, apiPost } from "../lib/authApi";
 
 const STORAGE_KEY = "ysong:create-song:draft:v3";
 const RECOVERY_KEY = "ysong:create-song:recovery:v1";
+const BLUEPRINT_KEY = "ysong:create-song:blueprint:v1";
 type Draft = { title: string; lyrics: string; style: string; instrumental: boolean; bpm: string; key: string; duration: string; bandId: string; singerIds: string[] };
 const emptyDraft: Draft = { title: "", lyrics: "", style: "", instrumental: false, bpm: "", key: "", duration: "", bandId: "", singerIds: [] };
 
@@ -266,20 +270,31 @@ export default function CreateSongPane(_props: TabRendererProps) {
   const [newSinger, setNewSinger] = useState({ displayName: "", voiceDescription: "", vocalRange: "", vocalStyle: "", avatar: null as File | null });
   const [plugins, setPlugins] = useState<BridgePlugin[]>([]);
   const [engine, setEngine] = useState<MusicEngineStatus | null>(null);
-  const [plan, setPlan] = useState<PlanDraft | null>(null);
+  const [plan, setPlan] = useState<PlanDraft | null>(() => {
+    try { const saved = JSON.parse(localStorage.getItem(BLUEPRINT_KEY) || "null"); return saved?.plan?.tracks?.length ? saved.plan : null; } catch { return null; }
+  });
   const [recovery, setRecovery] = useState<{ plan: PlanDraft; manifest: GeneratedSessionManifest } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(RECOVERY_KEY) || "null");
       return saved?.plan?.tracks && saved?.manifest?.tracks && saved?.manifest?.result?.parts ? saved : null;
     } catch { return null; }
   });
-  const [planApproved, setPlanApproved] = useState(false);
+  const [planApproved, setPlanApproved] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(BLUEPRINT_KEY) || "null")?.approved === true; } catch { return false; }
+  });
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+  const [quantity,setQuantity]=useState(1);
+  const [entitlement,setEntitlement]=useState<{enabled:boolean;remaining:number|null;superadmin:boolean}|null>(null);
+  const [parentId,setParentId]=useState<string|undefined>();
+  useEffect(()=>{void apiGet<{enabled:boolean;remaining:number|null;superadmin:boolean}>('/api/account/entitlements').then(setEntitlement).catch(()=>{});},[]);
+  const reuseRequest=_props.tab.payload?.reuseGeneration as {requestId:string;title:string;prompt:string;lyrics:string;parentId?:string}|undefined;
+  useEffect(()=>{if(!reuseRequest)return;setDraft(old=>({...old,title:reuseRequest.title,style:reuseRequest.prompt,lyrics:reuseRequest.lyrics}));setParentId(reuseRequest.parentId);setPlan(null);setPlanApproved(false);setRecovery(null);},[reuseRequest]);
 
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draft)); } catch {} }, [draft]);
+  useEffect(() => { try { localStorage.setItem(BLUEPRINT_KEY, JSON.stringify({ plan, approved: planApproved })); } catch {} }, [plan, planApproved]);
   useEffect(() => { try { if (recovery) localStorage.setItem(RECOVERY_KEY, JSON.stringify(recovery)); else localStorage.removeItem(RECOVERY_KEY); } catch {} }, [recovery]);
   useEffect(() => {
     const load = () => void listBandProfiles().then(setBands).catch(() => {});
@@ -366,6 +381,26 @@ export default function CreateSongPane(_props: TabRendererProps) {
         return;
       }
       const priorManifest = recovery?.manifest;
+      if(entitlement?.enabled) {
+        const token=localStorage.getItem('ys_token')??localStorage.getItem('ysong_auth_token');
+        if(!token)throw new Error('Sign in before generation.');
+        const claims=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+        const owner=claims.uid??claims.id??claims.sub;
+        if(typeof owner!=='string')throw new Error('Sign in before generation.');
+        const pendingKey=`ysong:create-song:pending-batch:v1:${owner}`;
+        const pending=JSON.parse(localStorage.getItem(pendingKey)??'null');
+        const request=pending??{requestKey:crypto.randomUUID(),quantity,parentId,prompt:draft.style,lyrics:draft.instrumental?'[Instrumental]':draft.lyrics,
+          plan:{...activePlan,tracks:activePlan.tracks.map(track=>({...track,renderInstructions:buildMiniMaxTrackInstructions(activePlan,track)}))}};
+        const current=await apiGet<{remaining:number|null;superadmin:boolean}>('/api/account/entitlements');
+        if(!pending&&!current.superadmin&&(current.remaining===null||quantity>current.remaining))throw new Error(`This request requires ${quantity} generation credits; ${current.remaining??0} remain.`);
+        localStorage.setItem(pendingKey,JSON.stringify(request));
+        setProgress('Saving batch request. If the response is interrupted, submit again to recover the same job.');
+        await apiPost('/api/generations/batches',request);
+        localStorage.removeItem(pendingKey);setProgress(`Batch saved: ${request.quantity} versions. You can leave this page; Generation History tracks their progress.`);
+        window.dispatchEvent(new CustomEvent('ysong:jobs-submitted'));
+        setEntitlement(await apiGet('/api/account/entitlements'));
+        return;
+      }
       const priorById = new Map((priorManifest?.tracks ?? []).map((track) => [track.id, track]));
       const priorResult = priorManifest?.result;
       const pendingIds = new Set(priorResult?.parts.filter((part) => part.status === "failed").map((part) => part.id) ?? activePlan.tracks.map((track) => track.id));
@@ -416,12 +451,17 @@ export default function CreateSongPane(_props: TabRendererProps) {
         }
       }
 
-      const manifest: GeneratedSessionManifest = { v: 1, sessionId: priorManifest?.sessionId ?? crypto.randomUUID(), createdAt: priorManifest?.createdAt ?? Date.now(), ...activePlan, tracks: [...completed, ...activePlan.tracks.filter((track) => pendingIds.has(track.id)).map((track) => completed.find((item) => item.id === track.id) ?? track)] };
+      const manifest: GeneratedSessionManifest = { ...activePlan, v: 1, sessionId: priorManifest?.sessionId ?? crypto.randomUUID(), createdAt: priorManifest?.createdAt ?? Date.now(), tracks: activePlan.tracks.map((track) => completed.find((item) => item.id === track.id) ?? track) };
       const result = resultFromGeneratedSession(manifest,
         { origin: "create-song", prompt: activePlan.structuredCaption || "", seed: sharedSeed },
         { provider: generationEngine?.provider || "ysong-midi", name: generationEngine?.model || "structured-midi" }, failures);
       manifest.result = result;
-      setRecovery(result.status === "complete" ? null : { plan: activePlan, manifest });
+      const nextRecovery = result.status === "complete" ? null : { plan: activePlan, manifest };
+      // Save before tab navigation can unmount Create Song and skip its effects.
+      localStorage.setItem(BLUEPRINT_KEY, JSON.stringify({ plan: activePlan, approved: true }));
+      if (nextRecovery) localStorage.setItem(RECOVERY_KEY, JSON.stringify(nextRecovery));
+      else localStorage.removeItem(RECOVERY_KEY);
+      setRecovery(nextRecovery);
       if (result.status === "failed") {
         upsertGeneration({ id: result.id, status: "failed", title: manifest.projectName, createdAt: result.createdAt,
           source: { prompt: result.source.prompt, origin: "create-song" }, artifacts: [], songResult: result,
@@ -454,9 +494,12 @@ export default function CreateSongPane(_props: TabRendererProps) {
       <section className="space-y-4">
         <div><div className="text-xs uppercase tracking-[0.22em] text-indigo-300">YSong Studio</div><h1 className="text-3xl font-semibold mt-1">Create Song</h1><p className="text-sm text-neutral-400 mt-2">YSong AI produces the strict session plan; MiniMax Music 3 performs the audio-only parts. Synth parts become MIDI + your installed VSTs whenever YSong can do that cleanly.</p></div>
         <div className={`rounded-xl border px-3 py-2 text-xs ${engine?.reachable ? "border-emerald-400/20 bg-emerald-400/[.06] text-emerald-200" : "border-amber-400/20 bg-amber-400/[.06] text-amber-100"}`}>
-          <div className="flex items-center justify-between gap-3"><span><b>MiniMax Music 3:</b> {engine?.reachable ? `ready · ${engine.provider === "audio_cpp" ? `audio.cpp ${engine.backend || "local"}` : engine.model}${engine.busy ? " · busy" : ""}` : "local engine offline"}</span><button type="button" onClick={() => void refreshEngine()} className="rounded-lg border border-white/10 px-2 py-1">Check</button></div>
+          <div className="flex items-center justify-between gap-3"><span><b>{engine?.model === "minimax/music-2.6" ? "MiniMax Music 2.6" : "MiniMax Music 3"}:</b> {engine?.reachable ? `ready · ${engine.provider === "audio_cpp" ? `audio.cpp ${engine.backend || "local"}` : engine.model}${engine.busy ? " · busy" : ""}` : "local engine offline"}</span><button type="button" onClick={() => void refreshEngine()} className="rounded-lg border border-white/10 px-2 py-1">Check</button></div>
           {!engine?.reachable && <div className="mt-1 opacity-70">YSong can still plan the editable session. Audio generation starts once the local/open-weights engine is ready.</div>}
         </div>
+        <AccountPlan quantity={quantity} />
+        {entitlement?.enabled&&<label className="block text-sm">Quantity / Versions <input className="input" type="number" min={1} max={20} step={1} value={quantity} onChange={e=>setQuantity(Math.max(1,Math.min(20,Math.floor(Number(e.target.value)||1))))}/><span className="text-xs opacity-70">This generation reserves {quantity} credits; each saved usable version consumes one credit.</span></label>}
+        <GenerationJobs />
         <Field label="Song title"><input value={draft.title} onChange={(e) => patch({ title: e.target.value })} placeholder="Untitled song" className="input" /></Field>
         <Field label="Band / artist"><select className="input" value={draft.bandId} onChange={(e) => { const band = bands.find((item) => item.id === e.target.value); patch({ bandId: e.target.value, ...(band?.singerIds?.length ? { singerIds: band.singerIds } : {}) }); if (e.target.value) setActiveBandId(e.target.value); }}><option value="">No saved band selected</option>{bands.map((b) => <option key={b.id} value={b.id}>{b.name || "Untitled Band"}</option>)}</select></Field>
         {selectedBand && <div className="rounded-xl border border-white/10 bg-white/[.03] px-3 py-2 text-xs text-neutral-400"><b className="text-neutral-200">{selectedBand.name}</b>{selectedBand.genre ? ` · ${selectedBand.genre}` : ""}<div className="mt-1">Band identity is included in the producer brief.</div></div>}

@@ -21,6 +21,7 @@ export type GenerateTrackRequest = {
 const env = (import.meta as any).env || {};
 const RAW_BASE = env.VITE_AUTH_API_URL || env.VITE_API_BASE_URL || "";
 const API = String(RAW_BASE || "").replace(/\/+$/, "");
+const savedAudio = new WeakMap<Blob, { objectKey: string; userToken: string | null }>();
 
 function endpoint(path: string) {
   return API ? `${API}${path}` : path;
@@ -34,9 +35,10 @@ export async function getMusicEngineStatus(): Promise<MusicEngineStatus> {
 }
 
 export async function generateMiniMaxTrack(request: GenerateTrackRequest): Promise<Blob> {
+  const token = localStorage.getItem("ys_token") || localStorage.getItem("ysong_auth_token");
   const res = await fetch(endpoint("/api/music/generate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(request),
   });
   if (!res.ok) {
@@ -45,12 +47,17 @@ export async function generateMiniMaxTrack(request: GenerateTrackRequest): Promi
   }
   const blob = await res.blob();
   if (!blob.size) throw new Error("MiniMax returned an empty audio file.");
-  return blob.type ? blob : new Blob([blob], { type: "audio/wav" });
+  const audio = blob.type ? blob : new Blob([blob], { type: "audio/wav" });
+  const objectKey = res.headers.get("X-YSong-Object-Key");
+  if (objectKey) savedAudio.set(audio, { objectKey, userToken: token });
+  return audio;
 }
 
 export async function uploadGeneratedAudio(blob: Blob, filename: string) {
   const token = localStorage.getItem("ys_token");
   if (!token) throw new Error("YSong login is required before generated tracks can be saved.");
+  const saved = savedAudio.get(blob);
+  if (saved && saved.userToken === token) return { objectKey: saved.objectKey, name: filename };
   const form = new FormData();
   const file = new File([blob], filename, { type: blob.type || "audio/wav" });
   form.append("file", file);

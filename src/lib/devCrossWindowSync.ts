@@ -10,6 +10,8 @@
  *   its own server event.
  */
 
+import { AUTH_BASE } from "./authApi";
+
 const CHANNEL_NAME = "ysong-device-sync-v2";
 const WINDOW_ID_KEY = "ysong:deviceSync:windowId";
 const SUPPRESS_UNTIL_KEY = "ysong:deviceSync:suppressUntil";
@@ -459,8 +461,11 @@ function installFetchHook() {
 	window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const info = mutationInfo(input, init);
 		const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(info.method);
+		const requestUrl = new URL(info.url, window.location.origin);
+		const apiOrigin = new URL(AUTH_BASE || window.location.origin, window.location.origin).origin;
+		const isApiRequest = requestUrl.origin === apiOrigin && requestUrl.pathname.startsWith("/api/");
 		let forwardedInit = init;
-		if (isMutation && canParticipate()) {
+		if (isMutation && isApiRequest && canParticipate()) {
 			const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
 			headers.set("X-YSong-Client-Id", windowId);
 			forwardedInit = { ...(init || {}), headers };
@@ -468,7 +473,7 @@ function installFetchHook() {
 
 		const response = await originalFetch(input as any, forwardedInit);
 
-		if (response.ok && isMutation) {
+		if (response.ok && isMutation && isApiRequest) {
 			const path = apiPathFromUrl(info.url);
 			const syncInfrastructure = path === "/api/client-state" || path === "/api/sync/action";
 			if (path.startsWith("/api/") && !syncInfrastructure && hasRecentUserAction()) {

@@ -1,6 +1,10 @@
 import { AUTH_BASE, apiGet, apiPost } from "./authApi";
 
 export type WorldTrack = {
+	releaseDate?: string | null;
+	recordLabel?: string;
+	artworkVersion?: string;
+	artworkObjectKey?: string;
 	id: string;
 	releaseId: string;
 	ownerUserId: string;
@@ -31,6 +35,8 @@ export type WorldTrack = {
 };
 
 export type WorldRelease = {
+	releaseDate?: string | null;
+	recordLabel?: string;
 	id: string;
 	ownerUserId: string;
 	artistId?: string;
@@ -157,6 +163,8 @@ export async function uploadWorldAsset(file: File) {
 }
 
 export async function publishWorldTrack(payload: {
+	releaseDate?: string;
+	recordLabel?: string;
 	title: string;
 	artistId: string;
 	releaseType: "single" | "album";
@@ -230,8 +238,8 @@ export function worldAudioUrl(trackId: string) {
 	return `${AUTH_BASE}/api/world/media/${encodeURIComponent(trackId)}/audio`;
 }
 
-export function worldArtworkUrl(trackId: string) {
-	return `${AUTH_BASE}/api/world/media/${encodeURIComponent(trackId)}/cover`;
+export function worldArtworkUrl(trackId: string, version?: string) {
+	return `${AUTH_BASE}/api/world/media/${encodeURIComponent(trackId)}/cover${version ? `?v=${encodeURIComponent(version)}` : ""}`;
 }
 
 export function worldPlaylistArtworkUrl(playlistId: string) {
@@ -239,6 +247,7 @@ export function worldPlaylistArtworkUrl(playlistId: string) {
 }
 
 export function updateWorldTrack(trackId: string, patch: {
+	releaseDate?: string | null; recordLabel?: string; artworkObjectKey?: string;
 	title?: string; genre?: string; tags?: string[]; description?: string; explicit?: boolean;
 	trackNumber?: number; isrc?: string; previouslyReleased?: boolean;
 }) {

@@ -41,6 +41,7 @@ import type { ProgressiveStemState, StemDependency, StemNode, StemProposal, Stem
 import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
 import { localAiChat } from "../lib/localAiApi";
+import { projectEndBar } from "../lib/dawDuration";
 import {
 	GM_PROGRAMS,
 	NOTE_NAMES,
@@ -56,7 +57,7 @@ import {
 type TrackType = "audio" | "instrument";
 type PartGeneration =
 	| { origin: "ai-composer" | "progressive-stem"; role: string; requestId: string; createdAt: string; replacedClipId?: string; parentRequestId?: string }
-	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string }
+	| { origin: "create-song"; role: string; vocalRole?: GeneratedSessionTrack["vocalRole"]; singerId?: string; singerName?: string; singerAvatarRef?: string; sourceTrackId: string; sessionId: string; createdAt: string; failure?: { code: "generation_failed" | "upload_failed"; message: string } }
 	| { origin: "generation-library"; role: string; sourcePartId: string; generationId: string; artifactId?: string; createdAt: string }
 	| { origin: "vocal-transcription"; role: "vocal melody"; sourceClipId: string; sourceAssetId: string; algorithm: "ysong-yin-v1"; createdAt: string };
 
@@ -186,7 +187,7 @@ const MAX_ZOOM_PCT = 400;
 const MIN_BARS = 64;
 const MAX_BARS = 512;
 // Position 65 is the boundary immediately after measure 64.
-const DEFAULT_END_BAR = 65;
+const DEFAULT_END_BAR = 2;
 const GM_EXPORT_CHANNELS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15] as const;
 
 // Add-track menu sizing (used for viewport clamping)
@@ -598,6 +599,7 @@ export default function DAW(_props: TabRendererProps) {
 		loopL: number;
 		loopR: number;
 		endBar: number;
+		endMarkerMode?: "auto" | "manual";
 		loopEnabled: boolean;
 
 		bpm: number;
@@ -774,6 +776,7 @@ export default function DAW(_props: TabRendererProps) {
 	const [loopL, setLoopL] = useState(1);
 	const [loopR, setLoopR] = useState(5);
 	const [endBar, setEndBar] = useState(DEFAULT_END_BAR);
+	const [endMarkerMode, setEndMarkerMode] = useState<"auto" | "manual">("auto");
 	const [bars, setBars] = useState(MIN_BARS);
 
 	// --- Transport state ---
@@ -794,8 +797,11 @@ export default function DAW(_props: TabRendererProps) {
 			Math.ceil(endBar + 8),
 		);
 		setBars((prev) => Math.min(MAX_BARS, Math.max(prev, maxNeed)));
-		// IMPORTANT: clips are allowed to extend past E. Never move E automatically.
 	}, [clips, loopR, playheadPosBars, endBar]);
+	useEffect(() => {
+		if (!dawHydrated || endMarkerMode !== "auto") return;
+		setEndBar(projectEndBar(clips, { maxBars: MAX_BARS }));
+	}, [dawHydrated, clips, endMarkerMode]);
 
 	type ProjectMeta = { id: string; name: string; updatedAt: number; generation?: GeneratedProjectProvenance };
 
@@ -865,6 +871,7 @@ export default function DAW(_props: TabRendererProps) {
 		setLoopL(1);
 		setLoopR(5);
 		setEndBar(DEFAULT_END_BAR);
+		setEndMarkerMode("auto");
 		setLoopEnabled(false);
 		setMasterLevel(100);
 		setFxChainTrackId(null);
@@ -1842,6 +1849,7 @@ export default function DAW(_props: TabRendererProps) {
 			setLoopR(nextR);
 		} else if (dragRef.current === "E") {
 			const nextE = clamp(bar, 1 + minGap, bars + 1);
+			setEndMarkerMode("manual");
 			setEndBar(nextE);
 			setLoopR((r) => Math.min(r, nextE));
 			setLoopL((l) => Math.min(l, Math.max(1, nextE - minGap)));
@@ -2852,6 +2860,7 @@ export default function DAW(_props: TabRendererProps) {
 			setLoopL(1);
 			setLoopR(5);
 			setEndBar(DEFAULT_END_BAR);
+			setEndMarkerMode("auto");
 			setBars(MIN_BARS);
 			setLoopEnabled(false);
 			setBpm(120);
@@ -2869,6 +2878,17 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 
 		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), mixer: normalizeMixerStrip(t.mixer) }));
+		const savedGeneration = parseSongGenerationResult(data.generation?.songResult);
+		if (data.generation?.origin === "create-song" && savedGeneration) {
+			for (const part of savedGeneration.parts) {
+				if (part.status !== "failed" || restoredTracks.some((track) => track.partGeneration?.origin === "create-song" && track.partGeneration.sourceTrackId === part.id)) continue;
+				const track = mkTrack(part.kind === "audio" ? "audio" : "instrument", restoredTracks.length + 1, crypto.randomUUID());
+				track.name = part.name;
+				track.partGeneration = { origin: "create-song", role: part.role, sourceTrackId: part.id, sessionId: savedGeneration.id,
+					createdAt: new Date(savedGeneration.createdAt).toISOString(), failure: part.failure };
+				restoredTracks.push({ ...track, level: track.level ?? 100, effects: normalizeTrackEffects(track.effects), mixer: normalizeMixerStrip(track.mixer) });
+			}
+		}
 		setProjectGeneration(data.generation && (data.generation.origin === "create-song" || data.generation.origin === "generation-library") ? data.generation : undefined);
 		setTracks(restoredTracks);
 		setClips(data.clips ?? []);
@@ -2893,7 +2913,9 @@ export default function DAW(_props: TabRendererProps) {
 		setPlayheadPosBars(data.playheadPosBars ?? 1);
 		setLoopL(data.loopL ?? 1);
 		setLoopR(data.loopR ?? 5);
-		setEndBar(data.endBar === 17 ? DEFAULT_END_BAR : (data.endBar ?? DEFAULT_END_BAR));
+		setEndBar(data.endBar ?? DEFAULT_END_BAR);
+		// Preserve deliberate legacy endpoints; retire the old fixed default of 65.
+		setEndMarkerMode(data.endMarkerMode ?? (data.endBar != null && data.endBar !== 65 ? "manual" : "auto"));
 		setBars(MIN_BARS);
 		setLoopEnabled(!!data.loopEnabled);
 
@@ -2923,6 +2945,7 @@ export default function DAW(_props: TabRendererProps) {
 		loopL,
 		loopR,
 		endBar,
+		endMarkerMode,
 		loopEnabled,
 		bpm,
 		sigNum,
@@ -3212,7 +3235,7 @@ export default function DAW(_props: TabRendererProps) {
 		return () => window.removeEventListener("keydown", onProjectShortcut);
 		// These are intentionally the same project-state inputs used by projectFileText().
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [projectName, projectGeneration, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
+	}, [projectName, projectGeneration, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, endMarkerMode, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
 
 	useEffect(() => {
 		// Never autosave the component's empty pre-hydration render. On cold start,
@@ -3255,6 +3278,7 @@ export default function DAW(_props: TabRendererProps) {
 		loopL,
 		loopR,
 		endBar,
+		endMarkerMode,
 		loopEnabled,
 		bpm,
 		sigNum,
@@ -3281,6 +3305,7 @@ export default function DAW(_props: TabRendererProps) {
 		loopL: number;
 		loopR: number;
 		endBar: number;
+		endMarkerMode: "auto" | "manual";
 		loopEnabled: boolean;
 		bpm: number;
 		sigNum: number;
@@ -3313,6 +3338,7 @@ export default function DAW(_props: TabRendererProps) {
 		loopL,
 		loopR,
 		endBar,
+		endMarkerMode,
 		loopEnabled,
 		bpm,
 		sigNum,
@@ -3371,7 +3397,7 @@ export default function DAW(_props: TabRendererProps) {
 		// Selection, zoom, scrolling, snap/grid choice and playhead movement are view/
 		// workflow state, not destructive musical edits, so they are not history steps.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
+	}, [dawHydrated, activeProjectId, tracks, clips, projectAssets, projectName, loopL, loopR, endBar, endMarkerMode, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
 
 	const applyHistoryEntry = (entry: DawHistoryEntry) => {
 		stop();
@@ -3384,6 +3410,7 @@ export default function DAW(_props: TabRendererProps) {
 		setLoopL(state.loopL);
 		setLoopR(state.loopR);
 		setEndBar(state.endBar);
+		setEndMarkerMode(state.endMarkerMode);
 		setLoopEnabled(state.loopEnabled);
 		setBpm(state.bpm);
 		setSigNum(state.sigNum);
@@ -3551,11 +3578,12 @@ export default function DAW(_props: TabRendererProps) {
 		const barSec = (60 / Math.max(1, manifest.bpm)) * (4 / Math.max(1, manifest.sigDen)) * Math.max(1, manifest.sigNum);
 		for (let index = 0; index < manifest.tracks.length; index++) {
 			const source = manifest.tracks[index];
-			if (songResult?.parts.find((part) => part.id === source.id)?.status === "failed") continue;
+			const resultPart = songResult?.parts.find((part) => part.id === source.id);
 			const partGeneration: PartGeneration = {
 				origin: "create-song", role: source.role, vocalRole: source.vocalRole,
 				singerId: source.singer?.id, singerName: source.singer?.displayName, singerAvatarRef: source.singer?.avatarRef,
 				sourceTrackId: source.id, sessionId, createdAt: new Date(manifest.createdAt).toISOString(),
+				...(resultPart?.status === "failed" ? { failure: resultPart.failure } : {}),
 			};
 			const trackId = crypto.randomUUID();
 			const track = mkTrack(source.mode === "midi" ? "instrument" : "audio", index + 1, trackId);
@@ -3572,6 +3600,7 @@ export default function DAW(_props: TabRendererProps) {
 			track.instrumentResolution = source.instrumentResolution;
 			nextTracks.push(track);
 			nextHeights[trackId] = ROW_H;
+			if (resultPart?.status === "failed") continue;
 
 			if (source.mode === "audio" && source.objectKey) {
 				const assetId = source.objectKey;
@@ -3621,6 +3650,7 @@ export default function DAW(_props: TabRendererProps) {
 		setTracks(nextTracks); setClips(nextClips); setProjectAssets(nextAssets); setTrackHeights(nextHeights);
 		setBars(Math.min(MAX_BARS, Math.max(MIN_BARS, manifest.totalBars + 8)));
 		setEndBar(Math.min(MAX_BARS, Math.max(2, manifest.totalBars + 1)));
+		setEndMarkerMode("auto");
 		setLoopL(1); setLoopR(Math.min(5, Math.max(2, manifest.totalBars + 1))); setLoopEnabled(false);
 		setPlayheadPosBars(1); setSelectedTrackId(nextTracks[0]?.id ?? null); setSelectedClipId(null);
 		generatedSessionPendingRef.current = null;
@@ -3706,7 +3736,8 @@ export default function DAW(_props: TabRendererProps) {
 		setBpm(timebase?.bpm ?? 120); bpmRef.current = timebase?.bpm ?? 120;
 		setSigNum(timebase?.sigNum ?? 4); setSigDen(timebase?.sigDen ?? 4);
 		sigNumRef.current = timebase?.sigNum ?? 4; sigDenRef.current = timebase?.sigDen ?? 4;
-		setEndBar(timebase ? Math.min(MAX_BARS, timebase.totalBars + 1) : 65);
+		setEndBar(projectEndBar(nextClips, { maxBars: MAX_BARS }));
+		setEndMarkerMode("auto");
 		setBars(timebase ? Math.min(MAX_BARS, Math.max(MIN_BARS, timebase.totalBars + 8)) : MIN_BARS);
 		setLoopL(1); setLoopR(timebase ? Math.min(5, timebase.totalBars + 1) : 5); setLoopEnabled(false);
 		generationImportPendingRef.current = null; generationImportTargetRef.current = null;
@@ -5150,6 +5181,7 @@ export default function DAW(_props: TabRendererProps) {
 		return trackId;
 	};
 
+	const openExportPanel = () => { setFileMenuOpen(false); setExportStatus(""); setExportOpen(true); };
 	return (
 		<div className={`daw-workspace h-full min-h-0 flex flex-col relative ${touchEditMode ? "daw-touch-edit" : ""}`}>
 			{/* App-style menu bar. Project file commands live here instead of consuming transport space. */}
@@ -5172,10 +5204,12 @@ export default function DAW(_props: TabRendererProps) {
 							<button type="button" role="menuitem" disabled={isSavingUi} className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 disabled:opacity-35 flex items-center justify-between gap-3" onClick={() => void saveProjectFile()}><span>Save Project</span><span className="text-[10px] opacity-40">Ctrl+S</span></button>
 							<button type="button" role="menuitem" disabled={isSavingUi} className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10 disabled:opacity-35 flex items-center justify-between gap-3" onClick={() => void saveProjectAsFile()}><span>Save Project As…</span><span className="text-[10px] opacity-40">Ctrl+Shift+S</span></button>
 							<div className="my-1 h-px bg-white/10" />
-							<button type="button" role="menuitem" className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10" onClick={() => { setFileMenuOpen(false); setExportStatus(""); setExportOpen(true); }}>Export…</button>
+							<button type="button" role="menuitem" className="w-full px-3 py-2 text-left text-[12px] hover:bg-white/10" onClick={openExportPanel}>Export…</button>
 						</div>
 					)}
 				</div>
+				<button type="button" onClick={openExportPanel} disabled={exporting} className="h-7 px-3 rounded-md text-[12px] border border-white/15 hover:bg-white/10 disabled:opacity-35">Export</button>
+				{endMarkerMode === "manual" && <button type="button" onClick={() => setEndMarkerMode("auto")} className="h-7 px-2 rounded-md text-[11px] hover:bg-white/10" title="Follow the last musical event or audio clip">Auto E</button>}
 				<div className="min-w-0 text-[10px] opacity-35 truncate px-1" title={projectName}>{projectName}</div>
 				<div className="ml-auto flex items-center gap-1">
 					<button type="button" onClick={() => { setAiComposerOpen((open) => !open); setDawAgentOpen(false); setInstrumentCatalogOpen(false); setSoundDesignerOpen(false); setProgressiveStemOpen(false); }} className={`h-7 px-3 rounded-md text-[11px] border ${aiComposerOpen ? "border-fuchsia-400/40 bg-fuchsia-500/20 text-fuchsia-100" : "border-white/10 hover:bg-white/[0.07]"}`} title="Open AI Composer — structured musical proposals">Composer</button>
@@ -5387,6 +5421,9 @@ export default function DAW(_props: TabRendererProps) {
 									</div>
 								) : (
 									<div className="w-full mt-1 h-6 flex items-center text-[9px] opacity-35">Native MIDI routing applies to instrument tracks</div>
+								)}
+								{t.partGeneration?.origin === "create-song" && t.partGeneration.failure && (
+									<div className="mt-1 text-[9px] text-amber-200 truncate" role="status" title={t.partGeneration.failure.message}>Needs retry: {t.partGeneration.failure.message}</div>
 								)}
 								{t.type === "instrument" && t.vst3PluginPath && (
 									<div className="mt-1 text-[9px] opacity-75 truncate" role="status" title={vstSoundState[t.id]}>

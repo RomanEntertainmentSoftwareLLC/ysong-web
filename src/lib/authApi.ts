@@ -97,6 +97,7 @@ export async function apiPost<T = unknown>(path: string, body: Record<string, an
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
+            "Idempotency-Key": typeof body.requestKey==='string'?body.requestKey:crypto.randomUUID(),
 			...authHeader(),
 		},
 		// `credentials: "include"` is only needed if you actually use cookies.

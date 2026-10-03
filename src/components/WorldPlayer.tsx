@@ -243,6 +243,23 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 		return seconds;
 	}, [accrueListenClock]);
 
+	useEffect(() => {
+		const edited = (event: Event) => {
+			const detail = (event as CustomEvent<{trackId?: string; patch?: Partial<WorldTrack>}>).detail;
+			if (!detail?.trackId || !detail.patch) return;
+			const patch = detail.patch;
+			const apply = (track: WorldTrack) => track.id === detail.trackId ? {...track,...patch} :
+				patch.releaseId && track.releaseId === patch.releaseId ? {...track,
+					...(patch.artworkVersion !== undefined ? {artworkVersion:patch.artworkVersion,hasArtwork:patch.hasArtwork ?? track.hasArtwork} : {}),
+					...(patch.releaseDate !== undefined ? {releaseDate:patch.releaseDate} : {}),
+					...(patch.recordLabel !== undefined ? {recordLabel:patch.recordLabel} : {})} : track;
+			setCurrent(previous => {const next=previous?apply(previous):null;currentRef.current=next;return next;});
+			setQueue(previous => {const next=previous.map(apply);queueRef.current=next;return next;});
+		};
+		window.addEventListener("ysong:world-track-patch",edited);
+		return () => window.removeEventListener("ysong:world-track-patch",edited);
+	}, []);
+
 	// Restore the last World track/queue without autoplay. The dock and Visuals transport
 	// should still know what the user left off on after a reload/restart.
 	// If this is the first run of the persistence fix, recover the last World track
@@ -1118,8 +1135,8 @@ export function WorldPlayerProvider({ children }: { children: ReactNode }) {
 	return (
 		<WorldPlayerContext.Provider value={value}>
 			{children}
-			<audio ref={audioARef} onPlay={() => onPlay("a")} onPause={() => onPause("a")} onEnded={() => handleEnded("a")} />
-			<audio ref={audioBRef} onPlay={() => onPlay("b")} onPause={() => onPause("b")} onEnded={() => handleEnded("b")} />
+			<audio ref={audioARef} crossOrigin="anonymous" onPlay={() => onPlay("a")} onPause={() => onPause("a")} onEnded={() => handleEnded("a")} />
+			<audio ref={audioBRef} crossOrigin="anonymous" onPlay={() => onPlay("b")} onPause={() => onPause("b")} onEnded={() => handleEnded("b")} />
 			<audio ref={adAudioRef} onPlay={() => { claimPlaybackOwner("world"); setPlaying(true); }} onPause={() => { if (activeAdRef.current && !adAudioRef.current?.ended) setPlaying(false); }} onEnded={handleAdEnded} />
 		</WorldPlayerContext.Provider>
 	);
@@ -1327,7 +1344,7 @@ function NowPlaying({ current, queueLabel, compact = false, adBreakActive = fals
 	return <div className={`min-w-0 flex items-center gap-2.5 ${compact ? "flex-1" : ""}`}>
 		{adBreakActive
 			? <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg border border-amber-400/20 bg-amber-500/10 grid place-items-center text-[10px] font-black tracking-widest text-amber-200`}>AD</div>
-			: current.hasArtwork ? <img src={worldArtworkUrl(current.id)} alt="" className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg object-cover bg-neutral-900`} /> : <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg bg-neutral-900 grid place-items-center text-neutral-600`}>♪</div>}
+			: current.hasArtwork ? <img src={worldArtworkUrl(current.id,current.artworkVersion)} alt="" className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg object-cover bg-neutral-900`} /> : <div className={`${compact ? "h-10 w-10" : "h-12 w-12"} shrink-0 rounded-lg bg-neutral-900 grid place-items-center text-neutral-600`}>♪</div>}
 		<div className="min-w-0"><div className="font-medium text-sm truncate">{adBreakActive ? adTitle : current.title}</div><div className="text-xs text-neutral-500 truncate">{adBreakActive ? (adSponsor || "Sponsored message") : current.artistName}</div>{queueLabel && !compact && <div className="text-[10px] text-neutral-600 truncate">{queueLabel}</div>}</div>
 	</div>;
 }
