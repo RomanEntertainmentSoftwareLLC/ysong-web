@@ -11,6 +11,7 @@
  */
 
 import { AUTH_BASE } from "./authApi";
+const LAN_SYNC_ENABLED = import.meta.env.DEV;
 
 const CHANNEL_NAME = "ysong-device-sync-v2";
 const WINDOW_ID_KEY = "ysong:deviceSync:windowId";
@@ -326,7 +327,7 @@ export function notifyRemoteWindows(reason = "state-change") {
 		if (ch) ch.postMessage(message);
 
 		const token = readToken();
-		if (token) {
+		if (token && LAN_SYNC_ENABLED) {
 			void fetch("/api/sync/action", {
 				method: "POST",
 				headers: {
@@ -519,6 +520,8 @@ function installUserActionHooks() {
 }
 
 function connectServerEvents() {
+	// The LAN relay is a local development service, not a Vercel API route.
+	if (!LAN_SYNC_ENABLED) return;
 	if (!canParticipate() || typeof EventSource === "undefined") return;
 	const token = readToken();
 	if (!token) return;

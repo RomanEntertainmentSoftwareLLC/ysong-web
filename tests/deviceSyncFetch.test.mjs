@@ -9,6 +9,18 @@ const start = source.indexOf("function installFetchHook()");
 const end = source.indexOf("\n}\n", start) + 3;
 const code = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
+test('production does not open the development-only LAN event stream', () => {
+  const ast = ts.createSourceFile('sync.ts', source, ts.ScriptTarget.Latest, true);
+  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'connectServerEvents');
+  let opened = 0;
+  const context = vm.createContext({ LAN_SYNC_ENABLED: false, canParticipate: () => true,
+    readToken: () => 'test-token', URLSearchParams, windowId: 'test', eventSource: null,
+    EventSource: class { constructor() { opened++; } }, devLog: () => {} });
+  vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  context.connectServerEvents(); assert.equal(opened, 0);
+  context.LAN_SYNC_ENABLED = true; context.connectServerEvents(); assert.equal(opened, 1);
+});
+
 test('client-state hydration, saves and boot seeding use the configured API origin', async () => {
   const ast = ts.createSourceFile('sync.ts', source, ts.ScriptTarget.Latest, true);
   const names = ['fetchClientState', 'pushClientState', 'pushClientStateAfterSuppression'];
