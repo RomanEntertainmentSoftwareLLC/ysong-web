@@ -9,6 +9,26 @@ const start = source.indexOf("function installFetchHook()");
 const end = source.indexOf("\n}\n", start) + 3;
 const code = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
+test('client-state hydration, saves and boot seeding use the configured API origin', async () => {
+  const ast = ts.createSourceFile('sync.ts', source, ts.ScriptTarget.Latest, true);
+  const names = ['fetchClientState', 'pushClientState', 'pushClientStateAfterSuppression'];
+  const calls = [];
+  const context = vm.createContext({ AUTH_BASE: 'https://api.ysong.test', windowId: 'test',
+    readToken: () => 'test-token', isAppPage: () => true, canParticipate: () => true,
+    isSuppressed: () => false, isYSongStateKey: () => true, stableStorageValue: (_key, value) => value,
+    devLog: () => {}, fetch: async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ state: {} }) }; } });
+  for (const name of names) {
+    const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert.ok(fn);
+    vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  }
+  await context.fetchClientState();
+  await context.pushClientState('ysong:test', 'value');
+  await context.pushClientStateAfterSuppression('ysong:test', 'value');
+  assert.equal(calls.length, 3);
+  for (const call of calls) assert.equal(call.url, 'https://api.ysong.test/api/client-state');
+});
+
 for (const [url, expected] of [
   ["http://127.0.0.1:39451/ui/open", false],
   ["http://127.0.0.1:39451/vst3/load", false],

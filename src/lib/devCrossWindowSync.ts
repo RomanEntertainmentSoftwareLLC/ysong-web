@@ -196,7 +196,7 @@ function isYSongStateKey(key: string): boolean {
 async function fetchClientState(): Promise<Record<string, string>> {
 	const token = readToken();
 	if (!token || !isAppPage()) return {};
-	const res = await fetch("/api/client-state", {
+	const res = await fetch(`${AUTH_BASE}/api/client-state`, {
 		headers: { Authorization: `Bearer ${token}` },
 		credentials: "include",
 	});
@@ -217,7 +217,7 @@ async function pushClientState(key: string, raw: string | null, remove = false) 
 	const value = stableStorageValue(key, raw);
 	if (!remove && value == null) return;
 	try {
-		await fetch("/api/client-state", {
+		await fetch(`${AUTH_BASE}/api/client-state`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -282,7 +282,7 @@ async function pushClientStateAfterSuppression(key: string, value: string) {
 	const stable = stableStorageValue(key, value);
 	if (stable == null) return;
 	try {
-		await fetch("/api/client-state", {
+		await fetch(`${AUTH_BASE}/api/client-state`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
