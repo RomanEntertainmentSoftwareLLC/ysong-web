@@ -246,12 +246,17 @@ export function worldPlaylistArtworkUrl(playlistId: string) {
 	return `${AUTH_BASE}/api/world/playlists/${encodeURIComponent(playlistId)}/artwork`;
 }
 
-export function updateWorldTrack(trackId: string, patch: {
+export async function updateWorldTrack(trackId: string, patch: {
 	releaseDate?: string | null; recordLabel?: string; artworkObjectKey?: string;
 	title?: string; genre?: string; tags?: string[]; description?: string; explicit?: boolean;
 	trackNumber?: number; isrc?: string; previouslyReleased?: boolean;
 }) {
-	return request<{ ok: true; track: WorldTrack }>(`/api/world/tracks/${encodeURIComponent(trackId)}`, "PATCH", patch);
+	const result = await request<{ ok: true; track: WorldTrack }>(`/api/world/tracks/${encodeURIComponent(trackId)}`, "PATCH", patch);
+	if ((patch.releaseDate !== undefined && result.track.releaseDate !== (patch.releaseDate || null)) ||
+		(patch.recordLabel !== undefined && result.track.recordLabel !== patch.recordLabel.trim())) {
+		throw new Error("The server did not save the release date or record label. Keep this form open and retry after the API update.");
+	}
+	return result;
 }
 
 export function updateWorldRelease(releaseId: string, patch: { artistName?: string; title?: string; genre?: string }) {
