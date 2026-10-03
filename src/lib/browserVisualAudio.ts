@@ -93,20 +93,29 @@ function queuePublish() {
 }
 
 export function startVisualAnalysisForMediaElement(element: HTMLMediaElement) {
-	const tap = createTap(element);
+	let tap: AudioTap | null = null;
 	let slowBass = 0;
 	let kickEnvelope = 0;
 	let stopped = false;
 	let busy = false;
-	const time = new Float32Array(tap.analyser.fftSize);
-	const freq = new Float32Array(tap.analyser.frequencyBinCount);
+	let time = new Float32Array(0);
+	let freq = new Float32Array(0);
 
-	const resume = () => { if (tap.context.state !== "running") void tap.context.resume().catch(() => {}); };
+	const resume = () => {
+		if (stopped || element.paused) return;
+		// Idle decks must not create/resume Web Audio before a playback gesture.
+		if (!tap) {
+			tap = createTap(element);
+			time = new Float32Array(tap.analyser.fftSize);
+			freq = new Float32Array(tap.analyser.frequencyBinCount);
+		}
+		if (tap.context.state !== "running") void tap.context.resume().catch(() => {});
+	};
 	element.addEventListener("play", resume);
 	resume();
 
 	const timer = window.setInterval(() => {
-		if (stopped || busy || element.paused) return;
+		if (stopped || busy || element.paused || !tap) return;
 		busy = true;
 		try {
 			tap.analyser.getFloatTimeDomainData(time);
