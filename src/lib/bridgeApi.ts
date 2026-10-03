@@ -1,3 +1,4 @@
+import { createBridgeBackoff } from './bridgeBackoff';
 // In local Vite development, route Bridge calls through the same-origin
 // /bridge proxy. That avoids browser CORS/Local Network Access restrictions
 // around direct cross-origin loopback fetches. A production build still talks
@@ -712,7 +713,7 @@ export const bridgeApi = {
 		bridgeEventSource<{ sequence: number; scene: T }>("/visuals/state/events", onEvent, onConnection),
 	uploadVisualMedia: (file: File) => bridgeUploadVisualMedia(file),
 	getVisualTransport: () => bridgeFetch<VisualTransportState>("/visuals/transport", undefined, 5000),
-	setVisualTransport: (state: VisualTransportState) => bridgeFetch<{ ok: true; sequence: number }>("/visuals/transport", { method: "POST", body: JSON.stringify(state) }, 5000),
+	setVisualTransport: createBridgeBackoff((state: VisualTransportState) => bridgeFetch<{ ok: true; sequence: number }>("/visuals/transport", { method: "POST", body: JSON.stringify(state) }, 5000)),
 	subscribeVisualTransport: (onEvent: (state: VisualTransportState) => void, onConnection?: (connected: boolean) => void) =>
 		bridgeEventSource<VisualTransportState>("/visuals/transport/events", onEvent, onConnection),
 	pushVisualRoomEffect: (effect: VisualRoomAudienceEffect) =>

@@ -1,4 +1,5 @@
 import { AUTH_BASE, apiGet, apiPost } from "./authApi";
+import { uploadAssetInParts } from "./multipartUpload";
 
 export type WorldTrack = {
 	releaseDate?: string | null;
@@ -147,6 +148,10 @@ async function request<T>(path: string, method: "POST" | "PATCH" | "DELETE", bod
 }
 
 export async function uploadWorldAsset(file: File) {
+	if (file.size > 8 * 1024 * 1024) {
+		const uploaded = await uploadAssetInParts(file, AUTH_BASE, token() ? { Authorization: `Bearer ${token()}` } : {});
+		if (uploaded) return uploaded;
+	}
 	const form = new FormData();
 	form.append("file", file);
 	const res = await fetch(`${AUTH_BASE}/api/uploads`, {

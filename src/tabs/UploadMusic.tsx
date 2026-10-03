@@ -131,7 +131,7 @@ export default function UploadMusicPane() {
 							<label onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f?.type.startsWith("audio/") || /\.(wav|flac|mp3|m4a|aac|ogg)$/i.test(f?.name || "")) setAudio(f); }} className="rounded-2xl border-2 border-dashed border-neutral-700 bg-neutral-900 p-5 cursor-pointer block hover:bg-neutral-800/70">
 								<input type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" className="hidden" onChange={(e) => setAudio(e.target.files?.[0] || null)} />
 								<div className="font-medium">{audio ? audio.name : "+ Drag audio here or click to upload"}</div>
-								<div className="text-xs text-neutral-500 mt-1">WAV, FLAC, MP3, M4A, AAC or OGG • pre-alpha max follows server upload limit</div>
+								<div className="text-xs text-neutral-500 mt-1">WAV, FLAC, MP3, M4A, AAC or OGG</div>
 							</label>
 						</div>
 					</div>
