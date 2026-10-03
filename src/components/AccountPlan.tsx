@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost } from '../lib/authApi';
+import { billingDestination } from '../lib/billingRedirect';
 import BillingAccount from './BillingAccount';
 import PolicyAcceptance from './PolicyAcceptance';
 import GovernanceAdmin from './GovernanceAdmin';
@@ -10,7 +11,8 @@ type Account = { id: string; email: string; display_name: string; account_status
 const button = 'rounded-lg border border-white/15 px-3 py-1.5 text-xs disabled:opacity-40';
 export default function AccountPlan({ administration = false, quantity }: { administration?: boolean; quantity?:number }) {
   const [entitlement,setEntitlement]=useState<Entitlement|null>(null);
-  const [plans,setPlans]=useState<Array<{id:string;name:string}>>([]);
+  const [plans,setPlans]=useState<Array<{id:string;name:string;available:boolean}>>([]);
+  const checkoutInFlight=useRef(false);
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [query,setQuery]=useState(''); const [reason,setReason]=useState('');
   const [selected,setSelected]=useState(''); const [action,setAction]=useState('note');
@@ -19,22 +21,22 @@ export default function AccountPlan({ administration = false, quantity }: { admi
   const [expires,setExpires]=useState(''); const [busy,setBusy]=useState(false); const [message,setMessage]=useState('');
   async function refresh() {
     const data=await apiGet<Entitlement>('/api/account/entitlements');setEntitlement(data);
-    if(data.enabled)setPlans((await apiGet<{plans:Array<{id:string;name:string}>}>('/api/billing/plans')).plans);
+    if(data.enabled)setPlans((await apiGet<{plans:Array<{id:string;name:string;available:boolean}>}>('/api/billing/catalog')).plans);
   }
   useEffect(()=>{let alive=true;void apiGet<Entitlement>('/api/account/entitlements').then(data=>{
     if(!alive)return;setEntitlement(data);
-    if(data.enabled)void apiGet<{plans:Array<{id:string;name:string}>}>('/api/billing/plans').then(result=>{if(alive)setPlans(result.plans);}).catch(()=>{});
+    if(data.enabled)void apiGet<{plans:Array<{id:string;name:string;available:boolean}>}>('/api/billing/catalog').then(result=>{if(alive)setPlans(result.plans);}).catch(()=>{});
   }).catch(()=>{});return()=>{alive=false;};},[]);
   async function lookup(){setBusy(true);setMessage('');try{setAccounts((await apiGet<{accounts:Account[]}>(`/api/admin/accounts?q=${encodeURIComponent(query)}`)).accounts);}catch(e){setMessage(e instanceof Error?e.message:'Account lookup failed.');}finally{setBusy(false);}}
   async function act(){setBusy(true);setMessage('');try{
     const value=action==='override'?{planId:compPlan||null,quota:quota===''?null:Number(quota),expiresAt:expires?new Date(expires).toISOString():null}:action==='generation'||action==='uploads'?true:action==='enable_generation'||action==='enable_uploads'?false:null;
     await apiPost(`/api/admin/accounts/${selected}/actions`,{action:action.replace('enable_',''),value,reason});setMessage('Action saved in the admin audit log.');await refresh();
   }catch(e){setMessage(e instanceof Error?e.message:'Admin action failed.');}finally{setBusy(false);}}
-  async function checkout(planId:string){setBusy(true);setMessage('');try{
+  async function checkout(planId:string){if(checkoutInFlight.current||!plans.some(p=>p.id===planId&&p.available))return;checkoutInFlight.current=true;setBusy(true);setMessage('Starting secure checkout…');try{
     const keyName=`ysong:checkout:${planId}`;const requestKey=sessionStorage.getItem(keyName)||crypto.randomUUID();sessionStorage.setItem(keyName,requestKey);
     const result=await apiPost<{url:string}>('/api/billing/checkout',{planId,requestKey});
-    const url=new URL(result.url);if(url.protocol!=='https:'||url.hostname!=='checkout.stripe.com')throw new Error('Invalid checkout destination.');window.location.assign(url.href);
-  }catch(e){setMessage(e instanceof Error?e.message:'Checkout unavailable.');setBusy(false);}}
+    window.location.assign(billingDestination(result.url,'checkout.stripe.com'));
+  }catch(e){checkoutInFlight.current=false;setMessage(e instanceof Error?e.message:'Checkout unavailable.');setBusy(false);}}
   if(!entitlement?.enabled)return null;
   return <section className="rounded-xl border border-white/10 p-3 space-y-3">
     <BillingAccount />
@@ -43,7 +45,7 @@ export default function AccountPlan({ administration = false, quantity }: { admi
     {administration&&entitlement.admin&&<GovernanceAdmin />}
     {administration&&entitlement.admin&&<RecoveryAdmin />}
     <div className="flex flex-wrap items-center gap-3"><strong className="text-sm">{entitlement.name}</strong><span className="text-xs opacity-70">{entitlement.superadmin?'Full access · generation quota bypass':entitlement.quota===null?'Generation quota awaiting configuration':`${entitlement.remaining} / ${entitlement.quota} generation units remaining${entitlement.reserved?` · ${entitlement.reserved} reserved`:''}`}</span><button className={button} disabled={busy} onClick={()=>void refresh().catch(()=>setMessage('Could not refresh account.'))}>Refresh</button></div>
-    {!entitlement.superadmin&&plans.filter(p=>p.id!==entitlement.planId&&p.id!=='free').map(plan=><button key={plan.id} className={`${button} mr-2`} disabled={busy} onClick={()=>void checkout(plan.id)}>Choose {plan.name}</button>)}
+    {!entitlement.superadmin&&plans.filter(p=>p.id!==entitlement.planId&&p.id!=='free').map(plan=><button key={plan.id} className={`${button} mr-2`} disabled={busy||!plan.available} onClick={()=>void checkout(plan.id)}>{plan.available?`Choose ${plan.name}`:`${plan.name} unavailable`}</button>)}
     {entitlement.resetAt&&!entitlement.superadmin&&<p className="text-xs opacity-60">Quota period ends {new Date(entitlement.resetAt).toLocaleDateString()}.</p>}
     {!entitlement.superadmin&&<p className="text-xs">{entitlement.used} used · {entitlement.reserved} reserved · {entitlement.remaining??0} remaining{quantity?` · This request requires ${quantity} credits`:''}{quantity&&entitlement.remaining!==null&&quantity>entitlement.remaining?' · Insufficient quota':''}</p>}
     {administration&&entitlement.admin&&<div className="border-t border-white/10 pt-3 space-y-2"><strong className="text-sm">Account administration</strong>
