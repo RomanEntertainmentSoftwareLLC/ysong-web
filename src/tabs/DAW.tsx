@@ -42,6 +42,7 @@ import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
 import { localAiChat } from "../lib/localAiApi";
 import { projectEndBar } from "../lib/dawDuration";
+import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
 import {
 	GM_PROGRAMS,
 	NOTE_NAMES,
@@ -2831,13 +2832,18 @@ export default function DAW(_props: TabRendererProps) {
 		setSaveError(null);
 		let stored: string | null = null;
 		let storedName = "Untitled Project";
+		let journalRaw: string | null = null;
 		try {
 			stored = localStorage.getItem(DAW_STORAGE_KEY);
 			storedName = localStorage.getItem(PROJECT_NAME_KEY) || storedName;
+			journalRaw = localStorage.getItem(journalKey(activeProjectId));
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : "Could not read local project storage.");
 		}
-		const data = safeParse<DawPersistV1>(stored);
+		const recovered = recoverJournal(safeParse<DawPersistV1>(stored), stored, journalRaw);
+		const data = recovered?.state ?? safeParse<DawPersistV1>(stored);
+		if (recovered) storedName = recovered.name;
+		setProjectName(storedName);
 		if (!data || data.v !== 1) {
 			// New/empty project: reset to defaults
 			setProjectGeneration(undefined);
@@ -2971,6 +2977,7 @@ export default function DAW(_props: TabRendererProps) {
 			localStorage.setItem(DAW_STORAGE_KEY, JSON.stringify(buildDawPersistPayload()));
 			localStorage.setItem(PROJECT_NAME_KEY, projectName);
 			upsertProjectMeta(activeProjectId, projectName, projectGeneration);
+			localStorage.removeItem(journalKey(activeProjectId));
 			setPersistedSnapshot({ id: activeProjectId, fingerprint: currentFingerprint });
 			setSaveError(null);
 			return true;
@@ -3088,6 +3095,9 @@ export default function DAW(_props: TabRendererProps) {
 			setPendingProjectId(null);
 			setProjectSheetOpen(true);
 			return;
+		}
+		if (!saveFirst) {
+			try { localStorage.removeItem(journalKey(activeProjectId)); } catch { /* Storage errors are shown on the next open. */ }
 		}
 		loadProject(id);
 	};
@@ -3247,7 +3257,16 @@ export default function DAW(_props: TabRendererProps) {
 		setIsSavingUi(true);
 		autosaveTimerRef.current = window.setTimeout(() => {
 			autosaveTimerRef.current = null;
-			persistCurrentProject();
+			try {
+				const baseText = localStorage.getItem(DAW_STORAGE_KEY);
+				const next = appendJournal(localStorage.getItem(journalKey(activeProjectId)),
+					safeParse<DawPersistV1>(baseText), baseText, buildDawPersistPayload(), projectName);
+				localStorage.setItem(journalKey(activeProjectId), next);
+				setPersistedSnapshot({ id: activeProjectId, fingerprint: currentFingerprint });
+				setSaveError(null);
+			} catch (error) {
+				setSaveError(error instanceof Error ? error.message : "Could not autosave the project journal.");
+			}
 			setIsSavingUi(false);
 		}, 150);
 
