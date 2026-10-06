@@ -201,6 +201,7 @@ export default function VisualsPane() {
 			const next = remoteValid && (!backup || (remote.updatedAt || 0) >= (backup.updatedAt || 0))
 				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
 			hydratedSceneRef.current=next;
+			sceneRef.current=next;
 			setScene(next); sceneReadyRef.current=true; writeVisualSceneBackup(next,next.updatedAt);
 			// Rehydration is a scene replacement: an old ID must not silently select a new object.
 			setSelectedId(next.layers[0]?.id||next.cameras[0]?.id||"");
