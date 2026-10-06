@@ -2401,7 +2401,6 @@ export default function VisualOutput() {
 			mesh: THREE.Mesh | null;
 			height: number;
 			heightMouseY: number;
-			ignoreNextClick: boolean;
 		};
 		let placementState: PlacementRuntime | null = null;
 		const placementGroundY = -3.15;
@@ -2474,7 +2473,6 @@ export default function VisualOutput() {
 				mesh,
 				height: 0.05,
 				heightMouseY: 0,
-				ignoreNextClick: false,
 			};
 			hoveredSelectableId = "";
 			canvas.style.cursor = "crosshair";
@@ -2490,12 +2488,12 @@ export default function VisualOutput() {
 			let sy = Math.max(0.05, state.height),
 				height = Math.max(0.05, state.height),
 				py = placementGroundY + sy * 0.5;
-			const radius = Math.max(0.025, Math.max(sx, sz) * 0.5);
+			const radius = Math.max(0.025, Math.hypot(b.x - a.x, b.z - a.z));
 			if (state.primitive !== "box") {
 				if (state.primitive === "sphere" || state.primitive === "icosphere") {
 					height = radius * 2;
 					sy = height;
-					py = placementGroundY + radius;
+					py = placementGroundY;
 				} else if (state.primitive === "plane") {
 					sy = 0.02;
 					height = 0.02;
@@ -2517,7 +2515,7 @@ export default function VisualOutput() {
 			if (!state?.mesh || !state.anchor || !state.current) return;
 			const d = placementDimensions(state);
 			state.mesh.visible = true;
-			state.mesh.position.set(d.cx, d.py, d.cz);
+			state.mesh.position.set(state.primitive === "sphere" || state.primitive === "icosphere" ? state.anchor.x : d.cx, d.py, state.primitive === "sphere" || state.primitive === "icosphere" ? state.anchor.z : d.cz);
 			if (state.primitive === "sphere" || state.primitive === "icosphere")
 				state.mesh.scale.setScalar(d.radius * 2);
 			else if (
@@ -2534,15 +2532,16 @@ export default function VisualOutput() {
 		const finalizePlacement = () => {
 			const state = placementState;
 			if (!state?.anchor || !state.current) return;
+			suppressEditorClick = true;
 			const d = placementDimensions(state);
 			window.parent.postMessage(
 				{
 					type: "ysong-primitive-placement-finalize",
 					primitive: state.primitive,
 					color: state.color,
-					positionX: d.cx,
+					positionX: state.primitive === "sphere" || state.primitive === "icosphere" ? state.anchor.x : d.cx,
 					positionY: d.py,
-					positionZ: d.cz,
+					positionZ: state.primitive === "sphere" || state.primitive === "icosphere" ? state.anchor.z : d.cz,
 					sizeX: d.sx,
 					sizeY: d.sy,
 					sizeZ: d.sz,
@@ -2582,11 +2581,19 @@ export default function VisualOutput() {
 		};
 		const onPlacementMouseDown = (event: MouseEvent) => {
 			const state = placementState;
-			if (!state || event.button !== 0 || state.phase === "height") return;
+			if (!state || event.button !== 0) return;
 			event.preventDefault();
 			event.stopPropagation();
+			if (state.phase === "height") { finalizePlacement(); return; }
 			const point = placementPoint(event);
 			if (!point) return;
+			if (state.phase === "base") {
+				state.current = point;
+				updatePlacementPreview();
+				if (state.primitive === "box") { state.phase = "height"; state.heightMouseY = event.clientY; }
+				else finalizePlacement();
+				return;
+			}
 			state.anchor = point.clone();
 			state.current = point.clone();
 			state.phase = "base";
@@ -2608,32 +2615,13 @@ export default function VisualOutput() {
 			}
 		};
 		const onPlacementMouseUp = (event: MouseEvent) => {
-			const state = placementState;
-			if (!state || event.button !== 0 || state.phase !== "base") return;
-			event.preventDefault();
-			event.stopPropagation();
-			const point = placementPoint(event);
-			if (point) state.current = point;
-			updatePlacementPreview();
-			if (state.primitive === "box") {
-				state.phase = "height";
-				state.heightMouseY = event.clientY;
-				state.ignoreNextClick = true;
-			} else {
-				suppressEditorClick = true;
-				finalizePlacement();
-			}
+			if (placementState && event.button === 0) { event.preventDefault(); event.stopPropagation(); }
 		};
 		const onPlacementClick = (event: MouseEvent) => {
 			const state = placementState;
-			if (!state || event.button !== 0 || state.phase !== "height") return;
+			if (!state || event.button !== 0) return;
 			event.preventDefault();
 			event.stopPropagation();
-			if (state.ignoreNextClick) {
-				state.ignoreNextClick = false;
-				return;
-			}
-			finalizePlacement();
 		};
 		const onPlacementKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Escape" && placementState) {
@@ -6861,7 +6849,7 @@ export default function VisualOutput() {
 			canvas.removeEventListener("click", onModelPlacementClick, true);
 			canvas.removeEventListener("dragover", onViewportDragOver);
 			canvas.removeEventListener("drop", onViewportDrop);
-			clearPlacement(false);
+			clearPlacement(true);
 			transformControls?.detach();
 			transformControls?.dispose();
 			transformControls?.getHelper().removeFromParent();
