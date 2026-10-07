@@ -14,6 +14,7 @@ import {
 } from "../lib/midi";
 import { YSButton } from "./YSButton";
 import TransportConsole from "./TransportConsole";
+import { humanizeNotes, quantizeNotes, transformNotes } from "../lib/midiEdit";
 
 export type MidiEditableClip = {
   id: string;
@@ -199,6 +200,22 @@ export default function MidiEditor({
   const [lane, setLane] = useState<ControlLane>("velocity");
   const [tool, setTool] = useState<ToolMode>("pencil");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
+  const [quantizeStrength, setQuantizeStrength] = useState(100);
+  const [humanizeTiming, setHumanizeTiming] = useState(10);
+  const [humanizeVelocity, setHumanizeVelocity] = useState(8);
+  const [undoDepth, setUndoDepth] = useState(0);
+  const undoRef = useRef<MidiNote[][]>([]);
+  const editClipRef = useRef(clip.id);
+  if (editClipRef.current !== clip.id) {
+    editClipRef.current = clip.id;
+    undoRef.current = [];
+  }
+  useEffect(() => {
+    setSelectedNoteId(null);
+    setSelectedNoteIds([]);
+    setUndoDepth(0);
+  }, [clip.id]);
   const [activeScaleRuleId, setActiveScaleRuleId] = useState<string>(scaleRules[0]?.id ?? DEFAULT_SCALE_RULE.id);
   const [gridValue, setGridValue] = useState<MidiGridValue>(loadSavedMidiGrid);
   const [editorSnap, setEditorSnap] = useState(snapEnabled);
@@ -274,15 +291,44 @@ export default function MidiEditor({
     ? nearestAllowedPitch(pitch, scaleRules)
     : clamp(Math.round(pitch), 0, 127);
 
-  const updateNote = (id: string, patch: Partial<MidiNote>) => {
-    onChange({ midiNotes: notes.map((n) => n.id === id ? { ...n, ...patch } : n) });
+  const replaceNotes = (next: MidiNote[], record = true) => {
+    if (record && (next.length !== notes.length || next.some((note, index) => note !== notes[index]))) {
+      undoRef.current = [...undoRef.current.slice(-49), notes.map((note) => ({ ...note }))];
+      setUndoDepth(undoRef.current.length);
+    }
+    onChange({ midiNotes: next });
   };
-
-  const replaceNotes = (next: MidiNote[]) => onChange({ midiNotes: next });
+  const updateNote = (id: string, patch: Partial<MidiNote>, record = true) => {
+    replaceNotes(notes.map((n) => n.id === id ? { ...n, ...patch } : n), record);
+  };
+  const undo = () => {
+    const previous = undoRef.current.pop();
+    if (!previous) return;
+    setUndoDepth(undoRef.current.length);
+    onChange({ midiNotes: previous });
+    setSelectedNoteIds((ids) => ids.filter((id) => previous.some((note) => note.id === id)));
+  };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) {
+        event.preventDefault();
+        const previous = undoRef.current.pop();
+        if (!previous) return;
+        setUndoDepth(undoRef.current.length);
+        onChange({ midiNotes: previous });
+        setSelectedNoteIds((ids) => ids.filter((id) => previous.some((note) => note.id === id)));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onChange]);
+  const targetIds = () => new Set(selectedNoteIds.length ? selectedNoteIds : notes.map((note) => note.id));
+  const applyToSelection = (next: MidiNote[]) => replaceNotes(next);
 
   const removeNote = (id: string) => {
     replaceNotes(notes.filter((n) => n.id !== id));
     if (selectedNoteId === id) setSelectedNoteId(null);
+    setSelectedNoteIds((ids) => ids.filter((noteId) => noteId !== id));
   };
 
   const addNoteAt = (pitch: number, clientX: number, rect: DOMRect) => {
@@ -298,6 +344,7 @@ export default function MidiEditor({
     };
     replaceNotes([...notes, note]);
     setSelectedNoteId(note.id);
+    setSelectedNoteIds([note.id]);
     onPreview(note.pitch, note.velocity);
   };
 
@@ -315,6 +362,7 @@ export default function MidiEditor({
     };
     replaceNotes(notes.flatMap((n) => n.id === note.id ? [left, right] : [n]));
     setSelectedNoteId(right.id);
+    setSelectedNoteIds([right.id]);
   };
 
   type DragState = {
@@ -325,6 +373,7 @@ export default function MidiEditor({
     startBars: number;
     lengthBars: number;
     pitch: number;
+    recorded: boolean;
   };
   const dragRef = useRef<DragState | null>(null);
 
@@ -340,6 +389,10 @@ export default function MidiEditor({
       return;
     }
     setSelectedNoteId(note.id);
+    setSelectedNoteIds((ids) => e.shiftKey || e.ctrlKey || e.metaKey
+      ? ids.includes(note.id) ? ids.filter((id) => id !== note.id) : [...ids, note.id]
+      : ids.includes(note.id) ? ids : [note.id]);
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return;
     if (tool !== "select") {
       onPreview(note.pitch, note.velocity);
       return;
@@ -352,6 +405,7 @@ export default function MidiEditor({
       startBars: note.startBars,
       lengthBars: note.lengthBars,
       pitch: note.pitch,
+      recorded: false,
     };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
@@ -364,7 +418,8 @@ export default function MidiEditor({
     if (st.mode === "resize") {
       const raw = st.lengthBars + dxBars;
       const next = editorSnap ? Math.round(raw / gridStepBars) * gridStepBars : raw;
-      updateNote(st.noteId, { lengthBars: Math.max(1 / 1024, next) });
+      updateNote(st.noteId, { lengthBars: Math.max(1 / 1024, next) }, !st.recorded);
+      st.recorded = true;
       return;
     }
     const dyRows = Math.round((e.clientY - st.startY) / ROW_H);
@@ -372,16 +427,19 @@ export default function MidiEditor({
     if (editorSnap) nextStart = snap(nextStart);
     nextStart = Math.max(0, nextStart);
     const nextPitch = enforceScale(st.pitch - dyRows);
-    updateNote(st.noteId, { startBars: nextStart, pitch: nextPitch });
+    updateNote(st.noteId, { startBars: nextStart, pitch: nextPitch }, !st.recorded);
+    st.recorded = true;
   };
 
   const endNoteDrag = () => { dragRef.current = null; };
 
+  const velocityDragRef = useRef(false);
   const updateVelocityFromEvent = (note: MidiNote, e: React.PointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.parentElement?.getBoundingClientRect();
     if (!rect) return;
     const value = clamp(Math.round(((rect.bottom - e.clientY) / rect.height) * 127), 1, 127);
-    updateNote(note.id, { velocity: value });
+    updateNote(note.id, { velocity: value }, !velocityDragRef.current);
+    velocityDragRef.current = true;
   };
 
   const addAutomationPoint = (which: "pitch" | "mod", e: React.PointerEvent<HTMLDivElement>) => {
@@ -501,7 +559,7 @@ export default function MidiEditor({
 
   const handleGridPointerDown = (pitch: number, e: React.PointerEvent<HTMLDivElement>) => {
     if (tool !== "pencil") {
-      if (tool === "select") setSelectedNoteId(null);
+      if (tool === "select") { setSelectedNoteId(null); setSelectedNoteIds([]); }
       return;
     }
     e.preventDefault();
@@ -560,6 +618,18 @@ export default function MidiEditor({
         </div>
 
         <div className="shrink-0 px-3 py-1.5 border-b border-white/10 flex gap-1.5 flex-wrap items-center min-h-9">
+          <span className="text-[11px] text-white/60">{selectedNoteIds.length ? `${selectedNoteIds.length} selected` : "All notes"}</span>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs" onClick={() => setSelectedNoteIds(notes.map((note) => note.id))}>Select all</button>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs disabled:opacity-40" disabled={!undoDepth} onClick={undo}>Undo</button>
+          <label className="text-[11px]">Strength <input aria-label="Quantize strength percent" className="w-12 bg-neutral-900 border border-white/10 rounded px-1" type="number" min={0} max={100} value={quantizeStrength} onChange={(e) => setQuantizeStrength(clamp(Number(e.target.value), 0, 100))} />%</label>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs" onClick={() => applyToSelection(quantizeNotes(notes, targetIds(), gridStepBars, quantizeStrength))}>Quantize</button>
+          <label className="text-[11px]">Velocity <input aria-label="Selected velocity" className="w-12 bg-neutral-900 border border-white/10 rounded px-1" type="number" min={1} max={127} defaultValue={96} onKeyDown={(e) => { if (e.key === "Enter") applyToSelection(transformNotes(notes, targetIds(), { velocity: Number(e.currentTarget.value) })); }} /></label>
+          <label className="text-[11px]">Length <input aria-label="Selected length in grid steps" className="w-12 bg-neutral-900 border border-white/10 rounded px-1" type="number" min={1} max={64} defaultValue={1} onKeyDown={(e) => { if (e.key === "Enter") applyToSelection(transformNotes(notes, targetIds(), { lengthBars: gridStepBars * Number(e.currentTarget.value) })); }} /> steps</label>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs" onClick={() => applyToSelection(transformNotes(notes, targetIds(), { transpose: -1 }))}>− semitone</button>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs" onClick={() => applyToSelection(transformNotes(notes, targetIds(), { transpose: 1 }))}>+ semitone</button>
+          <label className="text-[11px]">Timing <input aria-label="Humanize timing percent of grid" className="w-12 bg-neutral-900 border border-white/10 rounded px-1" type="number" min={0} max={100} value={humanizeTiming} onChange={(e) => setHumanizeTiming(clamp(Number(e.target.value), 0, 100))} />%</label>
+          <label className="text-[11px]">Velocity ± <input aria-label="Humanize velocity range" className="w-12 bg-neutral-900 border border-white/10 rounded px-1" type="number" min={0} max={127} value={humanizeVelocity} onChange={(e) => setHumanizeVelocity(clamp(Number(e.target.value), 0, 127))} /></label>
+          <button type="button" className="px-2 py-1 rounded border border-white/15 text-xs" onClick={() => applyToSelection(humanizeNotes(notes, targetIds(), gridStepBars * humanizeTiming / 100, humanizeVelocity))}>Humanize</button>
           {scaleRules.map((r, i) => (
             <button
               key={r.id}
@@ -706,7 +776,7 @@ export default function MidiEditor({
                 {notes.map((note) => {
                   if (note.pitch < PITCH_LOW || note.pitch > PITCH_HIGH) return null;
                   const row = PITCH_HIGH - note.pitch;
-                  const selected = selectedNoteId === note.id;
+                  const selected = selectedNoteIds.includes(note.id) || selectedNoteId === note.id;
                   const lightness = 16 + (note.velocity / 127) * 56;
                   const solid = `hsl(28 92% ${lightness}%)`;
                   const endBars = note.startBars + note.lengthBars;
@@ -794,7 +864,7 @@ export default function MidiEditor({
                     const x = (note.startBars + note.lengthBars / 2) * barW;
                     const h = Math.max(3, (note.velocity / 127) * (controllerH - 12));
                     const outside = note.startBars >= clip.lengthBars;
-                    return <div key={note.id} className={`absolute bottom-1 w-2.5 -translate-x-1/2 border cursor-ns-resize ${outside ? "bg-amber-300/20 border-amber-100/15" : "bg-amber-300/75 border-amber-100/45"}`} style={{ left: x, height: h }} onPointerDown={(e) => { setSelectedNoteId(note.id); updateVelocityFromEvent(note, e); e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) updateVelocityFromEvent(note, e); }} onDoubleClick={() => updateNote(note.id, { velocity: 96 })} title={`Velocity ${note.velocity}`} />;
+                    return <div key={note.id} className={`absolute bottom-1 w-2.5 -translate-x-1/2 border cursor-ns-resize ${outside ? "bg-amber-300/20 border-amber-100/15" : "bg-amber-300/75 border-amber-100/45"}`} style={{ left: x, height: h }} onPointerDown={(e) => { setSelectedNoteId(note.id); setSelectedNoteIds([note.id]); velocityDragRef.current = false; updateVelocityFromEvent(note, e); e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) updateVelocityFromEvent(note, e); }} onPointerUp={() => { velocityDragRef.current = false; }} onPointerCancel={() => { velocityDragRef.current = false; }} onDoubleClick={() => updateNote(note.id, { velocity: 96 })} title={`Velocity ${note.velocity}`} />;
                   })}
                 </div>}
 
@@ -819,7 +889,7 @@ export default function MidiEditor({
         </div>
 
         <div className="shrink-0 px-3 py-1.5 border-t border-white/10 text-[10px] text-white/45 flex flex-wrap gap-x-4 gap-y-1">
-          <span>Pencil: single-click to add · Arrow: move/resize · Razor: split · Eraser: delete</span>
+          <span>Pencil: add · Arrow: move/resize, Shift/Ctrl-click to multi-select · Razor: split · Eraser: delete · Enter applies velocity/length</span>
           <span>Drag ▼ on the ruler to resize the MIDI clip. Notes beyond it are preserved and ghosted.</span>
           {earliestGhost < 0 && <span>Previous MIDI context may begin before this clip.</span>}
         </div>
