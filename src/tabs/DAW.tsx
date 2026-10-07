@@ -130,6 +130,9 @@ type Clip = {
 	// Changing lengthBars without changing sourceDurationSec time-stretches the clip.
 	sourceOffsetSec?: number;
 	sourceDurationSec?: number;
+	// Semitones relative to the original asset; rendered per clip, never into the asset.
+	pitchSemitones?: number;
+	timePitchMode?: "independent" | "linked";
 	fadeInBars?: number;
 	fadeOutBars?: number;
 
@@ -490,6 +493,23 @@ function renderPitchPreservedStretch(
 		if (analysisHop <= 0) break;
 	}
 
+	return output;
+}
+
+// Resampling changes pitch and duration together. WSOLA above compensates for
+// that duration change when a clip requests independent pitch and time.
+function resampleForPitch(ctx: AudioContext, input: AudioBuffer, pitchRate: number, outputFrames: number) {
+	const output = ctx.createBuffer(input.numberOfChannels, outputFrames, input.sampleRate);
+	for (let channel = 0; channel < input.numberOfChannels; channel++) {
+		const src = input.getChannelData(channel);
+		const dst = output.getChannelData(channel);
+		for (let frame = 0; frame < outputFrames; frame++) {
+			const position = Math.min(src.length - 1, frame * pitchRate);
+			const left = Math.floor(position);
+			const fraction = position - left;
+			dst[frame] = (src[left] ?? 0) * (1 - fraction) + (src[Math.min(left + 1, src.length - 1)] ?? 0) * fraction;
+		}
+	}
 	return output;
 }
 
@@ -1775,8 +1795,9 @@ export default function DAW(_props: TabRendererProps) {
 		if (st.mode === "stretchR") {
 			const sourceSec = Math.max(0.001, st.startSourceDurationSec ?? st.clipLenBars * barSecNow);
 			const naturalBars = sourceSec / Math.max(0.0001, barSecNow);
-			const minStretchBars = Math.max(minLen, naturalBars * 0.25);
-			const maxStretchBars = Math.min(bars + 1 - st.startClipBar, naturalBars * 4);
+			const pitchRate = clipNow?.timePitchMode === "linked" ? 1 : 2 ** (clamp(Number(clipNow?.pitchSemitones) || 0, -12, 12) / 12);
+			const minStretchBars = Math.max(minLen, naturalBars * 0.25 / pitchRate);
+			const maxStretchBars = Math.min(bars + 1 - st.startClipBar, naturalBars * 4 / pitchRate);
 			nextLen = clamp(nextLen, minStretchBars, Math.max(minStretchBars, maxStretchBars));
 			setClips((prev) => prev.map((c) =>
 				c.id === st.clipId
@@ -3954,7 +3975,9 @@ export default function DAW(_props: TabRendererProps) {
 		const durationSec = clamp(clip.sourceDurationSec ?? inferredSec, 0.001, availableSec);
 		const outputSec = Math.max(0.001, clip.lengthBars * barSecNow);
 		const ratio = clamp(outputSec / durationSec, 0.25, 4);
-		return { offsetSec, durationSec, outputSec, ratio };
+		const pitchSemitones = clamp(Number(clip.pitchSemitones) || 0, -12, 12);
+		const pitchRate = 2 ** (pitchSemitones / 12);
+		return { offsetSec, durationSec, outputSec, ratio, pitchRate };
 	};
 
 	const analyzeSelectedVocal = async () => {
@@ -4062,6 +4085,8 @@ export default function DAW(_props: TabRendererProps) {
 			win.offsetSec.toFixed(5),
 			win.durationSec.toFixed(5),
 			win.ratio.toFixed(5),
+			win.pitchRate.toFixed(5),
+			clip.timePitchMode ?? "independent",
 			fadeInSec.toFixed(5),
 			fadeOutSec.toFixed(5),
 			source.sampleRate,
@@ -4070,7 +4095,10 @@ export default function DAW(_props: TabRendererProps) {
 		if (cached?.key === key) return cached.buffer;
 
 		const ctx = ensureAudioCtx();
-		const rendered = renderPitchPreservedStretch(ctx, source, win.offsetSec, win.durationSec, win.ratio);
+		const linked = clip.timePitchMode === "linked";
+		const effectivePitchRate = linked ? 1 / win.ratio : win.pitchRate;
+		const intermediate = renderPitchPreservedStretch(ctx, source, win.offsetSec, win.durationSec, linked ? 1 : win.ratio * effectivePitchRate);
+		const rendered = effectivePitchRate === 1 ? intermediate : resampleForPitch(ctx, intermediate, effectivePitchRate, Math.max(1, Math.floor(win.outputSec * source.sampleRate)));
 		applyClipFadesToBuffer(rendered, fadeInSec, fadeOutSec);
 		stretchedBuffersRef.current.set(clip.id, { key, buffer: rendered });
 		return rendered;
@@ -6335,10 +6363,10 @@ export default function DAW(_props: TabRendererProps) {
 				const menuClip = clips.find((c) => c.id === clipContextMenu.clipId);
 				const menuTrack = menuClip ? tracks.find((t) => t.id === menuClip.trackId) : null;
 				const left = Math.min(clipContextMenu.x, Math.max(8, window.innerWidth - 190));
-				const top = Math.min(clipContextMenu.y, Math.max(8, window.innerHeight - 190));
+				const top = Math.min(clipContextMenu.y, Math.max(8, window.innerHeight - 290));
 				return createPortal(
 					<div
-						className="fixed w-[180px] rounded-xl border border-white/15 bg-neutral-950/95 shadow-2xl backdrop-blur overflow-hidden text-sm"
+						className="fixed w-[220px] rounded-xl border border-white/15 bg-neutral-950/95 shadow-2xl backdrop-blur overflow-hidden text-sm"
 						style={{ left, top, zIndex: 10000 }}
 						onPointerDown={(e) => e.stopPropagation()}
 					>
@@ -6346,6 +6374,37 @@ export default function DAW(_props: TabRendererProps) {
 							<button className="w-full text-left px-3 py-2 hover:bg-violet-400/10" onClick={() => { setMidiEditorClipId(clipContextMenu.clipId); setClipContextMenu(null); }}>♬ Edit MIDI</button>
 						)}
 						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => crossfadeIntoNextClip(menuClip.id)}>Crossfade into next clip</button>}
+						{menuClip?.assetId && (() => {
+							const sourceSec = Math.max(0.001, menuClip.sourceDurationSec ?? menuClip.lengthBars * getBarSeconds());
+							const timeRatio = menuClip.lengthBars * getBarSeconds() / sourceSec;
+							return <div className="px-3 py-2 border-y border-white/10 text-xs space-y-1">
+								<div>Audio clip · source: {findAssetById(menuClip.assetId)?.name ?? menuClip.name}</div>
+								<div>Time: {Math.round(timeRatio * 100)}%</div>
+								<label className="flex items-center justify-between gap-2">Time / pitch
+									<select aria-label="Clip time and pitch mode" className="bg-neutral-900 border border-white/20 rounded px-1 py-0.5" value={menuClip.timePitchMode ?? "independent"} onChange={(event) => {
+										setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, timePitchMode: event.target.value as "linked" | "independent" } : clip));
+										stretchedBuffersRef.current.delete(menuClip.id);
+										if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
+									}}><option value="independent">Independent</option><option value="linked">Linked</option></select>
+								</label>
+								<div className="opacity-60">{menuClip.timePitchMode === "linked" ? "Speed changes pitch with time." : "Time stretch preserves pitch; shift pitch separately."}</div>
+								{menuClip.timePitchMode !== "linked" && <>
+								<label className="flex items-center justify-between gap-2">Pitch (independent)
+									<select aria-label="Clip pitch semitones" className="bg-neutral-900 border border-white/20 rounded px-1 py-0.5" value={menuClip.pitchSemitones ?? 0} onChange={(event) => {
+										const pitchSemitones = Number(event.target.value);
+										setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, pitchSemitones } : clip));
+										stretchedBuffersRef.current.delete(menuClip.id);
+										if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
+									}}>
+										{Array.from({ length: 25 }, (_, index) => index - 12).filter((semitones) => {
+											const combined = timeRatio * 2 ** (semitones / 12);
+											return combined >= 0.25 && combined <= 4;
+										}).map((semitones) => <option key={semitones} value={semitones}>{semitones > 0 ? `+${semitones}` : semitones} st</option>)}
+									</select>
+								</label>
+								</>}
+							</div>;
+						})()}
 						<button className="w-full text-left px-3 py-2 hover:bg-white/10 flex justify-between" onClick={() => cutClip(clipContextMenu.clipId)}><span>Cut</span><span className="opacity-45 text-xs">Ctrl+X</span></button>
 						<button className="w-full text-left px-3 py-2 hover:bg-white/10 flex justify-between" onClick={() => copyClip(clipContextMenu.clipId)}><span>Copy</span><span className="opacity-45 text-xs">Ctrl+C</span></button>
 						<div className="h-px bg-white/10" />
