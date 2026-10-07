@@ -42,7 +42,7 @@ import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
 import { localAiChat } from "../lib/localAiApi";
 import { projectEndBar } from "../lib/dawDuration";
-import { automationValue, normalizeAutomationLanes, type AutomationLane, type AutomationParameter } from "../lib/dawAutomation";
+import { automationValue, automationValueBounds, normalizeAutomationLanes, type AutomationInterpolation, type AutomationLane, type AutomationParameter } from "../lib/dawAutomation";
 import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
 import { addCompRange, MAX_DAW_TAKES, normalizeCompRanges, type DawTake, type DawCompRange } from "../lib/dawTakes";
 import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
@@ -674,6 +674,8 @@ export default function DAW(_props: TabRendererProps) {
 	const [tracks, setTracks] = useState<Track[]>(() => []);
 	const [automationTrackId, setAutomationTrackId] = useState<string | null>(null);
 	const [automationParameter, setAutomationParameter] = useState<AutomationParameter>("track:level");
+	const [selectedAutomationPointIds, setSelectedAutomationPointIds] = useState<string[]>([]);
+	const automationClipboardRef = useRef<Array<{ offset: number; value: number; mode?: AutomationInterpolation }> | null>(null);
 	const [dawHydrated, setDawHydrated] = useState(false);
 	const [vst3Plugins, setVst3Plugins] = useState<BridgePlugin[]>([]);
 	const [bridgeAvailable, setBridgeAvailable] = useState<boolean | null>(null);
@@ -1166,6 +1168,26 @@ export default function DAW(_props: TabRendererProps) {
 			const lane = lanes.find((item) => item.parameter === parameter) ?? { parameter, enabled: true, interpolation: "linear" as const, points: [] };
 			return { ...track, automation: [...lanes.filter((item) => item.parameter !== parameter), update(lane)] };
 		}));
+	};
+
+	const copyAutomationPoints = (lane: AutomationLane) => {
+		const points = lane.points.filter((point) => selectedAutomationPointIds.includes(point.id));
+		if (!points.length) return;
+		const firstBar = Math.min(...points.map((point) => point.bar));
+		automationClipboardRef.current = points.map((point) => ({ offset: point.bar - firstBar, value: point.value, mode: lane.segmentModes?.[point.id] ?? lane.interpolation }));
+	};
+	const pasteAutomationPoints = (trackId: string, parameter: AutomationParameter, bar: number) => {
+		const copied = automationClipboardRef.current;
+		if (!copied?.length) return;
+		const [min, max] = automationValueBounds(parameter);
+		const ids = copied.map(() => crypto.randomUUID());
+		updateAutomationLane(trackId, parameter, (lane) => {
+			const points = copied.map((point, index) => ({ id: ids[index], bar: Math.max(1, bar + point.offset), value: clamp(point.value, min, max) }));
+			const segmentModes = { ...lane.segmentModes };
+			points.forEach((point, index) => { const mode = copied[index].mode; if (mode) segmentModes[point.id] = mode; });
+			return { ...lane, points: [...lane.points.filter((point) => !points.some((added) => Math.abs(added.bar - point.bar) < 0.0001)), ...points].sort((a, b) => a.bar - b.bar), segmentModes };
+		});
+		setSelectedAutomationPointIds(ids);
 	};
 
 	const setTrackLevel = (id: string, level: number) => {
@@ -5674,10 +5696,14 @@ export default function DAW(_props: TabRendererProps) {
 							</select>
 							<div className="flex gap-2 items-center">
 								<label><input type="checkbox" checked={lane?.enabled ?? true} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, enabled: event.target.checked }))} /> Enabled</label>
-								<select aria-label="Automation interpolation" className="bg-neutral-900 border border-white/20 rounded" value={lane?.interpolation ?? "linear"} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, interpolation: event.target.value as "linear" | "step" }))}><option value="linear">Linear</option><option value="step">Step</option></select>
+								<select aria-label="Default automation interpolation" className="bg-neutral-900 border border-white/20 rounded" value={lane?.interpolation ?? "linear"} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, interpolation: event.target.value as "linear" | "step" }))}><option value="linear">Linear</option><option value="step">Hold</option><option value="curve">Curved</option></select>
 							</div>
-							<button type="button" className="rounded border border-white/20 px-2 py-1" onClick={() => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: [...old.points, { id: crypto.randomUUID(), bar: playheadPosBars, value: automationValue(old, playheadPosBars, currentValue) }].sort((a, b) => a.bar - b.bar) }))}>+ Point at playhead</button>
-							{lane?.points.map((point) => <div key={point.id} className="flex gap-1 items-center"><label>Bar <input aria-label="Point bar" type="number" min="1" step="0.01" className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.bar} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, bar: Math.max(1, Number(event.target.value) || 1) } : item).sort((a, b) => a.bar - b.bar) }))} /></label><label>Value <input aria-label="Point value" type="number" min={automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60} max={automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 1 : 0} step={automationParameter === "track:pan" ? 0.01 : 1} className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.value} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, value: Math.max(automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60, Math.min(automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 1 : 0, Number(event.target.value) || 0)) } : item) }))} /></label><button type="button" aria-label="Delete automation point" onClick={() => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.filter((item) => item.id !== point.id) }))}>Delete</button></div>)}
+							<div className="flex gap-1">
+								<button type="button" className="rounded border border-white/20 px-2 py-1" onClick={() => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: [...old.points.filter((point) => Math.abs(point.bar - playheadPosBars) > 0.0001), { id: crypto.randomUUID(), bar: playheadPosBars, value: clamp(automationValue(old, playheadPosBars, currentValue), ...automationValueBounds(automationParameter)) }].sort((a, b) => a.bar - b.bar) }))}>+ Point at playhead</button>
+								<button type="button" className="rounded border border-white/20 px-2 py-1 disabled:opacity-40" disabled={!selectedAutomationPointIds.length} onClick={() => lane && copyAutomationPoints(lane)}>Copy selected</button>
+								<button type="button" className="rounded border border-white/20 px-2 py-1 disabled:opacity-40" disabled={!automationClipboardRef.current?.length} onClick={() => pasteAutomationPoints(track.id, automationParameter, playheadPosBars)}>Paste at playhead</button>
+							</div>
+							{lane?.points.map((point) => { const [min, max] = automationValueBounds(automationParameter); return <div key={point.id} className={`flex gap-1 items-center ${selectedAutomationPointIds.includes(point.id) ? "bg-cyan-950/60" : ""}`}><input aria-label="Select automation point" type="checkbox" checked={selectedAutomationPointIds.includes(point.id)} onChange={(event) => setSelectedAutomationPointIds((selected) => event.target.checked ? [...selected, point.id] : selected.filter((id) => id !== point.id))} /><label>Bar <input aria-label="Point bar" type="number" min="1" step="0.01" className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.bar} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, bar: Math.max(1, Number(event.target.value) || 1) } : item).sort((a, b) => a.bar - b.bar) }))} /></label><label>Value <input aria-label="Point value" type="number" min={min} max={max} step={automationParameter === "track:pan" ? 0.01 : 1} className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.value} onChange={(event) => { const value = Number(event.target.value); if (!Number.isFinite(value)) return; updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, value: clamp(value, min, max) } : item) })); }} /></label>{lane.points.findIndex((item) => item.id === point.id) > 0 && <select aria-label="Segment interpolation" className="bg-neutral-900 border border-white/20 rounded" value={lane.segmentModes?.[point.id] ?? lane.interpolation} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, segmentModes: { ...old.segmentModes, [point.id]: event.target.value as AutomationInterpolation } }))}><option value="linear">Linear</option><option value="step">Hold</option><option value="curve">Curved</option></select>}<button type="button" aria-label="Delete automation point" onClick={() => { updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.filter((item) => item.id !== point.id) })); setSelectedAutomationPointIds((selected) => selected.filter((id) => id !== point.id)); }}>Delete</button></div>; })}
 						</div>;
 						})()}
 
@@ -6077,11 +6103,19 @@ export default function DAW(_props: TabRendererProps) {
 											const minimum = automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60;
 											const range = automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 2 : 60;
 											const line = [{ bar: 1, value: lane.points[0].value }, ...lane.points, { bar: bars, value: lane.points[lane.points.length - 1].value }];
-											const displayPoints = lane.interpolation === "step" ? line.flatMap((point, index) => index === 0 ? [point] : [{ bar: point.bar, value: line[index - 1].value }, point]) : line;
-											const coordinates = displayPoints.map((point) => `${barToLeftPx(point.bar)},${(1 - (point.value - minimum) / range) * (trackH - 12) + 6}`).join(" ");
-											return <svg aria-label={`${t.name} ${automationParameter} automation lane`} className={`absolute inset-0 z-30 pointer-events-none ${lane.enabled ? "opacity-90" : "opacity-35"}`} width={Math.max(1, bars * barWidth)} height={trackH}>
-											<polyline points={coordinates} fill="none" stroke="#67e8f9" strokeWidth="2" />
-											{lane.points.map((point) => <circle key={point.id} cx={barToLeftPx(point.bar)} cy={(1 - (point.value - minimum) / range) * (trackH - 12) + 6} r="4" fill="#67e8f9" stroke="#082f49" strokeWidth="1" />)}
+																			const y = (value: number) => (1 - (value - minimum) / range) * (trackH - 12) + 6;
+																			const coordinates: string[] = [`${barToLeftPx(line[0].bar)},${y(line[0].value)}`];
+																			for (let index = 1; index < line.length; index++) {
+																				const previous = line[index - 1], point = line[index];
+																				const mode = lane.segmentModes?.[lane.points.find((item) => Math.abs(item.bar - point.bar) < 0.0001)?.id ?? ""] ?? lane.interpolation;
+																				if (mode === "step") coordinates.push(`${barToLeftPx(point.bar)},${y(previous.value)}`, `${barToLeftPx(point.bar)},${y(point.value)}`);
+																				else if (mode === "curve") for (let step = 1; step <= 12; step++) { const t = step / 12, eased = t * t * (3 - 2 * t); coordinates.push(`${barToLeftPx(previous.bar + (point.bar - previous.bar) * t)},${y(previous.value + (point.value - previous.value) * eased)}`); }
+																				else coordinates.push(`${barToLeftPx(point.bar)},${y(point.value)}`);
+																			}
+																			const selected = new Set(selectedAutomationPointIds);
+																			return <svg aria-label={`${t.name} ${automationParameter} automation lane`} className={`absolute inset-0 z-30 pointer-events-none ${lane.enabled ? "opacity-90" : "opacity-35"}`} width={Math.max(1, bars * barWidth)} height={trackH}>
+																			<polyline points={coordinates.join(" ")} fill="none" stroke="#67e8f9" strokeWidth="2" />
+																			{lane.points.map((point) => <circle key={point.id} cx={barToLeftPx(point.bar)} cy={y(point.value)} r={selected.has(point.id) ? "5" : "4"} fill={selected.has(point.id) ? "#facc15" : "#67e8f9"} stroke="#082f49" strokeWidth="1" />)}
 										</svg>;
 										})()}
 										{trackClips.map((c) => {
