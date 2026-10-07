@@ -1,7 +1,10 @@
+import { normalizeSidechainSource, type SidechainSource } from "./dawSidechain.ts";
+
 export type DynamicsC1Effect = {
   id: string; type: "compressor"; name: "YSong Dynamics C•1"; enabled: boolean;
   inputGainDb: number; thresholdDb: number; ratio: number; attackMs: number;
   releaseMs: number; kneeDb: number; outputGainDb: number;
+  sidechainSource?: SidechainSource;
 };
 export type BrowserEffectType = "delay" | "chorus" | "flanger" | "phaser" | "bitcrusher" | "reverb";
 export type BrowserEffect = {
@@ -36,6 +39,7 @@ export function normalizeTrackEffects(raw: unknown): DawTrackEffect[] {
     const enabled = entry.enabled !== false;
     if (entry.type === "compressor") return [{
       id, type: "compressor" as const, name: "YSong Dynamics C•1" as const, enabled,
+      ...(normalizeSidechainSource(entry.sidechainSource) ? { sidechainSource: normalizeSidechainSource(entry.sidechainSource)! } : {}),
       inputGainDb: clampNumber(entry.inputGainDb, -24, 24, 0), thresholdDb: clampNumber(entry.thresholdDb, -60, 0, -18),
       ratio: clampNumber(entry.ratio, 1, 20, 4), attackMs: clampNumber(entry.attackMs, 0.1, 200, 12),
       releaseMs: clampNumber(entry.releaseMs, 10, 2000, 180), kneeDb: clampNumber(entry.kneeDb, 0, 40, 18),

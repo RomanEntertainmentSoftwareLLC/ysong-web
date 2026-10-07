@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { normalizeTrackEffects } from "../src/lib/dawEffects.ts";
 import { normalizeAutomationLanes } from "../src/lib/dawAutomation.ts";
 import { DAW_AUX_IDS, createDefaultMixerStrip, normalizeMixerStrip } from "../src/lib/dawMixer.ts";
+import { validateProjectSidechains } from "../src/lib/dawSidechain.ts";
 
 test("aux destinations have stable IDs and reject unknown outputs", () => {
   assert.deepEqual(DAW_AUX_IDS, ["AUX 1", "AUX 2", "AUX 3", "AUX 4", "AUX 5", "AUX 6", "AUX 7", "AUX 8"]);
@@ -76,7 +77,7 @@ test("DAW save and reopen retain ordered tracks, mixer, FX, plugin, MIDI, proven
   assert.equal(data.projectAssets[0].objectKey, assets[0].objectKey);
 
   const restored = {};
-  const context = { data, normalizeTrackEffects, normalizeAutomationLanes, normalizeMixerStrip,
+  const context = { data, normalizeTrackEffects, normalizeAutomationLanes, normalizeMixerStrip, validateProjectSidechains,
     normalizeProjectAssetForPersist: (asset) => asset.objectKey ? { ...asset, url: undefined } : asset,
     parseSongGenerationResult: () => null, clamp: (v, min, max) => Math.min(max, Math.max(min, v)),
     MIN_TRACK_H: 132, ROW_H: 136, MIN_ZOOM_PCT: 25, MAX_ZOOM_PCT: 400,

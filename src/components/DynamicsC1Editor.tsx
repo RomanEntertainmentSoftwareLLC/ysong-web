@@ -154,6 +154,10 @@ export default function DynamicsC1Editor({ effect, signal, gainReductionDb, onCh
             <C1Knob label="OUTPUT" value={effect.outputGainDb} min={-24} max={24} step={0.5} unit=" dB" onChange={(outputGainDb) => onChange({ outputGainDb })} />
           </div>
 
+          <p className="mt-4 text-center text-xs text-amber-100/60">
+            External sidechain input unsupported by Dynamics C1. {effect.sidechainSource ? "Saved route is inactive." : "Detector uses this track's audio."}
+          </p>
+
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3 border-t border-amber-100/10 pt-4">
             <button
               type="button"

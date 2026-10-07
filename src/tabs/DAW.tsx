@@ -30,6 +30,7 @@ import {
 } from "../lib/dawExport";
 import { connectWebAudioEffects, createDynamicsC1Effect, createBrowserEffect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type BrowserEffect, type BrowserEffectType, type WebAudioEffectRuntime } from "../lib/dawEffects";
 import { DAW_AUX_IDS, createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
+import { validateProjectSidechains } from "../lib/dawSidechain";
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
@@ -3021,7 +3022,7 @@ export default function DAW(_props: TabRendererProps) {
 		rafRef.current = null;
 		setIsPlaying(false);
 
-		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), automation: normalizeAutomationLanes(t.automation), mixer: normalizeMixerStrip(t.mixer) }));
+		const restoredTracks = validateProjectSidechains((data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), automation: normalizeAutomationLanes(t.automation), mixer: normalizeMixerStrip(t.mixer) })));
 		const savedGeneration = parseSongGenerationResult(data.generation?.songResult);
 		if (data.generation?.origin === "create-song" && savedGeneration) {
 			for (const part of savedGeneration.parts) {
@@ -3305,7 +3306,7 @@ export default function DAW(_props: TabRendererProps) {
 		const name = String(parsed.name || file.name.replace(/\.ysong$/i, "") || "Untitled Project");
 		const state: DawPersistV1 = {
 			...parsed.state,
-			tracks: (parsed.state.tracks ?? []).map((track) => ({ ...track, level: clamp(track.level ?? 100, 0, 127), effects: normalizeTrackEffects(track.effects), automation: normalizeAutomationLanes(track.automation), mixer: normalizeMixerStrip(track.mixer) })),
+			tracks: validateProjectSidechains((parsed.state.tracks ?? []).map((track) => ({ ...track, level: clamp(track.level ?? 100, 0, 127), effects: normalizeTrackEffects(track.effects), automation: normalizeAutomationLanes(track.automation), mixer: normalizeMixerStrip(track.mixer) }))),
 			projectAssets: (parsed.state.projectAssets ?? []).map(normalizeProjectAssetForPersist),
 		};
 		localStorage.setItem(`ysong:daw:${id}`, JSON.stringify(state));
