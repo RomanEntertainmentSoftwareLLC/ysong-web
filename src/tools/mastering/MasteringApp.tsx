@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent 
 import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import ABMonitor from "./ABMonitor";
 import { compareReferenceDescriptors, descriptorProfile, parseReferenceProfile, type ReferenceProfile } from "./referenceDescriptors";
-import { defaultMatchSelection, referenceTargets } from "./referenceTargets";
+import { defaultMatchSelection, referenceTargets, tonalMatchAssessment } from "./referenceTargets";
 import {
   masteringAnalysisUrl,
   startMasteringAnalysis,
@@ -178,6 +178,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     : savedReference, [analysis, reference, savedReference]);
   const descriptorDifferences = useMemo(() => analysis && activeReference
     ? compareReferenceDescriptors(analysis.analysis, activeReference) : [], [analysis, activeReference]);
+  const tonalAssessment = useMemo(() => analysis && activeReference
+    ? tonalMatchAssessment(analysis.analysis, activeReference, referenceInfluence) : null, [analysis, activeReference, referenceInfluence]);
 
   function applyReferenceTargets() {
     if (!analysis || !activeReference) return;
@@ -334,7 +336,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
       transientAmount: quick ? 0 : transientAmount,
       applyDynamicEq,
       referenceAssetId: mode === "reference" ? reference?.asset_id || null : null,
-      referenceInfluence: mode === "reference" ? referenceInfluence : 0,
+      referenceInfluence: mode === "reference" ? tonalAssessment?.influence ?? 0 : 0,
     };
     try {
       const started = await startMasteringRender(source.asset_id, settings);
@@ -412,7 +414,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
         ["dynamics", "Dynamics", "Crest and short-term dynamics for listening comparison"],
         ["stereo", "Stereo", "Side/mid width target, capped at 10%"],
       ] as const).map(([key, label, note]) => <label key={key} className="flex gap-2 rounded-xl border border-sky-500/20 p-3 text-xs"><input type="checkbox" checked={matchSelection[key]} onChange={e => setMatchSelection(previous => ({ ...previous, [key]: e.target.checked }))} className="h-4 w-4 accent-sky-500"/><span><span className="block font-medium">{label}</span><span className="mt-1 block text-neutral-500">{note}</span></span></label>)}</div>
-      <div className="mt-4 flex flex-wrap items-center gap-3"><label htmlFor="reference-match-strength" className="text-xs">Match strength {Math.round(referenceInfluence / 0.6 * 100)}%</label><input id="reference-match-strength" type="range" min="0" max="0.6" step="0.01" value={referenceInfluence} onChange={e => setReferenceInfluence(Number(e.target.value))} className="w-44 accent-sky-500"/><button type="button" onClick={applyReferenceTargets} disabled={!Object.values(matchSelection).some(Boolean)} className="rounded-xl border border-sky-500/40 px-3 py-2 text-xs text-sky-600 disabled:opacity-40 dark:text-sky-400">Fill selected controls</button></div>
+        <div className="mt-4 flex flex-wrap items-center gap-3"><label htmlFor="reference-match-strength" className="text-xs">Match strength {Math.round(referenceInfluence / 0.6 * 100)}%</label><input id="reference-match-strength" type="range" min="0" max="0.6" step="0.01" value={referenceInfluence} onChange={e => setReferenceInfluence(Number(e.target.value))} className="w-44 accent-sky-500"/><button type="button" onClick={applyReferenceTargets} disabled={!Object.values(matchSelection).some(Boolean)} className="rounded-xl border border-sky-500/40 px-3 py-2 text-xs text-sky-600 disabled:opacity-40 dark:text-sky-400">Fill selected controls</button></div>
+        {matchSelection.tonal && tonalAssessment && <p className="mt-2 text-xs text-neutral-500">Tonal evidence: {tonalAssessment.bands.length}/7 bands. Effective reference influence {Math.round(tonalAssessment.influence / 0.6 * 100)}%{tonalAssessment.confidence < 1 ? "; reduced for incomplete measurements" : ""}.</p>}
       {targetNotes.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-neutral-500">{targetNotes.map(note => <li key={note}>{note}</li>)}</ul>}
       <p className="mt-3 text-xs text-neutral-500">Reference audio guides the engine's capped broad EQ when selected for rendering; saved JSON descriptors cannot drive the audio engine. Neither path copies reference samples or a waveform. The source stays separate, and the true-peak ceiling remains active.</p>
     </section>}
@@ -442,14 +445,14 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
 
       </div>
       <div className="mt-5"><Toggle checked={applyDynamicEq} onChange={setApplyDynamicEq} label="Apply localized dynamic corrections" note="Only time/frequency-specific candidates are touched. Preserve Mix raises the confidence threshold and caps correction strength automatically."/></div>
-      <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => render(reference && matchSelection.tonal ? "reference" : "assistant")} disabled={!source || busy || health !== "online"} className="min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white disabled:opacity-40">{stage === "rendering" ? `Rendering remaster… ${Math.round(displayProgress)}%` : reference && matchSelection.tonal ? "Create reference-guided remaster" : "Create remaster candidate"}</button><span className="self-center text-xs text-neutral-500">Source stays untouched. Preserve Mix stops short rather than crushing a target that exceeds its limiter guard.</span></div>
+        <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => render(reference && matchSelection.tonal && tonalAssessment?.influence ? "reference" : "assistant")} disabled={!source || busy || health !== "online"} className="min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white disabled:opacity-40">{stage === "rendering" ? `Rendering remaster… ${Math.round(displayProgress)}%` : reference && matchSelection.tonal && tonalAssessment?.influence ? "Create reference-guided remaster" : "Create remaster candidate"}</button><span className="self-center text-xs text-neutral-500">Source stays untouched. Preserve Mix stops short rather than crushing a target that exceeds its limiter guard.</span></div>
     </section>
 
     {report && source && <>
       <section className={`mt-5 rounded-2xl border p-5 ${report.loudness_target?.target_met === false ? "border-amber-500/25 bg-amber-500/[.035]" : "border-emerald-500/20 bg-emerald-500/[.035]"}`}>
         <div className="flex flex-wrap items-start justify-between gap-4"><div><div className={`text-[10px] uppercase tracking-[.18em] ${report.loudness_target?.target_met === false ? "text-amber-500" : "text-emerald-500"}`}>Candidate ready</div><h2 className="mt-1 text-xl font-semibold">{report.remaster_mode_label || report.run_id}</h2><p className="mt-1 text-sm text-neutral-500">Run {report.run_id}. Original, mastering source, remaster and difference are separate. Nothing overwrote your upload.</p></div><span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-500">Non-destructive</span></div>
         {report.loudness_target && <div className="mt-4 rounded-xl border border-neutral-200 bg-white/50 p-3 text-sm dark:border-neutral-800 dark:bg-neutral-950/25"><div className="flex flex-wrap items-center justify-between gap-3"><span className="font-medium">Requested {report.loudness_target.requested_lufs.toFixed(1)} LUFS</span><span className={report.loudness_target.target_met ? "text-emerald-500" : "text-amber-500"}>{report.loudness_target.target_met ? `Hit target · ${report.loudness_target.achieved_lufs.toFixed(2)} LUFS` : `Safety guard stopped at ${report.loudness_target.achieved_lufs.toFixed(2)} LUFS`}</span></div></div>}
-        <div className="mt-5 grid gap-5 xl:grid-cols-2"><div><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">Before</div><MetricsGrid metrics={report.before}/></div><div><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">After</div><MetricsGrid metrics={report.after}/></div></div>
+        <div className="mt-5 grid gap-5 xl:grid-cols-2"><div><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">Before</div><MetricsGrid metrics={report.before}/><div className="mt-4"><TonalBalance metrics={report.before}/></div></div><div><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">After</div><MetricsGrid metrics={report.after}/><div className="mt-4"><TonalBalance metrics={report.after}/></div></div></div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="LUFS change" value={fmt(report.comparison?.integrated_lufs_delta ?? report.after.integrated_lufs - report.before.integrated_lufs, 2, " LU")}/><Metric label="Crest change" value={fmt(report.comparison?.crest_delta_db, 2, " dB")}/><Metric label="Dynamics change" value={fmt(report.comparison?.dynamic_range_delta_db, 2, " dB")}/><Metric label="Width change" value={fmt(report.comparison?.width_delta, 3)}/><Metric label="Difference RMS" value={fmt(report.difference?.rms_dbfs, 2, " dBFS")} note={`${fmt(report.difference?.change_percent_of_source_rms, 1, "%")} of source RMS`}/></div>
         <SpectralDelta report={report}/>
         <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-neutral-500"><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">{report.outputs?.sample_rate ? `${Number(report.outputs.sample_rate).toLocaleString()} Hz` : `${report.after.sample_rate.toLocaleString()} Hz`}</span><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">{report.outputs?.bit_depth || 24}-bit PCM WAV</span><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">True peak ceiling {report.settings.true_peak_dbtp.toFixed(1)} dBTP</span></div>

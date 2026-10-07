@@ -8,6 +8,25 @@ export const defaultMatchSelection: MatchSelection = { tonal: true, loudness: fa
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
+const tonalBands = ["sub", "bass", "low_mid", "mid", "high_mid", "presence", "air"] as const;
+
+export function tonalMatchAssessment(source: MasterMetrics, reference: ReferenceProfile, requestedInfluence: number) {
+  const bands = tonalBands.flatMap(key => {
+    const a = source.spectral_band_percent?.[key];
+    const b = reference.values[key];
+    return typeof a === "number" && Number.isFinite(a) && a >= 0 && a <= 100 &&
+      typeof b === "number" && Number.isFinite(b) && b >= 0 && b <= 100 ? [{ key, source: a, target: b }] : [];
+  });
+  const sourceTotal = bands.reduce((sum, band) => sum + band.source, 0);
+  const targetTotal = bands.reduce((sum, band) => sum + band.target, 0);
+  const coherent = bands.length === tonalBands.length && sourceTotal >= 85 && sourceTotal <= 115 && targetTotal >= 85 && targetTotal <= 115;
+  const confidence = coherent ? 1 : bands.length >= 5 && sourceTotal > 20 && targetTotal > 20 ? 0.35 : 0;
+  // The DSP owns the actual broad EQ and peak guard. Restrict its input when the
+  // descriptor evidence is incomplete, and never increase the requested amount.
+  const influence = Math.round(clamp(requestedInfluence, 0, 0.6) * confidence * 100) / 100;
+  return { bands, confidence, influence };
+}
+
 export function referenceTargets(source: MasterMetrics, reference: ReferenceProfile, selected: MatchSelection, matchStrength: number) {
   const influence = clamp(matchStrength, 0, 0.6);
   const result: { targetLufs?: number; stereoWidth?: number; transientAmount?: number; notes: string[] } = { notes: [] };
@@ -27,6 +46,13 @@ export function referenceTargets(source: MasterMetrics, reference: ReferenceProf
     } else result.notes.push("Width unchanged: a usable side/mid ratio is unavailable.");
   }
   if (selected.dynamics) result.notes.push("Crest and 50 ms dynamics are comparison guides. Set transient shape and correction strength by ear; no compressor target is inferred.");
-  if (selected.tonal) result.notes.push("Tonal bands guide the reference engine when reference audio is prepared. Saved descriptors show tonal differences only; no EQ curve is copied.");
+  if (selected.tonal) {
+    const tonal = tonalMatchAssessment(source, reference, matchStrength);
+    result.notes.push(tonal.confidence === 1
+      ? "Complete tonal descriptors support bounded reference guidance; the engine retains its EQ and peak guards."
+      : tonal.confidence > 0
+        ? "Incomplete tonal descriptors: reference influence is reduced to avoid aggressive correction."
+        : "Tonal target skipped: insufficient reliable band measurements.");
+  }
   return result;
 }
