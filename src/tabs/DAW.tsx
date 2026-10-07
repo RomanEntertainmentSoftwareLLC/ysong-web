@@ -47,6 +47,7 @@ import { automationValue, automationValueBounds, normalizeAutomationLanes, type 
 import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
 import { addCompRange, MAX_DAW_TAKES, normalizeCompRanges, type DawTake, type DawCompRange } from "../lib/dawTakes";
 import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
+import { loadFreezeArtifact, saveFreezeArtifact } from "../lib/dawFreeze";
 import {
 	GM_PROGRAMS,
 	NOTE_NAMES,
@@ -98,6 +99,7 @@ type Track = {
 	midiInputName?: string;
 	// Ordered insert chain. Audio flows through this array from first to last.
 	effects?: DawTrackEffect[];
+	freeze?: { artifactId: string; sourceKey: string; durationSeconds: number; sampleRate: number };
 	automation?: AutomationLane[];
 	// Full console channel-strip state shared by the DAW and YC-9000 mixer.
 	mixer?: DawMixerStripState;
@@ -973,6 +975,9 @@ export default function DAW(_props: TabRendererProps) {
 	};
 	const trackAudioBusesRef = useRef<Map<string, TrackAudioBus>>(new Map());
 	const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map());
+	const [freezeVersion, setFreezeVersion] = useState(0);
+	const [freezingTrackId, setFreezingTrackId] = useState<string | null>(null);
+	const [freezeStatus, setFreezeStatus] = useState("");
 	const stretchedBuffersRef = useRef<Map<string, { key: string; buffer: AudioBuffer }>>(new Map());
 	const activeSourcesRef = useRef<AudioScheduledSourceNode[]>([]);
 	// Track every scheduled WebAudio source by the clip that created it. This lets
@@ -2139,14 +2144,14 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const rebuildTrackAudioEffects = (track: Track, bus: TrackAudioBus) => {
-		const signature = effectSignatureForTrack(track);
+		const signature = frozenBuffer(track) ? "frozen" : effectSignatureForTrack(track);
 		if (signature === bus.effectSignature) return;
 		try { bus.compressor.disconnect(); } catch {}
 		for (const runtime of bus.effectRuntimes.values()) {
 			try { runtime.stop?.(); } catch {}
 			for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
 		}
-		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, track.effects ?? [], bus.preTap);
+		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, frozenBuffer(track) ? [] : track.effects ?? [], bus.preTap);
 		bus.effectSignature = signature;
 	};
 
@@ -4292,6 +4297,18 @@ export default function DAW(_props: TabRendererProps) {
 		// persistent per-track bus, so changing them while playback is running does
 		// not require us to destroy and rebuild the song schedule.
 		const audioClips = clips.filter((c) => !!c.assetId && tracks.some((t) => t.id === c.trackId && t.type === "audio"));
+		for (const track of tracks) {
+			const buffer = frozenBuffer(track);
+			if (!buffer) continue;
+			const from = Math.max(1, startBars);
+			const to = Math.min(segmentEnd, 1 + buffer.duration / barSec);
+			if (to <= from) continue;
+			const source = ctx.createBufferSource();
+			source.buffer = buffer;
+			source.connect(ensureTrackAudioBus(track.id).input);
+			source.start(t0 + (from - startBars) * barSec, (from - 1) * barSec, (to - from) * barSec);
+			registerActiveSource(source);
+		}
 
 		for (const c of audioClips) {
 			if (scheduleGeneration !== audioScheduleGenerationRef.current) return;
@@ -4338,7 +4355,7 @@ export default function DAW(_props: TabRendererProps) {
 		// Native VST3 instrument tracks are scheduled into YSong Bridge. The Bridge
 		// owns the actual plugin instance and renders it through ASIO/WASAPI; the MIDI
 		// clip remains the source of truth in this project.
-		const vstTracks = tracks.filter((t) => t.type === "instrument" && trackUsesNativeVst(t));
+		const vstTracks = tracks.filter((t) => t.type === "instrument" && trackUsesNativeVst(t) && !frozenBuffer(t));
 		const segmentStartUnixMs = options?.startUnixMs ?? Math.round(transportClockUnixOffsetMsRef.current + t0 * 1000);
 		// Schedule native instruments in parallel. With 20-30 VST tracks, serial HTTP
 		// calls can consume the entire lead-in and make later tracks arrive after the
@@ -4368,7 +4385,7 @@ export default function DAW(_props: TabRendererProps) {
 		// Tracks without a native VST3 assignment now use a real SoundFont-backed
 		// General MIDI renderer. Program numbers 0..127 map directly to GeneralUser GS.
 		const midiClips = clips.filter((c) => !c.assetId && (c.midiNotes?.length ?? 0) > 0 && tracks.some((t) => t.id === c.trackId && t.type === "instrument"));
-		const gmClips = midiClips.filter((c) => !trackUsesNativeVst(tracks.find((t) => t.id === c.trackId)));
+		const gmClips = midiClips.filter((c) => { const track = tracks.find((t) => t.id === c.trackId); return track && !trackUsesNativeVst(track) && !frozenBuffer(track); });
 		if (gmClips.length) {
 			try {
 				await prepareGmSoundFont(ctx);
@@ -4933,6 +4950,32 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 
+	const freezeSourceKey = (track: Track) => JSON.stringify({
+		instrument: track.instrument, gmProgram: track.gmProgram, vst3PluginPath: track.vst3PluginPath,
+		vstSnapshot: track.vstSnapshot, effects: track.effects, automation: track.automation,
+		clips: clips.filter((clip) => clip.trackId === track.id), bpm, sigNum, sigDen, endBar,
+	});
+	const frozenBuffer = (track: Track) => track.freeze?.sourceKey === freezeSourceKey(track)
+		? audioBuffersRef.current.get(track.freeze.artifactId) : undefined;
+
+	useEffect(() => {
+		if (!dawHydrated) return;
+		let cancelled = false;
+		for (const track of tracks) {
+			const freeze = track.freeze;
+			if (!freeze || freeze.sourceKey !== freezeSourceKey(track) || audioBuffersRef.current.has(freeze.artifactId)) continue;
+			void loadFreezeArtifact(freeze.artifactId).then(async (blob) => {
+				if (!blob || cancelled) return;
+				const buffer = await ensureAudioCtx().decodeAudioData(await blob.arrayBuffer());
+				if (cancelled) return;
+				audioBuffersRef.current.set(freeze.artifactId, buffer);
+				setFreezeVersion((value) => value + 1);
+			}).catch(() => { /* Missing or damaged local audio falls back to editable MIDI. */ });
+		}
+		return () => { cancelled = true; };
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [dawHydrated, tracks, clips, bpm, sigNum, sigDen, endBar, freezeVersion]);
+
 	const collectMidiExportTracks = (onlyGm = false): DawExportMidiTrack[] => {
 		return tracks
 			.filter((track) => track.type === "instrument" && (!onlyGm || !trackUsesNativeVst(track)))
@@ -5063,6 +5106,15 @@ export default function DAW(_props: TabRendererProps) {
 		}));
 		const trackInputs = new Map<string, AudioNode>();
 		let scheduled = 0;
+		for (const track of tracks) {
+			const buffer = frozenBuffer(track);
+			if (!buffer) continue;
+			const source = offline.createBufferSource();
+			source.buffer = buffer;
+			source.connect(buildOfflineTrackInput(offline, { ...track, effects: [] }, offline.destination, auxInputs));
+			source.start(0, 0, Math.min(buffer.duration, durationSeconds));
+			scheduled++;
+		}
 		for (const clip of clips.filter((c) => !!c.assetId)) {
 			const track = tracks.find((t) => t.id === clip.trackId && t.type === "audio");
 			if (!track) continue;
@@ -5091,10 +5143,11 @@ export default function DAW(_props: TabRendererProps) {
 		};
 	};
 
-	const renderGmForExport = async (durationSeconds: number, sampleRate: number) => {
+	const renderGmForExport = async (durationSeconds: number, sampleRate: number, freezeTrackId?: string) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const anySolo = tracks.some((track) => track.solo);
-		const gmTracks = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track) && !track.mute && (!anySolo || track.solo));
+		const gmTracks = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track) &&
+			(freezeTrackId ? track.id === freezeTrackId : !frozenBuffer(track) && !track.mute && (!anySolo || track.solo)));
 		if (!gmTracks.length) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
 
 		const gmExportTracks = collectMidiExportTracks(true);
@@ -5126,7 +5179,7 @@ export default function DAW(_props: TabRendererProps) {
 			return [id, input] as const;
 		}));
 		gmTracks.forEach((track, index) => {
-			const input = buildOfflineTrackInput(offline, track, offline.destination, auxInputs);
+			const input = buildOfflineTrackInput(offline, freezeTrackId ? { ...track, level: 100, mute: false, solo: false, mixer: createDefaultMixerStrip(), effects: track.effects } : track, offline.destination, auxInputs);
 			synth.connectChannel(input, GM_EXPORT_CHANNELS[index % GM_EXPORT_CHANNELS.length]);
 		});
 		const midiSequence = BasicMIDI.fromArrayBuffer(midiBytes.buffer.slice(midiBytes.byteOffset, midiBytes.byteOffset + midiBytes.byteLength));
@@ -5148,9 +5201,52 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	};
 
+	const freezeTrack = async (track: Track) => {
+		if (freezingTrackId || track.freeze || track.type !== "instrument") return;
+		const durationSeconds = (endBar - 1) * getBarSeconds();
+		if (durationSeconds <= 0 || durationSeconds > 60) { setFreezeStatus("Freeze supports tracks up to 60 seconds. Shorten the end marker first."); return; }
+		if (!clips.some((clip) => clip.trackId === track.id && !clip.assetId && (clip.midiNotes?.length ?? 0) > 0)) { setFreezeStatus("This track has no MIDI notes to freeze."); return; }
+		if (track.vst3PluginPath && !trackUsesNativeVst(track)) { setFreezeStatus("The assigned VST must be available to freeze this track."); return; }
+		if (isPlaying) stop();
+		const projectId = activeProjectId;
+		const sourceKey = freezeSourceKey(track);
+		setFreezingTrackId(track.id);
+		setFreezeStatus(`Rendering ${track.name}…`);
+		try {
+			const sampleRate = 44100;
+			let audio: { left: Float32Array; right: Float32Array; sampleRate: number };
+			if (trackUsesNativeVst(track)) {
+				await ensureVstLoaded(track);
+				await bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects));
+				const neutral = { ...track, level: 100, mute: false, mixer: createDefaultMixerStrip() };
+				try {
+					await bridgeApi.setVst3Mixer(track.id, false, 100, nativeMixerForTrack(neutral));
+					const wav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(getBarSeconds()).filter((item) => item.trackId === track.id));
+					audio = decodeStereoFloatWav(wav);
+				} finally {
+					await bridgeApi.setVst3Mixer(track.id, track.mute, clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track)).catch(() => {});
+				}
+			} else audio = await renderGmForExport(durationSeconds, sampleRate, track.id);
+			if (activeProjectRef.current !== projectId || !tracksRef.current.some((current) => current.id === track.id && freezeSourceKey(current) === sourceKey)) throw new Error("The track changed during rendering. Freeze was cancelled.");
+			const artifactId = crypto.randomUUID();
+			const wav = new Blob([encodeStereoWav(audio.left, audio.right, audio.sampleRate, 32)], { type: "audio/wav" });
+			await saveFreezeArtifact(artifactId, wav);
+			const buffer = await ensureAudioCtx().decodeAudioData(await wav.arrayBuffer());
+			audioBuffersRef.current.set(artifactId, buffer);
+			setTracks((previous) => previous.map((item) => item.id === track.id ? { ...item, freeze: { artifactId, sourceKey, durationSeconds, sampleRate: audio.sampleRate } } : item));
+			setFreezeStatus(`${track.name} frozen. MIDI and effects remain editable after unfreeze.`);
+		} catch (error) { setFreezeStatus(error instanceof Error ? error.message : "Freeze failed."); }
+		finally { setFreezingTrackId(null); }
+	};
+	const unfreezeTrack = (track: Track) => {
+		if (isPlaying) stop();
+		setTracks((previous) => previous.map((item) => item.id === track.id ? { ...item, freeze: undefined } : item));
+		setFreezeStatus(`${track.name} unfrozen.`);
+	};
+
 	const runMasterExport = async () => {
 		if (exporting) return;
-		const unavailableDesktopVsts = tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track));
+		const unavailableDesktopVsts = tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track) && !frozenBuffer(track));
 		if (exportFormat !== "midi" && unavailableDesktopVsts.length > 0) {
 			const names = unavailableDesktopVsts.slice(0, 4).map((track) => track.vst3PluginName ?? track.name);
 			const more = unavailableDesktopVsts.length > names.length ? `\n…and ${unavailableDesktopVsts.length - names.length} more.` : "";
@@ -5190,7 +5286,7 @@ export default function DAW(_props: TabRendererProps) {
 			const gmMix = await renderGmForExport(durationSeconds, sampleRate);
 			addToMaster(gmMix.left, gmMix.right);
 
-			const vstTracks = tracks.filter((track) => track.type === "instrument" && trackUsesNativeVst(track));
+			const vstTracks = tracks.filter((track) => track.type === "instrument" && trackUsesNativeVst(track) && !frozenBuffer(track));
 			if (vstTracks.length) {
 				setExportStatus("Preparing exact VST3 instrument states…");
 				for (const track of vstTracks) await ensureVstLoaded(track);
@@ -5557,6 +5653,7 @@ export default function DAW(_props: TabRendererProps) {
 					))}
 				</div>
 			) : null}
+			{freezeStatus && <div role="status" className="shrink-0 border-b border-cyan-300/15 px-3 py-1 text-[11px] text-cyan-100">{freezeStatus}</div>}
 			{clips.filter((clip) => clip.id === selectedClipId && !clip.assetId && clip.midiNotes).map((clip) => (
 				<MidiToVocalPanel key={`${activeProjectId}:${clip.id}`} clip={clip} timebase={{ bpm, sigNum, sigDen }} onChange={(vocalSetup) => setClips((previous) => previous.map((item) => item.id === clip.id ? { ...item, vocalSetup } : item))} />
 			))}
@@ -5687,6 +5784,7 @@ export default function DAW(_props: TabRendererProps) {
 											onClick={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); setFxChainTrackId(t.id); setFxEditorEffectId(null); }}
 											title={`Effects chain${(t.effects?.length ?? 0) ? ` (${t.effects!.length})` : ""}`}
 										>FX{(t.effects?.length ?? 0) > 0 ? ` ${t.effects!.length}` : ""}</YSButton>
+										{t.type === "instrument" && <button type="button" className="text-[10px] px-1 text-cyan-200 disabled:opacity-35" disabled={!!freezingTrackId} onClick={(event) => { event.stopPropagation(); if (t.freeze) unfreezeTrack(t); else void freezeTrack(t); }} title={t.freeze ? frozenBuffer(t) ? "Unfreeze to edit the source chain" : "Freeze audio is missing or stale; source MIDI is playing. Unfreeze to render again." : "Render up to 60 seconds of this instrument and effects to local audio"}>{freezingTrackId === t.id ? "…" : t.freeze ? frozenBuffer(t) ? "UNFRZ" : "STALE" : "FRZ"}</button>}
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.mute ? "!bg-amber-300 !text-black !border-amber-100 shadow-[0_0_10px_rgba(252,211,77,0.55)] opacity-100" : ""}`} onClick={() => toggle(t.id, "mute")} aria-pressed={t.mute} title={t.mute ? "Muted — click to unmute" : "Mute"}>M</YSButton>
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.solo ? "!bg-cyan-300 !text-black !border-cyan-100 shadow-[0_0_10px_rgba(103,232,249,0.55)] opacity-100" : ""}`} onClick={() => toggle(t.id, "solo")} aria-pressed={t.solo} title={t.solo ? "Solo active — click to clear" : "Solo"}>S</YSButton>
 										<YSButton className={`text-[11px] px-2 py-1 rounded-md transition ${t.arm ? "!bg-rose-400 !text-black !border-rose-200 shadow-[0_0_10px_rgba(251,113,133,0.5)] opacity-100" : ""}`} onClick={() => toggle(t.id, "arm")} aria-pressed={t.arm} title={t.arm ? "Record armed — click to disarm" : "Arm"}>●</YSButton>
