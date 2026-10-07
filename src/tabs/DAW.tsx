@@ -42,6 +42,7 @@ import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
 import { localAiChat } from "../lib/localAiApi";
 import { projectEndBar } from "../lib/dawDuration";
+import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
 import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
 import {
 	GM_PROGRAMS,
@@ -130,6 +131,7 @@ type Clip = {
 	// Changing lengthBars without changing sourceDurationSec time-stretches the clip.
 	sourceOffsetSec?: number;
 	sourceDurationSec?: number;
+	warpMarkers?: WarpMarker[];
 	// Semitones relative to the original asset; rendered per clip, never into the asset.
 	pitchSemitones?: number;
 	timePitchMode?: "independent" | "linked";
@@ -4087,6 +4089,7 @@ export default function DAW(_props: TabRendererProps) {
 			win.ratio.toFixed(5),
 			win.pitchRate.toFixed(5),
 			clip.timePitchMode ?? "independent",
+			JSON.stringify(clip.warpMarkers ?? []),
 			fadeInSec.toFixed(5),
 			fadeOutSec.toFixed(5),
 			source.sampleRate,
@@ -4096,12 +4099,39 @@ export default function DAW(_props: TabRendererProps) {
 
 		const ctx = ensureAudioCtx();
 		const linked = clip.timePitchMode === "linked";
-		const effectivePitchRate = linked ? 1 / win.ratio : win.pitchRate;
-		const intermediate = renderPitchPreservedStretch(ctx, source, win.offsetSec, win.durationSec, linked ? 1 : win.ratio * effectivePitchRate);
-		const rendered = effectivePitchRate === 1 ? intermediate : resampleForPitch(ctx, intermediate, effectivePitchRate, Math.max(1, Math.floor(win.outputSec * source.sampleRate)));
+		const markers = normalizeWarpMarkers(clip.warpMarkers, win.durationSec, clip.lengthBars);
+		const boundaries = [{ sourceSec: 0, atBar: 0 }, ...markers, { sourceSec: win.durationSec, atBar: clip.lengthBars }];
+		const rendered = ctx.createBuffer(source.numberOfChannels, Math.max(1, Math.floor(win.outputSec * source.sampleRate)), source.sampleRate);
+		for (let index = 0; index < boundaries.length - 1; index++) {
+			const from = boundaries[index];
+			const to = boundaries[index + 1];
+			const segmentSourceSec = to.sourceSec - from.sourceSec;
+			const segmentOutputSec = (to.atBar - from.atBar) * barSecNow;
+			const segmentRatio = segmentOutputSec / segmentSourceSec;
+			const segmentPitchRate = linked ? 1 / segmentRatio : win.pitchRate;
+			const intermediate = renderPitchPreservedStretch(ctx, source, win.offsetSec + from.sourceSec, segmentSourceSec, linked ? 1 : segmentRatio * segmentPitchRate);
+			const segment = segmentPitchRate === 1 ? intermediate : resampleForPitch(ctx, intermediate, segmentPitchRate, Math.max(1, Math.floor(segmentOutputSec * source.sampleRate)));
+			const outputFrame = Math.floor((from.atBar / clip.lengthBars) * rendered.length);
+			for (let channel = 0; channel < rendered.numberOfChannels; channel++) {
+				const target = rendered.getChannelData(channel);
+				const data = segment.getChannelData(channel);
+				target.set(data.subarray(0, Math.max(0, Math.min(data.length, target.length - outputFrame))), outputFrame);
+			}
+		}
 		applyClipFadesToBuffer(rendered, fadeInSec, fadeOutSec);
 		stretchedBuffersRef.current.set(clip.id, { key, buffer: rendered });
 		return rendered;
+	};
+
+	const detectClipWarpMarkers = async (clip: Clip) => {
+		if (!clip.assetId) return;
+		const source = await ensureBufferForAsset(clip.assetId);
+		const win = getClipSourceWindow(clip, source);
+		const channels = Array.from({ length: source.numberOfChannels }, (_, channel) => source.getChannelData(channel));
+		const markers = detectWarpTransients(channels, source.sampleRate, win.offsetSec, win.durationSec)
+			.map((sourceSec) => ({ sourceSec, atBar: applySnap(clip.startBar + sourceSec / win.durationSec * clip.lengthBars) - clip.startBar }));
+		setClips((current) => current.map((item) => item.id === clip.id ? { ...item, warpMarkers: normalizeWarpMarkers(markers, win.durationSec, clip.lengthBars) } : item));
+		stretchedBuffersRef.current.delete(clip.id);
 	};
 
 	useEffect(() => {
@@ -6074,9 +6104,12 @@ export default function DAW(_props: TabRendererProps) {
 																	<div key={i} style={{ height: `${Math.max(6, Math.round(h * (trackH * 0.42)))}px`, width: 2, background: "rgba(8,12,28,0.34)" }} />
 																))}
 															</div>
-															<div className="absolute inset-0 bg-gradient-to-b from-white/6 via-transparent to-black/10" />
-														</div>
-													)}
+													<div className="absolute inset-0 bg-gradient-to-b from-white/6 via-transparent to-black/10" />
+												</div>
+											)}
+											{c.assetId && normalizeWarpMarkers(c.warpMarkers, sourceDurationSec, c.lengthBars).map((marker, index) => (
+												<div key={`${marker.sourceSec}:${index}`} className="absolute top-0 bottom-0 border-l border-amber-200/90 pointer-events-none z-[22]" style={{ left: `${marker.atBar / c.lengthBars * 100}%` }} title={`Warp ${marker.sourceSec.toFixed(2)}s → ${marker.atBar.toFixed(2)} bars`} />
+											))}
 													{(fadeInBars > 0 || fadeOutBars > 0) && (
 														<svg className="absolute inset-0 w-full h-full pointer-events-none z-[21]" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
 															{fadeInBars > 0 && (
@@ -6374,6 +6407,19 @@ export default function DAW(_props: TabRendererProps) {
 							<button className="w-full text-left px-3 py-2 hover:bg-violet-400/10" onClick={() => { setMidiEditorClipId(clipContextMenu.clipId); setClipContextMenu(null); }}>♬ Edit MIDI</button>
 						)}
 						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => crossfadeIntoNextClip(menuClip.id)}>Crossfade into next clip</button>}
+						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => { void detectClipWarpMarkers(menuClip); setClipContextMenu(null); }}>Detect warp markers</button>}
+						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => {
+							const sourceSec = Math.max(0.001, menuClip.sourceDurationSec ?? menuClip.lengthBars * getBarSeconds());
+							const atBar = applySnap(menuClip.startBar + menuClip.lengthBars / 2) - menuClip.startBar;
+							setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, warpMarkers: normalizeWarpMarkers([...(clip.warpMarkers ?? []), { sourceSec: sourceSec / 2, atBar }], sourceSec, clip.lengthBars) } : clip));
+							setClipContextMenu(null);
+						}}>Add warp marker at midpoint</button>}
+						{menuClip?.assetId && (menuClip.warpMarkers?.length ?? 0) > 0 && <div className="px-3 py-1 max-h-40 overflow-y-auto text-xs">{menuClip.warpMarkers?.map((marker, index) => <label key={index} className="flex items-center gap-1 py-1">{marker.sourceSec.toFixed(2)}s →
+							<input aria-label={`Warp marker ${index + 1} bar`} type="number" step={stepBars} min="0" max={menuClip.lengthBars} className="w-16 bg-neutral-900 border border-white/20 rounded" value={marker.atBar} onChange={(event) => {
+								const sourceSec = Math.max(0.001, menuClip.sourceDurationSec ?? menuClip.lengthBars * getBarSeconds());
+								const next = [...(menuClip.warpMarkers ?? [])]; next[index] = { ...marker, atBar: applySnap(menuClip.startBar + Number(event.target.value)) - menuClip.startBar };
+								setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, warpMarkers: normalizeWarpMarkers(next, sourceSec, clip.lengthBars) } : clip));
+							}} /> bars <button aria-label={`Remove warp marker ${index + 1}`} onClick={() => setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, warpMarkers: clip.warpMarkers?.filter((_, i) => i !== index) } : clip))}>×</button></label>)}</div>}
 						{menuClip?.assetId && (() => {
 							const sourceSec = Math.max(0.001, menuClip.sourceDurationSec ?? menuClip.lengthBars * getBarSeconds());
 							const timeRatio = menuClip.lengthBars * getBarSeconds() / sourceSec;
