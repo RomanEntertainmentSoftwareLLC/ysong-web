@@ -3,14 +3,12 @@ import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemresto
 import {
   critiqueReportUrl,
   sourceAudioUrl,
-  startCritique,
-  uploadForCritique,
-  waitForLocalJob,
   requestAiCritiqueSummary,
   type AiCritiqueSummary,
   type CritiqueFinding,
   type CritiqueReport,
 } from "./api";
+import { analyzeCritique, prepareCritique } from "./workflow";
 
 type Props = {
   onBack: () => void;
@@ -161,7 +159,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     if (!file || busy) return;
     setError(""); setStage("uploading");
     try {
-      const result = await uploadForCritique(file);
+      const result = await prepareCritique(file);
       setUpload(result); setStage("ready");
     } catch (e: unknown) {
       setError(errorMessage(e, "Audio preparation failed.")); setStage("error");
@@ -183,12 +181,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     setError(""); setReport(null); setStage("analyzing");
     const controller = new AbortController(); abortRef.current = controller;
     try {
-      const started = await startCritique(upload.asset_id, deepScan);
-      setJob(started);
-      const finished = await waitForLocalJob(started.job_id, setJob, controller.signal);
-      setJob(finished);
-      const next = finished.result?.report as CritiqueReport | undefined;
-      if (!next?.asset_id) throw new Error("Critique completed without a report.");
+      const next = await analyzeCritique(upload, deepScan, setJob, controller.signal);
       setReport(next); setStage("done");
       void runAiCritique(next);
     } catch (e: unknown) {

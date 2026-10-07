@@ -1,5 +1,5 @@
-import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api";
-import { buildCritiqueEvidence, validateAiCritiqueSummary, type AiCritiqueSummary } from "./evidenceContract";
+import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api.ts";
+import { buildCritiqueEvidence, validateAiCritiqueSummary, type AiCritiqueSummary } from "./evidenceContract.ts";
 
 type JsonErrorPayload = { detail?: unknown; message?: unknown; error?: unknown };
 
@@ -83,7 +83,7 @@ export function critiqueReportUrl(assetId: string) {
   return `${VOCAL_API_BASE}/v1/files/reports/${encodeURIComponent(assetId)}/critique`;
 }
 
-export type { AiCritiqueSummary } from "./evidenceContract";
+export type { AiCritiqueSummary } from "./evidenceContract.ts";
 
 export async function requestAiCritiqueSummary(report: CritiqueReport): Promise<AiCritiqueSummary> {
   const evidence = buildCritiqueEvidence(report);
