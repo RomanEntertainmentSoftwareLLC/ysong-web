@@ -642,7 +642,9 @@ export default function DAW(_props: TabRendererProps) {
 		masterLevel?: number;
 		approvedComposerArrangement?: ComposerArrangement | null;
 		progressiveStemState?: ProgressiveStemState;
+		timelineMarkers?: TimelineMarker[];
 	};
+	type TimelineMarker = { id: string; kind: "marker" | "region"; name: string; color: string; startBar: number; endBar?: number };
 
 	function safeParse<T>(raw: string | null): T | null {
 		if (!raw) return null;
@@ -826,6 +828,11 @@ export default function DAW(_props: TabRendererProps) {
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [isRecording, setIsRecording] = useState(false);
 	const [loopEnabled, setLoopEnabled] = useState(false);
+	const [timelineMarkers, setTimelineMarkers] = useState<TimelineMarker[]>([]);
+	const [markerName, setMarkerName] = useState("");
+	const [markerKind, setMarkerKind] = useState<"marker" | "region">("marker");
+	const [markerColor, setMarkerColor] = useState("#38bdf8");
+	const [exportRange, setExportRange] = useState<{ startBar: number; endBar: number } | null>(null);
 	const [bpm, setBpm] = useState(120);
 	const [sigNum, setSigNum] = useState(4);
 	const [sigDen, setSigDen] = useState(4);
@@ -916,6 +923,7 @@ export default function DAW(_props: TabRendererProps) {
 		setEndBar(DEFAULT_END_BAR);
 		setEndMarkerMode("auto");
 		setLoopEnabled(false);
+		setTimelineMarkers([]);
 		setMasterLevel(100);
 		setFxChainTrackId(null);
 		setFxEditorEffectId(null);
@@ -1647,6 +1655,7 @@ export default function DAW(_props: TabRendererProps) {
 	// Playhead placement should use the element you clicked on (ruler or lanes)
 	const setPlayheadFromEvent = (e: React.PointerEvent) => {
 		if (e.pointerType === "touch" && !touchEditMode) return;
+		if (e.target instanceof HTMLElement && e.target.closest("button, input, select")) return;
 		seekTransport(clientXToBarInEl(e.clientX, e.currentTarget as HTMLElement, bars));
 	};
 
@@ -1984,6 +1993,32 @@ export default function DAW(_props: TabRendererProps) {
 	const loopWidthPx = Math.max(0, barToLeftPx(loopR) - barToLeftPx(loopL));
 	const playheadLeftPx = barToLeftPx(playheadPosBars);
 	const endLeftPx = barToLeftPx(endBar);
+	const addTimelineMarker = () => {
+		const name = markerName.trim() || (markerKind === "marker" ? `Marker ${timelineMarkers.filter((item) => item.kind === "marker").length + 1}` : `Region ${timelineMarkers.filter((item) => item.kind === "region").length + 1}`);
+		const startBar = clamp(playheadPosBars, 1, bars);
+		const marker: TimelineMarker = markerKind === "region"
+			? { id: crypto.randomUUID(), kind: "region", name, color: markerColor, startBar, endBar: clamp(Math.max(startBar + 0.01, loopR), startBar + 0.01, bars + 1) }
+			: { id: crypto.randomUUID(), kind: "marker", name, color: markerColor, startBar };
+		setTimelineMarkers((items) => [...items, marker].sort((a, b) => a.startBar - b.startBar));
+		setMarkerName("");
+	};
+	const applyTimelineRange = (item: TimelineMarker, action: "loop" | "export") => {
+		const startBar = item.startBar;
+		const endBar = clamp(item.kind === "region" ? item.endBar ?? item.startBar + 1 : Math.min(bars + 1, item.startBar + 1), startBar + 0.01, bars + 1);
+		if (action === "loop") { setLoopL(startBar); setLoopR(endBar); setLoopEnabled(true); setPlayheadPosBars(startBar); }
+		else { setExportRange({ startBar, endBar }); setExportOpen(true); setExportStatus(""); }
+	};
+	useEffect(() => {
+		const onTimelineKeys = (event: KeyboardEvent) => {
+			const target = event.target;
+			if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName))) return;
+			if (event.altKey || event.ctrlKey || event.metaKey) return;
+			if (event.key.toLowerCase() === "m") { event.preventDefault(); setMarkerKind("marker"); setTimelineMarkers((items) => { const next: TimelineMarker = { id: crypto.randomUUID(), kind: "marker", name: `Marker ${items.filter((item) => item.kind === "marker").length + 1}`, color: "#38bdf8", startBar: clamp(playheadPosBars, 1, bars) }; return [...items, next].sort((a, b) => a.startBar - b.startBar); }); }
+			if (event.key.toLowerCase() === "r") { event.preventDefault(); setMarkerKind("region"); const startBar = clamp(playheadPosBars, 1, bars); setTimelineMarkers((items) => { const next: TimelineMarker = { id: crypto.randomUUID(), kind: "region", name: `Region ${items.filter((item) => item.kind === "region").length + 1}`, color: "#a78bfa", startBar, endBar: clamp(Math.max(startBar + 1, loopR), startBar + 0.01, bars + 1) }; return [...items, next].sort((a, b) => a.startBar - b.startBar); }); }
+		};
+		window.addEventListener("keydown", onTimelineKeys);
+		return () => window.removeEventListener("keydown", onTimelineKeys);
+	}, [playheadPosBars, bars, loopR]);
 
 	// --- Add Track menu positioning ---
 	const computeAddMenuPos = () => {
@@ -3038,6 +3073,7 @@ export default function DAW(_props: TabRendererProps) {
 			setEndMarkerMode("auto");
 			setBars(MIN_BARS);
 			setLoopEnabled(false);
+			setTimelineMarkers([]);
 			setBpm(120);
 			setSigNum(4);
 			setSigDen(4);
@@ -3093,6 +3129,7 @@ export default function DAW(_props: TabRendererProps) {
 		setEndMarkerMode(data.endMarkerMode ?? (data.endBar != null && data.endBar !== 65 ? "manual" : "auto"));
 		setBars(MIN_BARS);
 		setLoopEnabled(!!data.loopEnabled);
+		setTimelineMarkers((data.timelineMarkers ?? []).filter((marker) => marker && typeof marker.id === "string" && (marker.kind === "marker" || marker.kind === "region") && typeof marker.name === "string" && Number.isFinite(marker.startBar)).map((marker) => ({ ...marker, startBar: clamp(marker.startBar, 1, MAX_BARS), ...(marker.kind === "region" ? { endBar: clamp(marker.endBar ?? marker.startBar + 1, marker.startBar + 0.01, MAX_BARS) } : {}) })));
 
 		setBpm(clamp(data.bpm ?? 120, 20, 400));
 		setSigNum(data.sigNum ?? 4);
@@ -3129,6 +3166,7 @@ export default function DAW(_props: TabRendererProps) {
 		masterLevel,
 		approvedComposerArrangement,
 		progressiveStemState,
+		timelineMarkers,
 	});
 	const currentFingerprint = JSON.stringify({ name: projectName, state: buildDawPersistPayload() });
 	const currentPayloadRef = useRef<{ name: string; payload: DawPersistV1 }>({ name: projectName, payload: buildDawPersistPayload() });
@@ -3414,7 +3452,7 @@ export default function DAW(_props: TabRendererProps) {
 		return () => window.removeEventListener("keydown", onProjectShortcut);
 		// These are intentionally the same project-state inputs used by projectFileText().
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [projectName, projectGeneration, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, endMarkerMode, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState]);
+	}, [projectName, projectGeneration, tracks, clips, projectAssets, trackHeights, selectedTrackId, selectedClipId, snapEnabled, gridValue, gridMode, zoomPct, playheadPosBars, loopL, loopR, endBar, endMarkerMode, loopEnabled, bpm, sigNum, sigDen, masterLevel, approvedComposerArrangement, progressiveStemState, timelineMarkers]);
 
 	useEffect(() => {
 		// Never autosave the component's empty pre-hydration render. On cold start,
@@ -5103,7 +5141,7 @@ export default function DAW(_props: TabRendererProps) {
 		return input;
 	};
 
-	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number, sourceIds?: Set<string>, busId?: string) => {
+	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number, sourceIds?: Set<string>, busId?: string, rangeOffsetSeconds = 0) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const offline = new OfflineAudioContext(2, frames, sampleRate);
 		const auxInputs = new Map(DAW_AUX_IDS.map((id) => {
@@ -5121,7 +5159,8 @@ export default function DAW(_props: TabRendererProps) {
 			const source = offline.createBufferSource();
 			source.buffer = buffer;
 			source.connect(buildOfflineTrackInput(offline, { ...track, effects: [] }, directOutput, auxInputs));
-			source.start(0, 0, Math.min(buffer.duration, durationSeconds));
+			const offset = Math.min(rangeOffsetSeconds, Math.max(0, buffer.duration - 0.0001));
+			source.start(0, offset, Math.min(buffer.duration - offset, durationSeconds));
 			scheduled++;
 		}
 		for (const clip of clips.filter((c) => !!c.assetId)) {
@@ -5141,7 +5180,10 @@ export default function DAW(_props: TabRendererProps) {
 				trackInputs.set(track.id, input);
 			}
 			source.connect(input);
-			source.start(startSeconds, 0, playSeconds);
+			const sourceOffsetSeconds = Math.min(Math.max(0, buffer.duration - 0.0001), Math.max(0, rangeOffsetSeconds - startSeconds));
+			const destinationStart = Math.max(0, startSeconds - rangeOffsetSeconds);
+			if (destinationStart >= durationSeconds) continue;
+			source.start(destinationStart, sourceOffsetSeconds, Math.min(buffer.duration - sourceOffsetSeconds, durationSeconds - destinationStart));
 			scheduled += 1;
 		}
 		if (!scheduled) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
@@ -5153,14 +5195,23 @@ export default function DAW(_props: TabRendererProps) {
 		};
 	};
 
-	const renderGmForExport = async (durationSeconds: number, sampleRate: number, freezeTrackId?: string, sourceIds?: Set<string>, busId?: string) => {
+	const renderGmForExport = async (durationSeconds: number, sampleRate: number, freezeTrackId?: string, sourceIds?: Set<string>, busId?: string, rangeStartBar = 1) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const anySolo = tracks.some((track) => track.solo);
 		const gmTracks = tracks.filter((track) => (!sourceIds || sourceIds.has(track.id)) && track.type === "instrument" && !trackUsesNativeVst(track) &&
 			(freezeTrackId ? track.id === freezeTrackId : !frozenBuffer(track) && !track.mute && (!anySolo || track.solo)));
 		if (!gmTracks.length) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
 
-		const gmExportTracks = collectMidiExportTracks(true);
+		const gmExportTracks: DawExportMidiTrack[] = collectMidiExportTracks(true).map((track) => {
+			const notes = track.notes.flatMap((note) => {
+				const start = note.startBars - (rangeStartBar - 1);
+				const end = start + note.lengthBars;
+				if (end <= 0 || start >= durationSeconds / getBarSeconds()) return [];
+				return [{ ...note, startBars: Math.max(0, start), lengthBars: Math.max(1 / 128, Math.min(end, durationSeconds / getBarSeconds()) - Math.max(0, start)) }];
+			});
+			const shiftAutomation = (points: DawExportMidiTrack["pitchBend"]) => points?.filter((point) => point.atBars >= rangeStartBar - 1).map((point) => ({ ...point, atBars: point.atBars - (rangeStartBar - 1) }));
+			return { ...track, notes, pitchBend: shiftAutomation(track.pitchBend), modulation: shiftAutomation(track.modulation) };
+		});
 		const gmTrackIndex = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track));
 		const midiTracks: DawExportMidiTrack[] = gmTracks.map((track) => {
 			const sourceIndex = gmTrackIndex.findIndex((candidate) => candidate.id === track.id);
@@ -5172,7 +5223,7 @@ export default function DAW(_props: TabRendererProps) {
 		});
 		if (!midiTracks.some((track) => track.notes.length > 0)) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
 
-		const midiBytes = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar, tracks: midiTracks });
+		const midiBytes = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar: durationSeconds / getBarSeconds() + 1, tracks: midiTracks });
 		const [{ WorkletSynthesizer }, { BasicMIDI }] = await Promise.all([
 			import("spessasynth_lib"),
 			import("spessasynth_core"),
@@ -5284,17 +5335,32 @@ export default function DAW(_props: TabRendererProps) {
 		try {
 			if (isPlaying) stop();
 			const baseName = safeExportFileName(projectName);
+			const rangeStartBar = exportRange?.startBar ?? 1;
+			const rangeEndBar = exportRange?.endBar ?? endBar;
 			if (exportFormat === "midi") {
 				setExportStatus("Writing MIDI…");
-				const midi = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar, tracks: collectMidiExportTracks(false) });
+				const rangeBars = rangeEndBar - rangeStartBar;
+				const tracksForRange = collectMidiExportTracks(false).map((track) => ({
+					...track,
+					notes: track.notes.flatMap((note) => {
+						const start = note.startBars - (rangeStartBar - 1);
+						const end = start + note.lengthBars;
+						if (end <= 0 || start >= rangeBars) return [];
+						return [{ ...note, startBars: Math.max(0, start), lengthBars: Math.max(1 / 128, Math.min(end, rangeBars) - Math.max(0, start)) }];
+					}),
+					pitchBend: track.pitchBend?.filter((point) => point.atBars >= rangeStartBar - 1 && point.atBars < rangeEndBar - 1).map((point) => ({ ...point, atBars: point.atBars - (rangeStartBar - 1) })),
+					modulation: track.modulation?.filter((point) => point.atBars >= rangeStartBar - 1 && point.atBars < rangeEndBar - 1).map((point) => ({ ...point, atBars: point.atBars - (rangeStartBar - 1) })),
+				}));
+				const midi = buildStandardMidiFile({ bpm, sigNum, sigDen, endBar: rangeBars + 1, tracks: tracksForRange });
 				downloadBlob(new Blob([midi], { type: "audio/midi" }), `${baseName}.mid`);
 				setExportStatus("MIDI exported.");
+				setExportRange(null);
 				return;
 			}
 
 			const sampleRate = exportMode === "stems" ? stemSampleRate : exportSampleRate;
 			const barSec = getBarSeconds();
-			const durationSeconds = Math.max(0.001, (endBar - 1) * barSec + (exportMode === "stems" ? stemTails : 0));
+			const durationSeconds = Math.max(0.001, (rangeEndBar - rangeStartBar) * barSec + (exportMode === "stems" ? stemTails : 0));
 			const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 			const downloads: { blob: Blob; name: string }[] = [];
 			const warnings: string[] = [];
@@ -5315,12 +5381,13 @@ export default function DAW(_props: TabRendererProps) {
 			};
 
 			setExportStatus(`Rendering ${targetIndex + 1}/${targets.length}: ${stemName} (audio)…`);
-			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate, sourceIds, busId);
+			const rangeOffsetSeconds = (rangeStartBar - 1) * barSec;
+			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate, sourceIds, busId, rangeOffsetSeconds);
 			checkCancelled();
 			addToMaster(audioMix.left, audioMix.right);
 
 			setExportStatus("Rendering General MIDI…");
-			const gmMix = await renderGmForExport(durationSeconds, sampleRate, undefined, sourceIds, busId);
+			const gmMix = await renderGmForExport(durationSeconds, sampleRate, undefined, sourceIds, busId, rangeStartBar);
 			checkCancelled();
 			addToMaster(gmMix.left, gmMix.right);
 
@@ -5333,13 +5400,15 @@ export default function DAW(_props: TabRendererProps) {
 					await bridgeApi.setVst3Effects(track.id, toVstTrackEffects(track.effects));
 					await bridgeApi.setVst3Mixer(track.id, track.mute || (anySolo && !track.solo), clamp(track.level ?? 100, 0, 127), nativeMixerForTrack(track));
 				}));
-				setExportStatus(`Rendering VST3 master 001 → ${Math.max(1, Math.ceil(endBar - 1))}…`);
+				setExportStatus(`Rendering VST3 master ${Math.ceil(rangeStartBar).toString().padStart(3, "0")} → ${Math.max(1, Math.ceil(rangeEndBar - 1))}…`);
 				await bridgeApi.setVst3Master(100);
 				let vstWav: ArrayBuffer;
-				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(barSec).filter((item) => !sourceIds || sourceIds.has(item.trackId))); }
+				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds + rangeOffsetSeconds, buildOfflineVstTracks(barSec).filter((item) => !sourceIds || sourceIds.has(item.trackId))); }
 				finally { await bridgeApi.setVst3Master(masterLevel); }
 				checkCancelled();
-				const vstMix = decodeStereoFloatWav(vstWav);
+				const fullVstMix = decodeStereoFloatWav(vstWav);
+				const offsetFrames = Math.min(fullVstMix.left.length, Math.floor(rangeOffsetSeconds * fullVstMix.sampleRate));
+				const vstMix = rangeOffsetSeconds > 0 ? { ...fullVstMix, left: fullVstMix.left.slice(offsetFrames, offsetFrames + frames), right: fullVstMix.right.slice(offsetFrames, offsetFrames + frames) } : fullVstMix;
 				if (vstMix.sampleRate !== sampleRate) throw new Error(`Bridge rendered VST3 audio at ${vstMix.sampleRate} Hz; YSong export is ${sampleRate} Hz. Match the Bridge sample rate before exporting.`);
 				addToMaster(vstMix.left, vstMix.right);
 			}
@@ -5388,6 +5457,7 @@ export default function DAW(_props: TabRendererProps) {
 			setExportWarning(warnings.join(" "));
 			for (const file of downloads) downloadBlob(file.blob, file.name);
 			setExportStatus(`Export complete: ${targets.length} file${targets.length === 1 ? "" : "s"}.`);
+			setExportRange(null);
 		} catch (error) {
 			console.error("YSong export failed", error);
 			setExportStatus(error instanceof Error ? error.message : "Export failed.");
@@ -6096,6 +6166,12 @@ export default function DAW(_props: TabRendererProps) {
 											);
 										})}
 									</div>
+									{timelineMarkers.filter((item) => item.kind === "region").map((item) => {
+										const left = barToLeftPx(item.startBar);
+										const width = Math.max(8, barToLeftPx(item.endBar ?? item.startBar + 1) - left);
+										return <div key={item.id} className="absolute top-0 bottom-0 z-[6] border-x pointer-events-none" style={{ left, width, backgroundColor: `${item.color}22`, borderColor: `${item.color}99` }} aria-label={`${item.name} region`} />;
+									})}
+									{timelineMarkers.filter((item) => item.kind === "marker").map((item) => <button key={item.id} type="button" className="absolute top-0 z-[15] h-10 w-5 -translate-x-1/2 flex justify-center" style={{ left: barToLeftPx(item.startBar), color: item.color }} title={`${item.name}, bar ${item.startBar.toFixed(2)}; activate to seek`} aria-label={`Seek to marker ${item.name} at bar ${item.startBar.toFixed(2)}`} onClick={(event) => { event.stopPropagation(); setPlayheadPosBars(item.startBar); }}><span className="h-full border-l-2" style={{ borderColor: item.color }} /><span className="absolute left-1 top-1 rounded px-1 text-[9px] text-black font-semibold whitespace-nowrap" style={{ backgroundColor: item.color }}>{item.name}</span></button>)}
 
 									{/* E is a real composition boundary. Hide measure graphics after it. */}
 									<div
@@ -6187,6 +6263,17 @@ export default function DAW(_props: TabRendererProps) {
 									</div>
 								</div>
 							</div>
+						</div>
+						<div className="border-b border-white/10 bg-neutral-950/70 p-2" onPointerDown={(event) => event.stopPropagation()}>
+							<div className="flex flex-wrap items-center gap-2">
+								<strong className="text-[11px]">Markers &amp; regions</strong>
+								<input aria-label="Marker or region name" value={markerName} onChange={(event) => setMarkerName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addTimelineMarker(); }} placeholder="Name" className="w-28 rounded border border-white/15 bg-neutral-900 px-2 py-1 text-xs" />
+								<select aria-label="Timeline item type" value={markerKind} onChange={(event) => setMarkerKind(event.target.value as "marker" | "region")} className="rounded border border-white/15 bg-neutral-900 px-2 py-1 text-xs"><option value="marker">Marker at playhead</option><option value="region">Region from playhead to loop end</option></select>
+								<input type="color" aria-label="Marker or region color" value={markerColor} onChange={(event) => setMarkerColor(event.target.value)} className="h-7 w-8 rounded border border-white/15 bg-neutral-900" />
+								<button type="button" onClick={addTimelineMarker} className="rounded border border-cyan-300/30 px-2 py-1 text-xs">Add</button>
+								<span className="text-[10px] opacity-60">M: marker · R: region (keyboard focus outside fields)</span>
+							</div>
+							{timelineMarkers.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{timelineMarkers.map((item) => <div key={item.id} className="flex items-center gap-1 rounded border px-1.5 py-1 text-[10px]" style={{ borderColor: `${item.color}88`, color: item.color }}><button type="button" onClick={() => setPlayheadPosBars(item.startBar)} aria-label={`Go to ${item.name}`}>{item.name} · {item.startBar.toFixed(2)}{item.kind === "region" ? `–${(item.endBar ?? 0).toFixed(2)}` : ""}</button>{item.kind === "region" && <><button type="button" onClick={() => applyTimelineRange(item, "loop")} aria-label={`Loop ${item.name}`}>Loop</button><button type="button" onClick={() => applyTimelineRange(item, "export")} aria-label={`Export ${item.name}`}>Export</button></>}<button type="button" onClick={() => setTimelineMarkers((items) => items.filter((entry) => entry.id !== item.id))} aria-label={`Delete ${item.name}`}>×</button></div>)}</div>}
 						</div>
 
 						{/* Lanes */}
