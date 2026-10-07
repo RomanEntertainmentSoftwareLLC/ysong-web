@@ -775,6 +775,11 @@ export default function DAW(_props: TabRendererProps) {
 	type ExportFormat = "wav16" | "wav24" | "flac" | "mp3" | "midi";
 	const [exportFormat, setExportFormat] = useState<ExportFormat>("wav24");
 	const [exportMp3Bitrate, setExportMp3Bitrate] = useState(320);
+	const [exportMode, setExportMode] = useState<"master" | "stems">("master");
+	const [stemIds, setStemIds] = useState<string[]>([]);
+	const [stemTails, setStemTails] = useState(0);
+	const [stemSampleRate, setStemSampleRate] = useState(48000);
+	const [stemPrefix, setStemPrefix] = useState("");
 	const [exporting, setExporting] = useState(false);
 	const [exportStatus, setExportStatus] = useState("");
 	const [dawAgentOpen, setDawAgentOpen] = useState(false);
@@ -5096,26 +5101,29 @@ export default function DAW(_props: TabRendererProps) {
 		return input;
 	};
 
-	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number) => {
+	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number, sourceIds?: Set<string>, busId?: string) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const offline = new OfflineAudioContext(2, frames, sampleRate);
 		const auxInputs = new Map(DAW_AUX_IDS.map((id) => {
 			const input = offline.createGain();
-			input.connect(offline.destination);
+			if (!busId || id === busId) input.connect(offline.destination);
 			return [id, input] as const;
 		}));
 		const trackInputs = new Map<string, AudioNode>();
+		const directOutput = busId ? offline.createGain() : offline.destination;
 		let scheduled = 0;
 		for (const track of tracks) {
+			if (sourceIds && !sourceIds.has(track.id)) continue;
 			const buffer = frozenBuffer(track);
 			if (!buffer) continue;
 			const source = offline.createBufferSource();
 			source.buffer = buffer;
-			source.connect(buildOfflineTrackInput(offline, { ...track, effects: [] }, offline.destination, auxInputs));
+			source.connect(buildOfflineTrackInput(offline, { ...track, effects: [] }, directOutput, auxInputs));
 			source.start(0, 0, Math.min(buffer.duration, durationSeconds));
 			scheduled++;
 		}
 		for (const clip of clips.filter((c) => !!c.assetId)) {
+			if (sourceIds && !sourceIds.has(clip.trackId)) continue;
 			const track = tracks.find((t) => t.id === clip.trackId && t.type === "audio");
 			if (!track) continue;
 			const startSeconds = Math.max(0, (clip.startBar - 1) * getBarSeconds());
@@ -5127,7 +5135,7 @@ export default function DAW(_props: TabRendererProps) {
 			source.buffer = buffer;
 			let input = trackInputs.get(track.id);
 			if (!input) {
-				input = buildOfflineTrackInput(offline, track, offline.destination, auxInputs);
+				input = buildOfflineTrackInput(offline, track, directOutput, auxInputs);
 				trackInputs.set(track.id, input);
 			}
 			source.connect(input);
@@ -5143,10 +5151,10 @@ export default function DAW(_props: TabRendererProps) {
 		};
 	};
 
-	const renderGmForExport = async (durationSeconds: number, sampleRate: number, freezeTrackId?: string) => {
+	const renderGmForExport = async (durationSeconds: number, sampleRate: number, freezeTrackId?: string, sourceIds?: Set<string>, busId?: string) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const anySolo = tracks.some((track) => track.solo);
-		const gmTracks = tracks.filter((track) => track.type === "instrument" && !trackUsesNativeVst(track) &&
+		const gmTracks = tracks.filter((track) => (!sourceIds || sourceIds.has(track.id)) && track.type === "instrument" && !trackUsesNativeVst(track) &&
 			(freezeTrackId ? track.id === freezeTrackId : !frozenBuffer(track) && !track.mute && (!anySolo || track.solo)));
 		if (!gmTracks.length) return { left: new Float32Array(frames), right: new Float32Array(frames), sampleRate };
 
@@ -5173,13 +5181,14 @@ export default function DAW(_props: TabRendererProps) {
 		const offline = new OfflineAudioContext(2, frames, sampleRate);
 		await offline.audioWorklet.addModule("/spessasynth_processor.min.js");
 		const synth = new WorkletSynthesizer(offline);
+		const directOutput = busId ? offline.createGain() : offline.destination;
 		const auxInputs = new Map(DAW_AUX_IDS.map((id) => {
 			const input = offline.createGain();
-			input.connect(offline.destination);
+			if (!busId || id === busId) input.connect(offline.destination);
 			return [id, input] as const;
 		}));
 		gmTracks.forEach((track, index) => {
-			const input = buildOfflineTrackInput(offline, freezeTrackId ? { ...track, level: 100, mute: false, solo: false, mixer: createDefaultMixerStrip(), effects: track.effects } : track, offline.destination, auxInputs);
+			const input = buildOfflineTrackInput(offline, freezeTrackId ? { ...track, level: 100, mute: false, solo: false, mixer: createDefaultMixerStrip(), effects: track.effects } : track, directOutput, auxInputs);
 			synth.connectChannel(input, GM_EXPORT_CHANNELS[index % GM_EXPORT_CHANNELS.length]);
 		});
 		const midiSequence = BasicMIDI.fromArrayBuffer(midiBytes.buffer.slice(midiBytes.byteOffset, midiBytes.byteOffset + midiBytes.byteLength));
@@ -5246,7 +5255,14 @@ export default function DAW(_props: TabRendererProps) {
 
 	const runMasterExport = async () => {
 		if (exporting) return;
-		const unavailableDesktopVsts = tracks.filter((track) => track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track) && !frozenBuffer(track));
+		const targets = exportMode === "stems" ? stemIds : ["MASTER"];
+		if (!targets.length) { setExportStatus("Select at least one stem."); return; }
+		if (exportMode === "stems" && exportFormat === "midi") { setExportStatus("Choose an audio format for stems."); return; }
+		if (exportMode === "stems" && targets.some((id) => DAW_AUX_IDS.includes(id) && tracks.some((track) => {
+			const mixer = mixerForTrack(track);
+			return trackUsesNativeVst(track) && !frozenBuffer(track) && (mixer.output === id || mixer.sends[DAW_AUX_IDS.indexOf(id)].level > 0);
+		}))) { setExportStatus("A selected bus contains a native VST; Bridge bus rendering is unavailable."); return; }
+		const unavailableDesktopVsts = tracks.filter((track) => (exportMode === "master" || targets.includes(track.id)) && track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track) && !frozenBuffer(track));
 		if (exportFormat !== "midi" && unavailableDesktopVsts.length > 0) {
 			const names = unavailableDesktopVsts.slice(0, 4).map((track) => track.vst3PluginName ?? track.name);
 			const more = unavailableDesktopVsts.length > names.length ? `\n…and ${unavailableDesktopVsts.length - names.length} more.` : "";
@@ -5267,10 +5283,18 @@ export default function DAW(_props: TabRendererProps) {
 				return;
 			}
 
-			const sampleRate = exportSampleRate;
+			const sampleRate = exportMode === "stems" ? stemSampleRate : exportSampleRate;
 			const barSec = getBarSeconds();
-			const durationSeconds = Math.max(0.001, (endBar - 1) * barSec);
+			const durationSeconds = Math.max(0.001, (endBar - 1) * barSec + (exportMode === "stems" ? stemTails : 0));
 			const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
+			const downloads: { blob: Blob; name: string }[] = [];
+			for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
+			const target = targets[targetIndex];
+			const busId = DAW_AUX_IDS.includes(target) ? target : undefined;
+			const sourceIds = target === "MASTER" ? undefined : new Set(busId
+				? tracks.filter((track) => { const mixer = mixerForTrack(track); return mixer.output === busId || mixer.sends[DAW_AUX_IDS.indexOf(busId)].level > 0; }).map((track) => track.id)
+				: [target]);
+			const stemName = exportMode === "master" ? baseName : `${safeExportFileName(stemPrefix.trim() || projectName)}_${String(targetIndex + 1).padStart(2, "0")}_${safeExportFileName(busId || tracks.find((track) => track.id === target)?.name || target)}`;
 			const masterL = new Float32Array(frames);
 			const masterR = new Float32Array(frames);
 			const addToMaster = (left: Float32Array, right: Float32Array) => {
@@ -5278,15 +5302,15 @@ export default function DAW(_props: TabRendererProps) {
 				for (let i = 0; i < count; i++) { masterL[i] += left[i]; masterR[i] += right[i]; }
 			};
 
-			setExportStatus(`Rendering audio 001 → ${Math.max(1, Math.ceil(endBar - 1))}…`);
-			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate);
+			setExportStatus(`Rendering ${targetIndex + 1}/${targets.length}: ${stemName} (audio)…`);
+			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate, sourceIds, busId);
 			addToMaster(audioMix.left, audioMix.right);
 
 			setExportStatus("Rendering General MIDI…");
-			const gmMix = await renderGmForExport(durationSeconds, sampleRate);
+			const gmMix = await renderGmForExport(durationSeconds, sampleRate, undefined, sourceIds, busId);
 			addToMaster(gmMix.left, gmMix.right);
 
-			const vstTracks = tracks.filter((track) => track.type === "instrument" && trackUsesNativeVst(track) && !frozenBuffer(track));
+			const vstTracks = tracks.filter((track) => (!sourceIds || sourceIds.has(track.id)) && track.type === "instrument" && trackUsesNativeVst(track) && !frozenBuffer(track));
 			if (vstTracks.length) {
 				setExportStatus("Preparing exact VST3 instrument states…");
 				for (const track of vstTracks) await ensureVstLoaded(track);
@@ -5298,7 +5322,7 @@ export default function DAW(_props: TabRendererProps) {
 				setExportStatus(`Rendering VST3 master 001 → ${Math.max(1, Math.ceil(endBar - 1))}…`);
 				await bridgeApi.setVst3Master(100);
 				let vstWav: ArrayBuffer;
-				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(barSec)); }
+				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(barSec).filter((item) => !sourceIds || sourceIds.has(item.trackId))); }
 				finally { bridgeApi.setVst3Master(masterLevel).catch(() => {}); }
 				const vstMix = decodeStereoFloatWav(vstWav);
 				if (vstMix.sampleRate !== sampleRate) throw new Error(`Bridge rendered VST3 audio at ${vstMix.sampleRate} Hz; YSong export is ${sampleRate} Hz. Match the Bridge sample rate before exporting.`);
@@ -5323,24 +5347,26 @@ export default function DAW(_props: TabRendererProps) {
 						Math.abs(masterR[i - 1] + (right - masterR[i - 1]) * step / 4));
 				}
 			}
-			setExportMasterAnalysis({ loudness: 20 * Math.log10(Math.max(1e-9, Math.sqrt(energy / frames))), peak: 20 * Math.log10(Math.max(1e-9, peak)) });
+			if (target === "MASTER") setExportMasterAnalysis({ loudness: 20 * Math.log10(Math.max(1e-9, Math.sqrt(energy / frames))), peak: 20 * Math.log10(Math.max(1e-9, peak)) });
 
-			setExportStatus("Writing master file…");
+			setExportStatus(`Encoding ${targetIndex + 1}/${targets.length}: ${stemName}…`);
 			const floatWav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, 32)], { type: "audio/wav" });
 			if (exportFormat === "wav16" || exportFormat === "wav24") {
 				const bits = exportFormat === "wav16" ? 16 : 24;
 				const wav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, bits)], { type: "audio/wav" });
-				downloadBlob(wav, `${baseName}.wav`);
+				downloads.push({ blob: wav, name: `${stemName}.wav` });
 			} else if (exportFormat === "flac") {
 				setExportStatus("Encoding lossless FLAC…");
 				const encoded = await bridgeApi.encodeAudio(floatWav, "flac");
-				downloadBlob(encoded, `${baseName}.flac`);
+				downloads.push({ blob: encoded, name: `${stemName}.flac` });
 			} else {
 				setExportStatus(`Encoding MP3 ${exportMp3Bitrate} kbps…`);
 				const encoded = await bridgeApi.encodeAudio(floatWav, "mp3", exportMp3Bitrate);
-				downloadBlob(encoded, `${baseName}.mp3`);
+				downloads.push({ blob: encoded, name: `${stemName}.mp3` });
 			}
-			setExportStatus("Export complete.");
+			}
+			for (const file of downloads) downloadBlob(file.blob, file.name);
+			setExportStatus(`Export complete: ${targets.length} file${targets.length === 1 ? "" : "s"}.`);
 		} catch (error) {
 			console.error("YSong export failed", error);
 			setExportStatus(error instanceof Error ? error.message : "Export failed.");
@@ -6888,6 +6914,11 @@ export default function DAW(_props: TabRendererProps) {
 							</div>
 
 							<div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+								<label className="text-[11px] uppercase tracking-wide opacity-70">Export
+									<select value={exportMode} disabled={exporting} onChange={(e) => { setExportMode(e.target.value as "master" | "stems"); if (e.target.value === "stems" && exportFormat === "midi") setExportFormat("wav24"); setExportStatus(""); }} className="mt-1 w-full h-9 bg-neutral-950/70 border border-white/15 rounded-lg px-2 text-sm normal-case tracking-normal">
+										<option value="master">Master</option><option value="stems">Selected stems</option>
+									</select>
+								</label>
 								<label className="text-[11px] uppercase tracking-wide opacity-70">
 									Format
 									<select
@@ -6900,7 +6931,7 @@ export default function DAW(_props: TabRendererProps) {
 										<option value="wav24">WAV • 24-bit PCM</option>
 										<option value="flac">FLAC • Lossless</option>
 										<option value="mp3">MP3</option>
-										<option value="midi">MIDI (.mid)</option>
+										{exportMode === "master" && <option value="midi">MIDI (.mid)</option>}
 									</select>
 								</label>
 
@@ -6916,7 +6947,7 @@ export default function DAW(_props: TabRendererProps) {
 											{[64, 96, 128, 160, 192, 256, 320].map((rate) => <option key={rate} value={rate}>{rate} kbps</option>)}
 										</select>
 									</label>
-								) : exportFormat !== "midi" ? (
+								) : exportFormat !== "midi" && exportMode === "master" ? (
 									<div className="text-[11px] uppercase tracking-wide opacity-70">
 										Sample Rate
 										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">48 kHz</div>
@@ -6924,19 +6955,29 @@ export default function DAW(_props: TabRendererProps) {
 								) : (
 									<div className="text-[11px] uppercase tracking-wide opacity-70">
 										Contents
-										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">MIDI tracks only</div>
+										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">{exportMode === "stems" ? `${stemIds.length} selected` : "MIDI tracks only"}</div>
 									</div>
 								)}
 							</div>
+							{exportMode === "stems" && <div className="mt-3 space-y-3 text-xs">
+								<div className="max-h-36 overflow-y-auto rounded-lg border border-white/15 p-2 grid grid-cols-2 gap-1" aria-label="Stem sources">
+									{[...tracks.map((track) => ({ id: track.id, name: track.name })), ...DAW_AUX_IDS.map((id) => ({ id, name: id })), { id: "MASTER", name: "Master" }].map((source) => <label key={source.id} className="flex items-center gap-2"><input type="checkbox" disabled={exporting} checked={stemIds.includes(source.id)} onChange={(e) => setStemIds((current) => e.target.checked ? [...current, source.id] : current.filter((id) => id !== source.id))} />{source.name}</label>)}
+								</div>
+								<div className="grid grid-cols-3 gap-2">
+									<label>Prefix<input className="mt-1 w-full bg-neutral-950 border border-white/15 rounded p-1" value={stemPrefix} disabled={exporting} onChange={(e) => setStemPrefix(e.target.value)} placeholder={projectName} /></label>
+									<label>Sample rate<select className="mt-1 w-full bg-neutral-950 border border-white/15 rounded p-1" value={stemSampleRate} disabled={exporting} onChange={(e) => setStemSampleRate(Number(e.target.value))}><option value={44100}>44.1 kHz</option><option value={48000}>48 kHz</option><option value={96000}>96 kHz</option></select></label>
+									<label>Tail (seconds)<input type="number" min="0" max="30" step="0.5" className="mt-1 w-full bg-neutral-950 border border-white/15 rounded p-1" value={stemTails} disabled={exporting} onChange={(e) => setStemTails(clamp(Number(e.target.value), 0, 30))} /></label>
+								</div>
+							</div>}
 
 							<div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-[12px] leading-relaxed opacity-75">
 								{exportFormat === "midi"
 									? "Exports notes, velocity, tempo, time signature, modulation and pitch bend. Audio clips and VST audio are skipped."
-									: "YSong renders the complete timeline from 001 to E: audio clips, General MIDI, active VST3 instruments, and each track’s ordered effects chain mixed into one master."}
+									: exportMode === "stems" ? "Each stem starts at measure 001 and has the same duration. Track stems include their routed sends; bus stems capture their selected aux return. Native VST bus capture is unavailable." : "YSong renders the complete timeline from 001 to E: audio clips, General MIDI, active VST3 instruments, and each track’s ordered effects chain mixed into one master."}
 							</div>
 
 							{exportStatus && (
-								<div className={`mt-3 rounded-lg border px-3 py-2 text-[12px] ${/failed|error|missing|cannot|could not/i.test(exportStatus) ? "border-rose-400/30 bg-rose-400/10 text-rose-100" : "border-cyan-300/20 bg-cyan-300/5"}`}>
+								<div className={`mt-3 rounded-lg border px-3 py-2 text-[12px] ${/failed|error|missing|cannot|could not|unavailable|select|choose/i.test(exportStatus) ? "border-rose-400/30 bg-rose-400/10 text-rose-100" : "border-cyan-300/20 bg-cyan-300/5"}`}>
 									<div className="flex items-center gap-2">
 										{exporting && <span className="inline-block h-3.5 w-3.5 rounded-full border border-cyan-200/30 border-t-cyan-200 animate-spin shrink-0" />}
 										<span>{exportStatus}</span>
