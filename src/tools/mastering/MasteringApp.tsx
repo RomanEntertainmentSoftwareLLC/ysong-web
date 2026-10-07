@@ -3,6 +3,7 @@ import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemresto
 import ABMonitor from "./ABMonitor";
 import { compareReferenceDescriptors, descriptorProfile, parseReferenceProfile, type ReferenceProfile } from "./referenceDescriptors";
 import { defaultMatchSelection, referenceTargets, tonalMatchAssessment } from "./referenceTargets";
+import { stereoGuard } from "./stereoGuard";
 import {
   masteringAnalysisUrl,
   startMasteringAnalysis,
@@ -161,6 +162,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   const [truePeak, setTruePeak] = useState(-1);
   const [strength, setStrength] = useState(0.35);
   const [stereoWidth, setStereoWidth] = useState(1);
+  const [stereoWarnings, setStereoWarnings] = useState<string[]>([]);
   const [transientAmount, setTransientAmount] = useState(0);
   const [applyDynamicEq, setApplyDynamicEq] = useState(true);
   const [referenceInfluence, setReferenceInfluence] = useState(0.2);
@@ -181,6 +183,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     ? compareReferenceDescriptors(analysis.analysis, activeReference) : [], [analysis, activeReference]);
   const tonalAssessment = useMemo(() => analysis && activeReference
     ? tonalMatchAssessment(analysis.analysis, activeReference, referenceInfluence) : null, [analysis, activeReference, referenceInfluence]);
+  const widthGuard = stereoGuard(stereoWidth, analysis?.analysis);
 
   function applyReferenceTargets() {
     if (!analysis || !activeReference) return;
@@ -327,13 +330,14 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     setStage("rendering"); setError(""); setJob(null); setDisplayProgress(4);
     const controller = new AbortController(); abortRef.current = controller;
     const quick = mode === "quick";
+    setStereoWarnings(quick ? [] : widthGuard.warnings);
     const settings = {
       mode,
       remasterMode: quick ? "preserve" as RemasterMode : remasterMode,
       targetLufs,
       truePeak,
       strength: quick ? Math.min(strength, 0.35) : strength,
-      stereoWidth: quick ? 1 : stereoWidth,
+      stereoWidth: quick ? 1 : widthGuard.width,
       transientAmount: quick ? 0 : transientAmount,
       applyDynamicEq,
       referenceAssetId: mode === "reference" ? reference?.asset_id || null : null,
@@ -444,7 +448,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
         <div><div className="flex justify-between text-xs"><span>Target loudness</span><input aria-label="Target loudness numeric" type="number" min="-24" max="-7" step="0.1" value={targetLufs} onChange={e => setTargetLufs(Math.max(-24, Math.min(-7, Number(e.target.value))))} className="w-24 rounded border border-neutral-300 bg-transparent px-2 py-1 text-right tabular-nums dark:border-neutral-700"/></div><input type="range" min="-24" max="-7" step="0.1" value={targetLufs} onChange={e => setTargetLufs(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">{targetLufs.toFixed(1)} LUFS integrated</div></div>
         <div><div className="flex justify-between text-xs"><span>True-peak ceiling</span><input aria-label="True peak numeric" type="number" min="-6" max="-0.1" step="0.1" value={truePeak} onChange={e => setTruePeak(Math.max(-6, Math.min(-0.1, Number(e.target.value))))} className="w-24 rounded border border-neutral-300 bg-transparent px-2 py-1 text-right tabular-nums dark:border-neutral-700"/></div><input type="range" min="-6" max="-0.1" step="0.1" value={truePeak} onChange={e => setTruePeak(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">{truePeak.toFixed(1)} dBTP</div></div>
         <div><div className="flex justify-between text-xs"><span>Correction strength</span><span>{Math.round(strength * 100)}%</span></div><input type="range" min="0" max="1" step="0.01" value={strength} onChange={e => setStrength(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/></div>
-        <div><div className="flex justify-between text-xs"><label htmlFor="master-stereo-width">Stereo width</label><span>{Math.round(stereoWidth * 100)}%</span></div><input id="master-stereo-width" type="range" min="0.5" max="1.5" step="0.01" value={stereoWidth} onChange={e => setStereoWidth(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">100% keeps source width. Check mono compatibility after widening.</div></div>
+        <div><div className="flex justify-between text-xs"><label htmlFor="master-stereo-width">Stereo width</label><span>{Math.round(stereoWidth * 100)}%</span></div><input id="master-stereo-width" type="range" min="0.5" max="1.5" step="0.01" value={stereoWidth} onChange={e => setStereoWidth(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">100% keeps source width. Analyze before widening; low frequencies share this full-band control.</div>{widthGuard.warnings.map(warning => <div key={warning} role="alert" className="mt-1 text-xs text-amber-500">{warning}</div>)}</div>
         <div><div className="flex justify-between text-xs"><label htmlFor="master-transient-shape">Transient shape</label><span>{transientAmount > 0 ? "+" : ""}{transientAmount.toFixed(2)}</span></div><input id="master-transient-shape" type="range" min="-0.35" max="0.35" step="0.01" value={transientAmount} onChange={e => setTransientAmount(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">Negative softens attacks; positive adds punch. Zero leaves attacks unchanged.</div></div>
 
       </div>
@@ -463,6 +467,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
         <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-neutral-500"><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">{report.outputs?.sample_rate ? `${Number(report.outputs.sample_rate).toLocaleString()} Hz` : `${report.after.sample_rate.toLocaleString()} Hz`}</span><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">{report.outputs?.bit_depth || 24}-bit PCM WAV</span><span className="rounded-full border border-neutral-300 px-2.5 py-1 dark:border-neutral-700">True peak ceiling {report.settings.true_peak_dbtp.toFixed(1)} dBTP</span></div>
         <div className="mt-2 text-xs text-neutral-500">Rendered with {report.remaster_mode_label || report.remaster_mode || "engine default"}; width {Math.round((report.settings.effective_stereo_width ?? report.settings.stereo_width) * 100)}%; transient {(report.settings.effective_transient_amount ?? report.settings.transient_amount).toFixed(2)}{report.loudness_target && `; input gain ${report.loudness_target.input_gain_db.toFixed(2)} dB; limiter guard ${report.loudness_target.limiter_guard_db.toFixed(2)} dB`}. These values and the downloads belong to this candidate; changing controls above requires another render.</div>
         {report.warnings?.length > 0 && <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[.05] p-3 text-xs text-amber-500">{report.warnings.join(" ")}</div>}
+        {stereoWarnings.length > 0 && <div className="mt-3 text-xs text-amber-500">{stereoWarnings.join(" ")}</div>}
+        {typeof report.after.stereo?.correlation === "number" && report.after.stereo.correlation < 0.2 && <div role="alert" className="mt-3 rounded-xl border border-amber-500/30 p-3 text-xs text-amber-500">Rendered stereo correlation is low ({report.after.stereo.correlation.toFixed(2)}). Check the candidate in mono before using this output.</div>}
       </section>
       <ProcessingDecisions report={report}/>
       <ABMonitor assetId={source.asset_id} originalFilename={source.original_filename} report={report}/>

@@ -1,4 +1,5 @@
 import { VOCAL_API_BASE, type LocalJob, type UploadResult, waitForLocalJob } from "../stemrestore/api.ts";
+import { MAX_SAFE_WIDTH } from "./stereoGuard.ts";
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${VOCAL_API_BASE}${path}`, init);
@@ -41,7 +42,7 @@ export function masteringRenderQuery(settings: MasteringRenderSettings): URLSear
     target_lufs: String(bounded(settings.targetLufs, -24, -7, -16)),
     true_peak_dbtp: String(bounded(settings.truePeak, -6, -0.1, -1)),
     strength: String(quick ? Math.min(0.35, bounded(settings.strength, 0, 1, 0.35)) : bounded(settings.strength, 0, 1, 0.35)),
-    stereo_width: String(quick ? 1 : bounded(settings.stereoWidth, 0.5, 1.5, 1)),
+    stereo_width: String(quick ? 1 : bounded(settings.stereoWidth, 0.5, MAX_SAFE_WIDTH, 1)),
     transient_amount: String(quick ? 0 : bounded(settings.transientAmount, -0.35, 0.35, 0)),
     apply_dynamic_eq: settings.applyDynamicEq ? "true" : "false",
     reference_influence: String(quick ? 0 : bounded(settings.referenceInfluence, 0, 0.6, 0)),

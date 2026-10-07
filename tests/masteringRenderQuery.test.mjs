@@ -11,7 +11,7 @@ const settings = {
 test("advanced controls travel with the selected engine strategy", () => {
   const query = masteringRenderQuery(settings);
   assert.equal(query.get("remaster_mode"), "balanced");
-  assert.equal(query.get("stereo_width"), "1.2");
+  assert.equal(query.get("stereo_width"), "1.1");
   assert.equal(query.get("transient_amount"), "0.15");
   assert.equal(query.get("true_peak_dbtp"), "-1");
   assert.equal(query.get("reference_asset_id"), "reference-1");
@@ -30,6 +30,6 @@ test("invalid numbers cannot enter the render request", () => {
   const query = masteringRenderQuery({ ...settings, targetLufs: NaN, truePeak: Infinity, stereoWidth: 9, transientAmount: -9 });
   assert.equal(query.get("target_lufs"), "-16");
   assert.equal(query.get("true_peak_dbtp"), "-1");
-  assert.equal(query.get("stereo_width"), "1.5");
+  assert.equal(query.get("stereo_width"), "1.1");
   assert.equal(query.get("transient_amount"), "-0.35");
 });
