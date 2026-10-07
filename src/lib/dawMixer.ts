@@ -3,6 +3,13 @@ export type DawMixerSendState = {
   pre: boolean;
 };
 
+// Fixed IDs survive track reordering and project reopen. Aux returns always feed master,
+// so neither a track output nor a send can create a feedback path.
+export const DAW_AUX_IDS = Array.from({ length: 8 }, (_, index) => `AUX ${index + 1}`);
+export function normalizeMixerOutput(value: unknown): string {
+  return typeof value === "string" && DAW_AUX_IDS.includes(value) ? value : "MASTER";
+}
+
 export type DawMixerStripState = {
   inputGainDb: number;
   phaseInvert: boolean;
@@ -131,7 +138,7 @@ export function normalizeMixerStrip(raw: unknown): DawMixerStripState {
     sends,
     pan: clamp(source.pan, -1, 1, defaults.pan),
     width: clamp(source.width, 0, 200, defaults.width),
-    output: typeof source.output === "string" && source.output.trim() ? source.output.trim() : defaults.output,
+    output: normalizeMixerOutput(source.output),
   };
 }
 

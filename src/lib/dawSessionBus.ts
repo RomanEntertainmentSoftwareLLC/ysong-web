@@ -32,6 +32,7 @@ export type DawSessionSnapshot = {
   tracks: DawSessionTrackSnapshot[];
   masterLevel: number;
   masterMeter: number;
+  auxMeters: Record<string, number>;
 };
 
 export type DawSessionCommand =

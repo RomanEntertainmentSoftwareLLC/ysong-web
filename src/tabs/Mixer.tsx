@@ -9,7 +9,7 @@ import {
   type DawSessionSnapshot,
   type DawSessionTrackSnapshot,
 } from "../lib/dawSessionBus";
-import type { DawMixerStripState } from "../lib/dawMixer";
+import { DAW_AUX_IDS, type DawMixerStripState } from "../lib/dawMixer";
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
@@ -110,7 +110,7 @@ function ChannelStrip({ track, onOpenFx }: { track: DawSessionTrackSnapshot; onO
         <div className="grid grid-cols-3 gap-1 items-center">
           <MiniKnob label="GAIN" value={m.inputGainDb} min={-24} max={24} step={0.5} onChange={(inputGainDb) => patch({ inputGainDb })} display={(v) => `${v.toFixed(1)}dB`} />
           <div className="flex flex-col items-center gap-1"><span className="text-[8px] opacity-60">POLARITY</span><Toggle active={m.phaseInvert} label="INV" onClick={() => patch({ phaseInvert: !m.phaseInvert })} tone="amber" /></div>
-          <div className="flex flex-col items-center gap-1"><span className="text-[8px] opacity-60">OUT</span><span className="text-[8px] font-mono opacity-80">{m.output}</span></div>
+          <div className="flex flex-col items-center gap-1"><label htmlFor={`output-${track.id}`} className="text-[8px] opacity-60">OUT</label><select id={`output-${track.id}`} aria-label={`${track.name} output`} value={m.output} onChange={(event) => patch({ output: event.target.value })} className="w-[58px] bg-black text-[8px] text-white"><option value="MASTER">MASTER</option>{DAW_AUX_IDS.map((id) => <option key={id} value={id}>{id}</option>)}</select></div>
         </div>
       </Section>
 
@@ -197,7 +197,6 @@ function ChannelStrip({ track, onOpenFx }: { track: DawSessionTrackSnapshot; onO
 }
 
 function FxMasterPanel({ snapshot }: { snapshot: DawSessionSnapshot }) {
-  const sends = ["Plate / Hall", "Ping Pong", "Chorus", "Parallel", "Send 5", "Send 6", "Send 7", "Send 8"];
   const meter = clamp(snapshot.masterMeter, 0, 1) * 100;
   return (
     <div className="mixer-master w-[246px] shrink-0 bg-[#15181a] border-l-2 border-amber-300/20 text-neutral-100 sticky right-0 z-20 shadow-[-18px_0_30px_rgba(0,0,0,.3)]">
@@ -212,7 +211,7 @@ function FxMasterPanel({ snapshot }: { snapshot: DawSessionSnapshot }) {
       </Section>
       <Section title="FX SEND / RETURN" accent="#4db364">
         <div className="space-y-1">
-          {sends.map((name, index) => <div key={index} className="grid grid-cols-[18px_1fr_34px] gap-1 items-center"><div className="h-5 rounded bg-black/35 grid place-items-center text-[8px] font-bold">{index+1}</div><div className="h-5 rounded border border-white/10 bg-black/20 px-1.5 flex items-center text-[8px] truncate">{name}</div><div className="text-[8px] text-right opacity-55">RETURN</div></div>)}
+          {DAW_AUX_IDS.map((id, index) => <div key={id} className="grid grid-cols-[18px_1fr_34px] gap-1 items-center"><div className="h-5 rounded bg-black/35 grid place-items-center text-[8px] font-bold">{index+1}</div><div className="h-5 rounded border border-white/10 bg-black/20 px-1.5 flex items-center text-[8px] truncate">{id}</div><div role="meter" aria-label={`${id} return meter`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((snapshot.auxMeters[id] ?? 0) * 100)} className="h-2 rounded bg-black/70 overflow-hidden"><div className="h-full bg-emerald-400" style={{ width: `${(snapshot.auxMeters[id] ?? 0) * 100}%` }} /></div></div>)}
         </div>
       </Section>
       <Section title="MASTER" accent="#c19a45">

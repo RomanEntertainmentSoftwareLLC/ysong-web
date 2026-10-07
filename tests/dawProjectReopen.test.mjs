@@ -3,7 +3,15 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import { normalizeTrackEffects } from "../src/lib/dawEffects.ts";
-import { createDefaultMixerStrip, normalizeMixerStrip } from "../src/lib/dawMixer.ts";
+import { normalizeAutomationLanes } from "../src/lib/dawAutomation.ts";
+import { DAW_AUX_IDS, createDefaultMixerStrip, normalizeMixerStrip } from "../src/lib/dawMixer.ts";
+
+test("aux destinations have stable IDs and reject unknown outputs", () => {
+  assert.deepEqual(DAW_AUX_IDS, ["AUX 1", "AUX 2", "AUX 3", "AUX 4", "AUX 5", "AUX 6", "AUX 7", "AUX 8"]);
+  assert.equal(normalizeMixerStrip({ output: "AUX 4" }).output, "AUX 4");
+  assert.equal(normalizeMixerStrip({ output: "BUS A" }).output, "MASTER");
+  assert.equal(normalizeMixerStrip({ sends: [{ level: 150, pre: true }] }).sends[0].level, 100);
+});
 
 const source = readFileSync(new URL("../src/tabs/DAW.tsx", import.meta.url), "utf8");
 const section = (start, end) => {
@@ -37,7 +45,7 @@ const tracks = [
     gmProgram: 5, vst3PluginPath: "C:/Plugins/Fixture.vst3", vst3PluginName: "Fixture Synth",
     vst3PluginVendor: "Fixture Labs", vstPresetHint: "Warm Keys",
     vstSnapshot: { id: "snapshot-1", pluginPath: "C:/Plugins/Fixture.vst3", capturedAt: "2026-01-01T01:00:00Z", hasFullState: true, parameterCount: 42 },
-    mixer: { ...createDefaultMixerStrip(), pan: .6, output: "BUS A" }, effects: [] },
+    mixer: { ...createDefaultMixerStrip(), pan: .6, output: "AUX 3" }, effects: [] },
 ];
 const clips = [
   { id: "clip-midi", trackId: "keys", name: "Verse", startBar: 5, lengthBars: 4,
@@ -68,7 +76,7 @@ test("DAW save and reopen retain ordered tracks, mixer, FX, plugin, MIDI, proven
   assert.equal(data.projectAssets[0].objectKey, assets[0].objectKey);
 
   const restored = {};
-  const context = { data, normalizeTrackEffects, normalizeMixerStrip,
+  const context = { data, normalizeTrackEffects, normalizeAutomationLanes, normalizeMixerStrip,
     normalizeProjectAssetForPersist: (asset) => asset.objectKey ? { ...asset, url: undefined } : asset,
     parseSongGenerationResult: () => null, clamp: (v, min, max) => Math.min(max, Math.max(min, v)),
     MIN_TRACK_H: 132, ROW_H: 136, MIN_ZOOM_PCT: 25, MAX_ZOOM_PCT: 400,
@@ -97,6 +105,7 @@ test("DAW save and reopen retain ordered tracks, mixer, FX, plugin, MIDI, proven
   assert.deepEqual(restored.Tracks[1].vstSnapshot, tracks[1].vstSnapshot);
   assert.equal(restored.Tracks[1].vst3PluginPath, tracks[1].vst3PluginPath);
   assert.equal(restored.Tracks[1].vstPresetHint, "Warm Keys");
+  assert.equal(restored.Tracks[1].mixer.output, "AUX 3");
   assert.deepEqual(restored.Clips[0], clips[0]);
   assert.deepEqual(restored.Clips[0].midiNotes, clips[0].midiNotes);
   assert.deepEqual(restored.Clips[0].midiPitchBend, clips[0].midiPitchBend);

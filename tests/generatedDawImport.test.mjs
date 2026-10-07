@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { test } from "node:test";
 import ts from "typescript";
 import { parseSongGenerationResult, resultFromGeneratedSession } from "../src/lib/songGenerationContract.ts";
+import { normalizeAutomationLanes } from "../src/lib/dawAutomation.ts";
 
 const source = readFileSync(new URL("../src/tabs/DAW.tsx", import.meta.url), "utf8");
 const start = source.indexOf("\t\tconst manifest = generatedSessionPendingRef.current;");
@@ -61,7 +62,7 @@ test("reload restores a previously omitted failed vocal channel without duplicat
       { id: "voice", name: "Lead Vocal", role: "lead vocal", kind: "audio", status: "failed", failure: { code: "generation_failed", message: "Provider unavailable" } },
     ] };
   const execute = (tracks) => vm.runInNewContext(restore, { data: { tracks, generation: { origin: "create-song", songResult } }, parseSongGenerationResult,
-    crypto: { randomUUID }, clamp: (v) => v, normalizeTrackEffects: (v) => v ?? [], normalizeMixerStrip: (v) => v ?? {},
+    crypto: { randomUUID }, clamp: (v) => v, normalizeTrackEffects: (v) => v ?? [], normalizeAutomationLanes, normalizeMixerStrip: (v) => v ?? {},
     mkTrack: (type, _index, id) => ({ type, id, level: 100 }) });
   const tracks = execute([{ id: "keys-track", type: "instrument", partGeneration: { origin: "create-song", sourceTrackId: "keys" } }]);
   assert.equal(tracks.length, 2);

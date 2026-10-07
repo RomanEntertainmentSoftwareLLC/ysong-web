@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { test } from "node:test";
 import ts from "typescript";
 
-const source = readFileSync(new URL("../src/lib/devCrossWindowSync.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/lib/devCrossWindowSync.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const start = source.indexOf("function installFetchHook()");
 const end = source.indexOf("\n}\n", start) + 3;
 const code = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;

@@ -29,7 +29,7 @@ import {
 	type DawExportMidiTrack,
 } from "../lib/dawExport";
 import { connectWebAudioEffects, createDynamicsC1Effect, createBrowserEffect, normalizeTrackEffects, dbToGain, type DawTrackEffect, type DynamicsC1Effect, type BrowserEffect, type BrowserEffectType, type WebAudioEffectRuntime } from "../lib/dawEffects";
-import { createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
+import { DAW_AUX_IDS, createDefaultMixerStrip, normalizeMixerStrip, patchMixerStrip, type DawMixerStripState } from "../lib/dawMixer";
 import { publishDawSessionSnapshot, subscribeDawSessionCommands } from "../lib/dawSessionBus";
 import { claimPlaybackOwner, getPlaybackOwner } from "../lib/playbackOwner";
 import { consumeGeneratedSession, type GeneratedSessionManifest, type GeneratedSessionTrack } from "../lib/generatedSession";
@@ -960,9 +960,12 @@ export default function DAW(_props: TabRendererProps) {
 	const audioCtxRef = useRef<AudioContext | null>(null);
 	const masterGainRef = useRef<GainNode | null>(null);
 	const masterVisualAnalyserRef = useRef<AnalyserNode | null>(null);
+	const auxBusesRef = useRef<Map<string, { input: GainNode; analyser: AnalyserNode }>>(new Map());
+	const [auxMeters, setAuxMeters] = useState<Record<string, number>>({});
 	type TrackAudioBus = {
 		input: GainNode; trim: GainNode; hpf: BiquadFilterNode; lpf: BiquadFilterNode; low: BiquadFilterNode; lowMid: BiquadFilterNode; highMid: BiquadFilterNode; high: BiquadFilterNode; compressor: DynamicsCompressorNode;
-		gain: GainNode; widthInput: GainNode; splitter: ChannelSplitterNode; widthLL: GainNode; widthLR: GainNode; widthRL: GainNode; widthRR: GainNode; merger: ChannelMergerNode; panner: StereoPannerNode; analyser: AnalyserNode;
+		preTap: GainNode; gain: GainNode; widthInput: GainNode; splitter: ChannelSplitterNode; widthLL: GainNode; widthLR: GainNode; widthRL: GainNode; widthRR: GainNode; merger: ChannelMergerNode; panner: StereoPannerNode; analyser: AnalyserNode;
+		sends: GainNode[];
 		effectSignature: string; effectRuntimes: Map<string, WebAudioEffectRuntime>;
 	};
 	const trackAudioBusesRef = useRef<Map<string, TrackAudioBus>>(new Map());
@@ -1148,6 +1151,7 @@ export default function DAW(_props: TabRendererProps) {
 			}
 			try { bus.gain.disconnect(); } catch {}
 			try { bus.analyser.disconnect(); } catch {}
+			for (const send of bus.sends) { try { send.disconnect(); } catch { /* Already disconnected. */ } }
 			trackAudioBusesRef.current.delete(id);
 		}
 		setTrackMeters((prev) => {
@@ -2026,6 +2030,14 @@ export default function DAW(_props: TabRendererProps) {
 			visualAnalyser.maxDecibels = -10;
 			masterGainRef.current.connect(visualAnalyser);
 			masterVisualAnalyserRef.current = visualAnalyser;
+			for (const id of DAW_AUX_IDS) {
+				const input = audioCtxRef.current.createGain();
+				const analyser = audioCtxRef.current.createAnalyser();
+				analyser.fftSize = 256;
+				input.connect(analyser);
+				analyser.connect(masterGainRef.current);
+				auxBusesRef.current.set(id, { input, analyser });
+			}
 		} catch {
 			masterGainRef.current = null;
 		}
@@ -2110,6 +2122,17 @@ export default function DAW(_props: TabRendererProps) {
 		bus.widthLR.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
 		bus.widthRL.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
 		bus.panner.pan.setTargetAtTime(automationValue(track.automation?.find((lane) => lane.parameter === "track:pan"), playheadPosBars, mixer.pan), ctx.currentTime, 0.008);
+		bus.analyser.disconnect();
+		bus.analyser.connect(auxBusesRef.current.get(mixer.output)?.input ?? masterGainRef.current ?? ctx.destination);
+		mixer.sends.forEach((send, index) => {
+			const node = bus.sends[index];
+			try { bus.preTap.disconnect(node); } catch { /* This send may use the other tap. */ }
+			try { bus.analyser.disconnect(node); } catch { /* This send may use the other tap. */ }
+			node.disconnect();
+			(send.pre ? bus.preTap : bus.analyser).connect(node);
+			node.connect(auxBusesRef.current.get(DAW_AUX_IDS[index])!.input);
+			node.gain.setTargetAtTime(send.level / 100 * (track.mute || (tracks.some((item) => item.solo) && !track.solo) ? 0 : 1), ctx.currentTime, 0.008);
+		});
 	};
 
 	const rebuildTrackAudioEffects = (track: Track, bus: TrackAudioBus) => {
@@ -2120,7 +2143,7 @@ export default function DAW(_props: TabRendererProps) {
 			try { runtime.stop?.(); } catch {}
 			for (const node of runtime.nodes) { try { node.disconnect(); } catch {} }
 		}
-		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, track.effects ?? [], bus.gain);
+		bus.effectRuntimes = connectWebAudioEffects(ensureAudioCtx(), bus.compressor, track.effects ?? [], bus.preTap);
 		bus.effectSignature = signature;
 	};
 
@@ -2143,6 +2166,7 @@ export default function DAW(_props: TabRendererProps) {
 		const highMid = ctx.createBiquadFilter();
 		const high = ctx.createBiquadFilter();
 		const compressor = ctx.createDynamicsCompressor();
+		const preTap = ctx.createGain();
 		const gain = ctx.createGain();
 		const widthInput = ctx.createGain();
 		const splitter = ctx.createChannelSplitter(2);
@@ -2156,14 +2180,14 @@ export default function DAW(_props: TabRendererProps) {
 		analyser.fftSize = 256;
 		analyser.smoothingTimeConstant = 0.65;
 		input.connect(trim); trim.connect(hpf); hpf.connect(lpf); lpf.connect(low); low.connect(lowMid); lowMid.connect(highMid); highMid.connect(high); high.connect(compressor);
-		gain.connect(widthInput); widthInput.connect(splitter);
+		preTap.connect(gain); gain.connect(widthInput); widthInput.connect(splitter);
 		splitter.connect(widthLL, 0); splitter.connect(widthRL, 0); splitter.connect(widthLR, 1); splitter.connect(widthRR, 1);
 		widthLL.connect(merger, 0, 0); widthLR.connect(merger, 0, 0); widthRL.connect(merger, 0, 1); widthRR.connect(merger, 0, 1);
 		merger.connect(panner); panner.connect(analyser);
-		if (masterGainRef.current) analyser.connect(masterGainRef.current); else analyser.connect(ctx.destination);
-		const bus: TrackAudioBus = { input, trim, hpf, lpf, low, lowMid, highMid, high, compressor, gain, widthInput, splitter, widthLL, widthLR, widthRL, widthRR, merger, panner, analyser, effectSignature: "", effectRuntimes: new Map() };
+		const sends = DAW_AUX_IDS.map(() => ctx.createGain());
+		const bus: TrackAudioBus = { input, trim, hpf, lpf, low, lowMid, highMid, high, compressor, preTap, gain, widthInput, splitter, widthLL, widthLR, widthRL, widthRR, merger, panner, analyser, sends, effectSignature: "", effectRuntimes: new Map() };
 		if (track) { configureTrackAudioBus(track, bus); rebuildTrackAudioEffects(track, bus); }
-		else compressor.connect(gain);
+		else { compressor.connect(preTap); analyser.connect(masterGainRef.current ?? ctx.destination); }
 		gain.gain.value = track ? computedTrackGain(track) : 1;
 		trackAudioBusesRef.current.set(trackId, bus);
 		if (track?.type === "instrument" && !trackUsesNativeVst(track)) setGmSoundFontTrackDestination(ctx, track.id, input);
@@ -2343,6 +2367,14 @@ export default function DAW(_props: TabRendererProps) {
 					next[track.id] = clamp((db + 60) / 60, 0, 1);
 				}
 				setTrackMeters(next);
+				const auxNext: Record<string, number> = {};
+				for (const [id, aux] of auxBusesRef.current) {
+					aux.analyser.getFloatTimeDomainData(samples);
+					let sum = 0;
+					for (const sample of samples) sum += sample * sample;
+					auxNext[id] = isPlaying ? clamp((20 * Math.log10(Math.max(1e-6, Math.sqrt(sum / samples.length))) + 60) / 60, 0, 1) : 0;
+				}
+				setAuxMeters(auxNext);
 			}
 			meterRafRef.current = requestAnimationFrame(tickMeter);
 		};
@@ -4647,6 +4679,7 @@ export default function DAW(_props: TabRendererProps) {
 			selectedTrackId,
 			masterLevel,
 			masterMeter: maxMeter * clamp(masterLevel / 100, 0, 1.27),
+			auxMeters,
 			tracks: tracks.map((track) => {
 				const gm = GM_PROGRAMS.find((program) => program.program === normalizeGmProgram(track.gmProgram ?? 0));
 				return {
@@ -4678,7 +4711,7 @@ export default function DAW(_props: TabRendererProps) {
 				durationSeconds: Math.max(0, endBar - 1) * barSeconds, bpm, sigNum, sigDen, title: projectName, artist: "", album: "", updatedAt: now,
 			}).catch(() => {});
 		}
-	}, [dawHydrated, activeProjectId, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, clips, trackMeters]);
+	}, [dawHydrated, activeProjectId, projectName, isPlaying, playheadPosBars, endBar, bpm, sigNum, sigDen, bridgeAvailable, selectedTrackId, masterLevel, tracks, clips, trackMeters, auxMeters]);
 
 	// Feed browser/WebAudio master analysis into the native Bridge. Native VST3
 	// instruments are analyzed inside Bridge itself, then both paths are merged there.
@@ -4771,6 +4804,7 @@ export default function DAW(_props: TabRendererProps) {
 	}, [isPlaying, bpm, sigNum, sigDen, loopEnabled, loopL, endBar]);
 
 	useEffect(() => {
+		const auxBuses = auxBusesRef.current;
 		return () => {
 			if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 			if (meterRafRef.current != null) cancelAnimationFrame(meterRafRef.current);
@@ -4784,8 +4818,11 @@ export default function DAW(_props: TabRendererProps) {
 			}
 				try { bus.gain.disconnect(); } catch {}
 				try { bus.analyser.disconnect(); } catch {}
+				for (const send of bus.sends) { try { send.disconnect(); } catch { /* Already disconnected. */ } }
 			}
 			trackAudioBusesRef.current.clear();
+			for (const aux of auxBuses.values()) { try { aux.input.disconnect(); aux.analyser.disconnect(); } catch { /* Already disconnected. */ } }
+			auxBuses.clear();
 			try { masterVisualAnalyserRef.current?.disconnect(); } catch {}
 			masterVisualAnalyserRef.current = null;
 		};
@@ -4943,7 +4980,7 @@ export default function DAW(_props: TabRendererProps) {
 			});
 	};
 
-	const buildOfflineTrackInput = (context: BaseAudioContext, track: Track, destination: AudioNode) => {
+	const buildOfflineTrackInput = (context: BaseAudioContext, track: Track, destination: AudioNode, auxInputs: Map<string, GainNode>) => {
 		const mixer = mixerForTrack(track);
 		const input = context.createGain();
 		const trim = context.createGain();
@@ -4971,7 +5008,9 @@ export default function DAW(_props: TabRendererProps) {
 		input.connect(trim); trim.connect(hpf); hpf.connect(lpf); lpf.connect(low); low.connect(lowMid); lowMid.connect(highMid); highMid.connect(high); high.connect(compressor);
 		const fader = context.createGain();
 		fader.gain.value = computedTrackGain(track);
-		connectWebAudioEffects(context, compressor, track.effects ?? [], fader);
+		const preTap = context.createGain();
+		connectWebAudioEffects(context, compressor, track.effects ?? [], preTap);
+		preTap.connect(fader);
 
 		const widthInput = context.createGain();
 		const splitter = context.createChannelSplitter(2);
@@ -4984,18 +5023,30 @@ export default function DAW(_props: TabRendererProps) {
 		fader.connect(widthInput); widthInput.connect(splitter);
 		splitter.connect(widthLL, 0); splitter.connect(widthRL, 0); splitter.connect(widthLR, 1); splitter.connect(widthRR, 1);
 		widthLL.connect(merger, 0, 0); widthLR.connect(merger, 0, 0); widthRL.connect(merger, 0, 1); widthRR.connect(merger, 0, 1);
-		merger.connect(panner); panner.connect(destination);
+		merger.connect(panner); panner.connect(auxInputs.get(mixer.output) ?? destination);
+		mixer.sends.forEach((send, index) => {
+			if (!send.level) return;
+			const sendGain = context.createGain();
+			sendGain.gain.value = send.level / 100 * (track.mute || (tracks.some((item) => item.solo) && !track.solo) ? 0 : 1);
+			(send.pre ? preTap : panner).connect(sendGain);
+			sendGain.connect(auxInputs.get(DAW_AUX_IDS[index])!);
+		});
 		return input;
 	};
 
 	const renderAudioClipsForExport = async (durationSeconds: number, sampleRate: number) => {
 		const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 		const offline = new OfflineAudioContext(2, frames, sampleRate);
+		const auxInputs = new Map(DAW_AUX_IDS.map((id) => {
+			const input = offline.createGain();
+			input.connect(offline.destination);
+			return [id, input] as const;
+		}));
 		const trackInputs = new Map<string, AudioNode>();
 		let scheduled = 0;
 		for (const clip of clips.filter((c) => !!c.assetId)) {
 			const track = tracks.find((t) => t.id === clip.trackId && t.type === "audio");
-			if (!track || computedTrackGain(track) <= 0) continue;
+			if (!track) continue;
 			const startSeconds = Math.max(0, (clip.startBar - 1) * getBarSeconds());
 			if (startSeconds >= durationSeconds) continue;
 			const buffer = await ensurePlaybackBufferForClip(clip);
@@ -5005,7 +5056,7 @@ export default function DAW(_props: TabRendererProps) {
 			source.buffer = buffer;
 			let input = trackInputs.get(track.id);
 			if (!input) {
-				input = buildOfflineTrackInput(offline, track, offline.destination);
+				input = buildOfflineTrackInput(offline, track, offline.destination, auxInputs);
 				trackInputs.set(track.id, input);
 			}
 			source.connect(input);
@@ -5050,8 +5101,13 @@ export default function DAW(_props: TabRendererProps) {
 		const offline = new OfflineAudioContext(2, frames, sampleRate);
 		await offline.audioWorklet.addModule("/spessasynth_processor.min.js");
 		const synth = new WorkletSynthesizer(offline);
+		const auxInputs = new Map(DAW_AUX_IDS.map((id) => {
+			const input = offline.createGain();
+			input.connect(offline.destination);
+			return [id, input] as const;
+		}));
 		gmTracks.forEach((track, index) => {
-			const input = buildOfflineTrackInput(offline, track, offline.destination);
+			const input = buildOfflineTrackInput(offline, track, offline.destination, auxInputs);
 			synth.connectChannel(input, GM_EXPORT_CHANNELS[index % GM_EXPORT_CHANNELS.length]);
 		});
 		const midiSequence = BasicMIDI.fromArrayBuffer(midiBytes.buffer.slice(midiBytes.byteOffset, midiBytes.byteOffset + midiBytes.byteLength));
