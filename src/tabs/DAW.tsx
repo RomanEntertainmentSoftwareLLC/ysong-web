@@ -3311,8 +3311,8 @@ export default function DAW(_props: TabRendererProps) {
 	// ---------------------------------------------------------------------
 	// Linear DAW undo/redo history
 	// ---------------------------------------------------------------------
-	// Pre-alpha implementation stores serializable project snapshots. It is
-	// intentionally uncapped so Ctrl+Z can walk back through a long session.
+	// Keep a small, size-limited tail of serializable project snapshots across
+	// reloads. Runtime asset URLs are deliberately excluded from storage.
 	// Continuous pointer edits are debounced into one history step (dragging a
 	// clip/fader should not create hundreds of undo entries). A future command/
 	// delta history can reduce memory without changing this user-facing model.
@@ -3335,6 +3335,9 @@ export default function DAW(_props: TabRendererProps) {
 	};
 	type DawHistoryEntry = { hash: string; state: DawHistorySnapshot };
 	const historyRef = useRef<DawHistoryEntry[]>([]);
+	const historyStorageKey = `ysong:daw:history:v1:${activeProjectId}`;
+	const HISTORY_LIMIT = 12;
+	const HISTORY_BYTES = 750_000;
 	const historyIndexRef = useRef(-1);
 	const historyProjectRef = useRef("");
 	const historyTimerRef = useRef<number | null>(null);
@@ -3368,6 +3371,34 @@ export default function DAW(_props: TabRendererProps) {
 	});
 
 	const historyHash = (state: DawHistorySnapshot) => JSON.stringify(state);
+	const persistentHistoryState = (state: DawHistorySnapshot): DawHistorySnapshot => ({
+		...state,
+		projectAssets: state.projectAssets.map((asset) => {
+			const copy = { ...asset };
+			delete copy.url;
+			return copy;
+		}),
+	});
+	const persistentHistoryHash = (state: DawHistorySnapshot) => historyHash(persistentHistoryState(state));
+	const saveHistory = () => {
+		try {
+			const start = Math.max(0, Math.min(historyIndexRef.current, historyRef.current.length - HISTORY_LIMIT));
+			const entries = historyRef.current.slice(start, start + HISTORY_LIMIT).map(({ state }) => persistentHistoryState(state));
+			let index = historyIndexRef.current - start;
+			while (entries.length) {
+				const selected = entries[index];
+				if (!selected) break;
+				const raw = JSON.stringify({ v: 1, current: persistentHistoryHash(selected), index, entries });
+				if (raw.length <= HISTORY_BYTES) {
+					localStorage.setItem(historyStorageKey, raw);
+					return;
+				}
+				if (index < entries.length - 1) entries.pop();
+				else { entries.shift(); index--; }
+			}
+			localStorage.removeItem(historyStorageKey);
+		} catch { /* History persistence is optional when storage is unavailable. */ }
+	};
 
 	const pushCurrentHistory = () => {
 		if (!dawHydrated) return;
@@ -3385,6 +3416,7 @@ export default function DAW(_props: TabRendererProps) {
 		next.push({ hash, state });
 		historyRef.current = next;
 		historyIndexRef.current = next.length - 1;
+		saveHistory();
 		setHistoryRevision((v) => v + 1);
 	};
 
@@ -3397,6 +3429,22 @@ export default function DAW(_props: TabRendererProps) {
 			historyProjectRef.current = activeProjectId;
 			historyRef.current = [{ hash, state }];
 			historyIndexRef.current = 0;
+			try {
+				const raw = localStorage.getItem(historyStorageKey);
+				const saved = raw && raw.length <= HISTORY_BYTES
+					? safeParse<{ v: number; current: string; index: number; entries: DawHistorySnapshot[] }>(raw)
+					: null;
+				if (saved?.v === 1 && saved.current === persistentHistoryHash(state) &&
+					Array.isArray(saved.entries) && saved.entries.length <= HISTORY_LIMIT &&
+					saved.entries.every((entry) => entry && Array.isArray(entry.tracks) && Array.isArray(entry.clips) && Array.isArray(entry.projectAssets)) &&
+					Number.isInteger(saved.index) && saved.index >= 0 && saved.index < saved.entries.length &&
+					persistentHistoryHash(saved.entries[saved.index]) === saved.current) {
+					historyRef.current = saved.entries.map((entry) => ({ state: entry, hash: historyHash(entry) }));
+					// The live snapshot retains runtime URLs needed by this browser session.
+					historyRef.current[saved.index] = { hash, state };
+					historyIndexRef.current = saved.index;
+				} else localStorage.removeItem(historyStorageKey);
+			} catch { /* Corrupt or inaccessible history starts fresh. */ }
 			applyingHistoryHashRef.current = null;
 			setHistoryRevision((v) => v + 1);
 			return;
@@ -3447,6 +3495,7 @@ export default function DAW(_props: TabRendererProps) {
 		if (historyIndexRef.current <= 0) return;
 		historyIndexRef.current -= 1;
 		applyHistoryEntry(historyRef.current[historyIndexRef.current]);
+		saveHistory();
 		setHistoryRevision((v) => v + 1);
 	};
 
@@ -3455,6 +3504,7 @@ export default function DAW(_props: TabRendererProps) {
 		if (historyIndexRef.current < 0 || historyIndexRef.current >= historyRef.current.length - 1) return;
 		historyIndexRef.current += 1;
 		applyHistoryEntry(historyRef.current[historyIndexRef.current]);
+		saveHistory();
 		setHistoryRevision((v) => v + 1);
 	};
 
