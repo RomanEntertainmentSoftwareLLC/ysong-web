@@ -945,6 +945,8 @@ export default function DAW(_props: TabRendererProps) {
 	const [waveformVersion, setWaveformVersion] = useState(0);
 	const [trackMeters, setTrackMeters] = useState<Record<string, number>>({});
 	const [masterLevel, setMasterLevel] = useState(100);
+	const [liveMasterAnalysis, setLiveMasterAnalysis] = useState<{ loudness: number; peak: number } | null>(null);
+	const [exportMasterAnalysis, setExportMasterAnalysis] = useState<{ loudness: number; peak: number } | null>(null);
 	const [renamingTrackId, setRenamingTrackId] = useState<string | null>(null);
 	const [renamingTrackName, setRenamingTrackName] = useState("");
 
@@ -2329,6 +2331,7 @@ export default function DAW(_props: TabRendererProps) {
 
 		const hasNativeVst = tracks.some((track) => trackUsesNativeVst(track));
 		if (!isPlaying && !hasNativeVst) {
+			setLiveMasterAnalysis(null);
 			setTrackMeters((prev) => {
 				const next = { ...prev };
 				for (const track of tracks) next[track.id] = 0;
@@ -2376,6 +2379,21 @@ export default function DAW(_props: TabRendererProps) {
 					auxNext[id] = isPlaying ? clamp((20 * Math.log10(Math.max(1e-6, Math.sqrt(sum / samples.length))) + 60) / 60, 0, 1) : 0;
 				}
 				setAuxMeters(auxNext);
+				const masterAnalyser = masterVisualAnalyserRef.current;
+				if (isPlaying && masterAnalyser) {
+					const masterSamples = new Float32Array(masterAnalyser.fftSize);
+					masterAnalyser.getFloatTimeDomainData(masterSamples);
+					let energy = 0;
+					let peak = 0;
+					for (let i = 0; i < masterSamples.length; i++) {
+						const sample = masterSamples[i];
+						energy += sample * sample;
+						peak = Math.max(peak, Math.abs(sample));
+						if (i > 0) for (let step = 1; step < 4; step++)
+							peak = Math.max(peak, Math.abs(masterSamples[i - 1] + (sample - masterSamples[i - 1]) * step / 4));
+					}
+					setLiveMasterAnalysis({ loudness: 20 * Math.log10(Math.max(1e-9, Math.sqrt(energy / masterSamples.length))), peak: 20 * Math.log10(Math.max(1e-9, peak)) });
+				} else setLiveMasterAnalysis(null);
 			}
 			meterRafRef.current = requestAnimationFrame(tickMeter);
 		};
@@ -5141,6 +5159,7 @@ export default function DAW(_props: TabRendererProps) {
 		}
 		setExporting(true);
 		setExportStatus("");
+		setExportMasterAnalysis(null);
 		try {
 			if (isPlaying) stop();
 			const baseName = safeExportFileName(projectName);
@@ -5194,6 +5213,21 @@ export default function DAW(_props: TabRendererProps) {
 			if (exportMasterGain !== 1) {
 				for (let i = 0; i < frames; i++) { masterL[i] *= exportMasterGain; masterR[i] *= exportMasterGain; }
 			}
+			// Full-render, ungated RMS and linearly interpolated inter-sample peak.
+			// These are useful estimates, not EBU R128 loudness or a certified true peak.
+			let energy = 0;
+			let peak = 0;
+			for (let i = 0; i < frames; i++) {
+				const left = masterL[i], right = masterR[i];
+				energy += (left * left + right * right) / 2;
+				peak = Math.max(peak, Math.abs(left), Math.abs(right));
+				if (i > 0) for (let step = 1; step < 4; step++) {
+					peak = Math.max(peak,
+						Math.abs(masterL[i - 1] + (left - masterL[i - 1]) * step / 4),
+						Math.abs(masterR[i - 1] + (right - masterR[i - 1]) * step / 4));
+				}
+			}
+			setExportMasterAnalysis({ loudness: 20 * Math.log10(Math.max(1e-9, Math.sqrt(energy / frames))), peak: 20 * Math.log10(Math.max(1e-9, peak)) });
 
 			setExportStatus("Writing master file…");
 			const floatWav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, 32)], { type: "audio/wav" });
@@ -6462,6 +6496,13 @@ export default function DAW(_props: TabRendererProps) {
 			/>
 
 			{/* Shared transport console. The MIDI editor reuses this exact component. */}
+			<div className="shrink-0 flex flex-wrap justify-center gap-x-5 gap-y-1 border-t border-white/10 bg-neutral-950 px-3 py-1 text-[11px] text-neutral-300" aria-label="Master loudness meter">
+				<span className="font-semibold text-white">Master meter</span>
+				<span>Live RMS: {liveMasterAnalysis ? `${liveMasterAnalysis.loudness.toFixed(1)} dBFS` : "—"}</span>
+				<span>Live interpolated peak: {liveMasterAnalysis ? `${liveMasterAnalysis.peak.toFixed(1)} dBFS` : "—"}</span>
+				{exportMasterAnalysis && <span title="Full export render; ungated RMS and interpolated peak, not certified LUFS or true peak">Last export integrated RMS: {exportMasterAnalysis.loudness.toFixed(1)} dBFS · peak: {exportMasterAnalysis.peak.toFixed(1)} dBFS</span>}
+				<span className="text-neutral-500">Approximate; true peak and LUFS require dedicated analysis.</span>
+			</div>
 			<div
 				className="shrink-0 border-t border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/60 backdrop-blur px-2 pt-2 flex justify-center"
 				style={{ paddingBottom: BOTTOM_DOCK_SAFE_PX }}
