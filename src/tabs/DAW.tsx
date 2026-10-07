@@ -827,6 +827,8 @@ export default function DAW(_props: TabRendererProps) {
 	// --- Transport state ---
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [isRecording, setIsRecording] = useState(false);
+	const [midiRecordMode, setMidiRecordMode] = useState<"overdub" | "replace">("overdub");
+	const [midiRecordQuantize, setMidiRecordQuantize] = useState(false);
 	const [loopEnabled, setLoopEnabled] = useState(false);
 	const [timelineMarkers, setTimelineMarkers] = useState<TimelineMarker[]>([]);
 	const [markerName, setMarkerName] = useState("");
@@ -1004,7 +1006,7 @@ export default function DAW(_props: TabRendererProps) {
 	const gmProgramOverrideRef = useRef<Map<string, number>>(new Map());
 	const liveGmNoteKeysRef = useRef<Set<string>>(new Set());
 	const liveVstNoteIdsRef = useRef<Map<string, number>>(new Map());
-	type RecordingSession = { clipId: string; trackId: string; startedAtMs: number; startBar: number; active: Map<number, { id: string; startBars: number; velocity: number }> };
+	type RecordingSession = { clipId: string; trackId: string; startedAtMs: number; startBar: number; clipStartBar: number; mode: "overdub" | "replace"; quantizeStep: number | null; tempoSegments: { atMs: number; bars: number; barSec: number }[]; active: Map<number, { id: string; startBars: number; velocity: number }> };
 	const recordingSessionRef = useRef<RecordingSession | null>(null);
 	const audioRecordingRef = useRef<{ recorder: MediaRecorder; stream: MediaStream; trackId: string; startBar: number; startedAt: number; chunks: Blob[]; monitor?: MediaStreamAudioSourceNode; timer?: number } | null>(null);
 	const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
@@ -2458,35 +2460,38 @@ export default function DAW(_props: TabRendererProps) {
 		};
 	}, [isPlaying, tracks]);
 
-	const recordingElapsedBars = (session: RecordingSession) => {
-		const bpmNow = Math.max(1, bpmRef.current);
-		const beatsPerBar = Math.max(1, sigNumRef.current);
-		const denominator = Math.max(1, sigDenRef.current);
-		const barSec = (60 / bpmNow) * (4 / denominator) * beatsPerBar;
-		return Math.max(0, (performance.now() - session.startedAtMs) / 1000 / Math.max(0.0001, barSec));
+	const recordingElapsedBars = (session: RecordingSession, atMs = performance.now()) => {
+		const segment = [...session.tempoSegments].reverse().find((entry) => entry.atMs <= atMs) ?? session.tempoSegments[0];
+		return Math.max(0, segment.bars + (atMs - segment.atMs) / 1000 / segment.barSec);
+	};
+	const recordedNote = (pitch: number, held: { id: string; startBars: number; velocity: number }, endBars: number, session: RecordingSession): MidiNote => {
+		const step = session.quantizeStep;
+		const startBars = step ? Math.max(0, Math.round(held.startBars / step) * step) : held.startBars;
+		const end = step ? Math.max(startBars + step, Math.round(endBars / step) * step) : endBars;
+		return { id: held.id, pitch, startBars, lengthBars: Math.max(1 / 128, end - startBars), velocity: held.velocity };
 	};
 
-	const captureRecordedMidi = (kind: "on" | "off", pitchRaw: number, velocityRaw: number, target: Track | null) => {
+	const captureRecordedMidi = (kind: "on" | "off", pitchRaw: number, velocityRaw: number, target: Track | null, atMs = performance.now()) => {
 		const session = recordingSessionRef.current;
 		if (!session || !target || session.trackId !== target.id) return;
 		const pitch = clamp(Math.round(pitchRaw), 0, 127);
 		const velocity = clamp(Math.round(velocityRaw), 1, 127);
-		const atBars = recordingElapsedBars(session);
+		const atBars = session.startBar - session.clipStartBar + recordingElapsedBars(session, Math.max(session.startedAtMs, atMs));
 		if (kind === "on") {
 			// Retriggering the same pitch closes the old held note before starting another.
 			const prior = session.active.get(pitch);
 			if (prior) {
-				const lengthBars = Math.max(1 / 128, atBars - prior.startBars);
-				setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: [...(c.midiNotes ?? []), { id: prior.id, pitch, startBars: prior.startBars, lengthBars, velocity: prior.velocity }], lengthBars: Math.max(c.lengthBars, atBars + 1 / 32) } : c));
+				const note = recordedNote(pitch, prior, atBars, session);
+				setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: [...(c.midiNotes ?? []), note], lengthBars: Math.max(c.lengthBars, note.startBars + note.lengthBars) } : c));
 			}
-			session.active.set(pitch, { id: crypto.randomUUID(), startBars: atBars, velocity });
+			session.active.set(pitch, { id: `${session.clipId}:${crypto.randomUUID()}`, startBars: atBars, velocity });
 			return;
 		}
 		const held = session.active.get(pitch);
 		if (!held) return;
 		session.active.delete(pitch);
-		const lengthBars = Math.max(1 / 128, atBars - held.startBars);
-		setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: [...(c.midiNotes ?? []), { id: held.id, pitch, startBars: held.startBars, lengthBars, velocity: held.velocity }], lengthBars: Math.max(c.lengthBars, atBars + 1 / 32) } : c));
+		const note = recordedNote(pitch, held, atBars, session);
+		setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: [...(c.midiNotes ?? []), note], lengthBars: Math.max(c.lengthBars, note.startBars + note.lengthBars) } : c));
 	};
 
 	// Live performance follows selection, period. Arm is a recording state, not an
@@ -2513,13 +2518,13 @@ export default function DAW(_props: TabRendererProps) {
 
 	const liveNoteKey = (trackId: string, pitch: number) => `${trackId}:${pitch}`;
 
-	const liveMidiNoteOn = (pitch: number, velocity = 96, targetOverride?: Track | null) => {
+	const liveMidiNoteOn = (pitch: number, velocity = 96, targetOverride?: Track | null, atMs?: number) => {
 		const target = targetOverride ?? currentMidiTargetTrack();
 		if (!target) return;
 		const normalizedPitch = clamp(Math.round(pitch), 0, 127);
 		const normalizedVelocity = clamp(Math.round(velocity), 1, 127);
 		const key = liveNoteKey(target.id, normalizedPitch);
-		captureRecordedMidi("on", normalizedPitch, normalizedVelocity, target);
+		captureRecordedMidi("on", normalizedPitch, normalizedVelocity, target, atMs);
 
 		if (trackUsesNativeVst(target)) {
 			const noteId = stablePositiveInt(`${target.id}:live:${normalizedPitch}:${Date.now()}:${Math.random()}`);
@@ -2548,12 +2553,12 @@ export default function DAW(_props: TabRendererProps) {
 		).catch((error) => console.error("YSong General MIDI SoundFont note-on failed", error));
 	};
 
-	const liveMidiNoteOff = (pitch: number, targetOverride?: Track | null) => {
+	const liveMidiNoteOff = (pitch: number, targetOverride?: Track | null, atMs?: number) => {
 		const target = targetOverride ?? currentMidiTargetTrack();
 		if (!target) return;
 		const normalizedPitch = clamp(Math.round(pitch), 0, 127);
 		const key = liveNoteKey(target.id, normalizedPitch);
-		captureRecordedMidi("off", normalizedPitch, 1, target);
+		captureRecordedMidi("off", normalizedPitch, 1, target, atMs);
 
 		if (trackUsesNativeVst(target)) {
 			const noteId = liveVstNoteIdsRef.current.get(key);
@@ -2670,6 +2675,7 @@ export default function DAW(_props: TabRendererProps) {
 			if (event.note == null || (event.kind !== "noteon" && event.kind !== "noteoff")) return;
 			if (target?.midiInputName && event.device.toLowerCase() !== target.midiInputName.toLowerCase()) return;
 			const note = clamp(event.note, 0, 127);
+			const eventAtMs = Math.max(performance.now() - 1000, performance.now() - Math.max(0, Date.now() - event.whenUnixMs));
 			setHardwareActiveNotes((prev) => {
 				const next = new Set(prev);
 				if (event.kind === "noteon") next.add(note); else next.delete(note);
@@ -2679,12 +2685,13 @@ export default function DAW(_props: TabRendererProps) {
 			if (trackUsesNativeVst(target)) {
 				// Native Bridge already feeds VST3 directly; only mirror the performance
 				// into the recorder/UI here so we do not double-trigger the synth.
-				captureRecordedMidi(event.kind === "noteon" ? "on" : "off", note, event.velocity ?? 1, target);
+				captureRecordedMidi(event.kind === "noteon" ? "on" : "off", note, event.velocity ?? 1, target, eventAtMs);
 				return;
 			}
-			if (event.kind === "noteon") liveMidiNoteOn(note, event.velocity ?? 96, target);
-			else liveMidiNoteOff(note, target);
+			if (event.kind === "noteon") liveMidiNoteOn(note, event.velocity ?? 96, target, eventAtMs);
+			else liveMidiNoteOff(note, target, eventAtMs);
 		}, (connected) => {
+			if (!connected && recordingSessionRef.current) finishMidiRecording();
 			if (!connected || !dawHydrated) return;
 			// SSE onopen is the authoritative "Bridge is alive now" signal. Read the live
 			// selection ref (not the render that created this EventSource) and reassert the
@@ -2699,20 +2706,30 @@ export default function DAW(_props: TabRendererProps) {
 	const finishMidiRecording = () => {
 		const session = recordingSessionRef.current;
 		if (!session) return;
-		const atBars = recordingElapsedBars(session);
+		const atBars = session.startBar - session.clipStartBar + recordingElapsedBars(session);
 		const pending = [...session.active.entries()];
 		session.active.clear();
 		if (pending.length) {
 			setClips((prev) => prev.map((c) => {
 				if (c.id !== session.clipId) return c;
 				const notes = [...(c.midiNotes ?? [])];
-				for (const [pitch, held] of pending) notes.push({ id: held.id, pitch, startBars: held.startBars, lengthBars: Math.max(1 / 128, atBars - held.startBars), velocity: held.velocity });
-				return { ...c, midiNotes: notes, lengthBars: Math.max(c.lengthBars, atBars + 1 / 32) };
+				for (const [pitch, held] of pending) notes.push(recordedNote(pitch, held, atBars, session));
+				return { ...c, midiNotes: notes, lengthBars: Math.max(c.lengthBars, ...notes.map((note) => note.startBars + note.lengthBars)) };
 			}));
+		}
+		if (session.mode === "replace") {
+			const from = session.startBar - session.clipStartBar;
+			const to = atBars;
+			setClips((prev) => prev.map((c) => c.id === session.clipId ? { ...c, midiNotes: (c.midiNotes ?? []).filter((note) => note.id.startsWith(session.clipId + ":") || note.startBars + note.lengthBars <= from || note.startBars >= to) } : c));
 		}
 		recordingSessionRef.current = null;
 		setIsRecording(false);
 	};
+	useEffect(() => {
+		if (recordingSessionRef.current && recordingSessionRef.current.trackId !== selectedMidiTarget?.id) finishMidiRecording();
+		// Selection changes end the take so held notes cannot remain open on another track.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [selectedMidiTarget?.id]);
 
 	const finishAudioRecording = () => {
 		const session = audioRecordingRef.current;
@@ -2805,8 +2822,9 @@ export default function DAW(_props: TabRendererProps) {
 			window.alert("Select an Instrument Track before recording MIDI.");
 			return;
 		}
-		const clipId = crypto.randomUUID();
 		const startBar = playheadPosBars;
+		const existing = clips.find((clip) => clip.id === selectedClipId && clip.trackId === target.id && !clip.assetId && clip.midiNotes && startBar >= clip.startBar && startBar <= clip.startBar + clip.lengthBars);
+		const clipId = existing?.id ?? crypto.randomUUID();
 		const clip: Clip = {
 			id: clipId,
 			trackId: target.id,
@@ -2818,8 +2836,10 @@ export default function DAW(_props: TabRendererProps) {
 			midiModulation: [],
 			midiBendRange: 12,
 		};
-		recordingSessionRef.current = { clipId, trackId: target.id, startedAtMs: performance.now(), startBar, active: new Map() };
-		setClips((prev) => [...prev, clip]);
+		const startedAtMs = performance.now();
+		const barSec = 60 / Math.max(1, bpmRef.current) * Math.max(1, sigNumRef.current) * 4 / Math.max(1, sigDenRef.current);
+		recordingSessionRef.current = { clipId, trackId: target.id, startedAtMs, startBar, clipStartBar: existing?.startBar ?? startBar, mode: midiRecordMode, quantizeStep: midiRecordQuantize ? gridStepBars(gridValue, sigNum, sigDen) : null, tempoSegments: [{ atMs: startedAtMs, bars: 0, barSec }], active: new Map() };
+		if (!existing) setClips((prev) => [...prev, clip]);
 		setSelectedTrackId(target.id);
 		setSelectedClipId(clipId);
 		setTracks((prev) => prev.map((t) => t.id === target.id ? { ...t, arm: true } : t));
@@ -4564,11 +4584,11 @@ export default function DAW(_props: TabRendererProps) {
 		return clamp(pos, 1, endBar);
 	};
 
-	const stop = () => {
+	const stop = (keepMidiRecording = false) => {
 		finishAudioRecording();
 		transportStartGenerationRef.current += 1;
 		transportStartPendingRef.current = false;
-		if (recordingSessionRef.current) finishMidiRecording();
+		if (!keepMidiRecording && recordingSessionRef.current) finishMidiRecording();
 		if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
 		rafRef.current = null;
 		stopScheduledAudio();
@@ -4716,13 +4736,18 @@ export default function DAW(_props: TabRendererProps) {
 	const changeBpm = (raw: number) => {
 		const next = clamp(Math.round(raw), 20, 400);
 		if (next === bpmRef.current) return;
+		const session = recordingSessionRef.current;
+		if (session) {
+			const bars = recordingElapsedBars(session);
+			session.tempoSegments.push({ atMs: performance.now(), bars, barSec: 60 / next * Math.max(1, sigNumRef.current) * 4 / Math.max(1, sigDenRef.current) });
+		}
 		if (!isPlaying) {
 			bpmRef.current = next;
 			setBpm(next);
 			return;
 		}
 		const pos = currentTransportPosition();
-		stop();
+		stop(!!session);
 		bpmRef.current = next;
 		setBpm(next);
 		setPlayheadPosBars(pos);
@@ -4734,13 +4759,15 @@ export default function DAW(_props: TabRendererProps) {
 	const changeSignature = (n: number, d: number) => {
 		const nextN = Math.max(1, Math.round(n));
 		const nextD = Math.max(1, Math.round(d));
+		const session = recordingSessionRef.current;
+		if (session) session.tempoSegments.push({ atMs: performance.now(), bars: recordingElapsedBars(session), barSec: 60 / Math.max(1, bpmRef.current) * nextN * 4 / nextD });
 		if (!isPlaying) {
 			sigNumRef.current = nextN; sigDenRef.current = nextD;
 			setSigNum(nextN); setSigDen(nextD);
 			return;
 		}
 		const pos = currentTransportPosition();
-		stop();
+		stop(!!session);
 		sigNumRef.current = nextN; sigDenRef.current = nextD;
 		setSigNum(nextN); setSigDen(nextD); setPlayheadPosBars(pos);
 		requestAnimationFrame(() => { void start(loopEnabled, pos, 0.16); });
@@ -6852,6 +6879,12 @@ export default function DAW(_props: TabRendererProps) {
 					<label><input type="checkbox" checked={audioMonitor} onChange={(event) => setAudioMonitor(event.target.checked)} disabled={audioRecordBusy} /> Monitor input</label>
 					<label>Count-in <select value={audioCountIn} onChange={(event) => setAudioCountIn(Number(event.target.value))} disabled={audioRecordBusy} className="bg-neutral-900"><option value={0}>Off</option><option value={1}>1 bar</option><option value={2}>2 bars</option></select></label>
 					{audioRecordStatus && <span role="status">{audioRecordStatus}</span>}
+				</div>
+				<div className="flex flex-wrap items-center justify-center gap-3 py-1 text-xs text-neutral-300" aria-label="MIDI recording settings">
+					<span>MIDI recording</span>
+					<label>Mode <select value={midiRecordMode} onChange={(event) => setMidiRecordMode(event.target.value as "overdub" | "replace")} disabled={isRecording} className="bg-neutral-900"><option value="overdub">Overdub</option><option value="replace">Replace recorded range</option></select></label>
+					<label><input type="checkbox" checked={midiRecordQuantize} onChange={(event) => setMidiRecordQuantize(event.target.checked)} disabled={isRecording} /> Quantize after recording to current grid</label>
+					<span>Select a MIDI clip to record into it; otherwise a new clip is created.</span>
 				</div>
 			</div>
 

@@ -67,7 +67,7 @@ test("DAW save and reopen retain ordered tracks, mixer, FX, plugin, MIDI, proven
     projectGeneration: generation, tracks, clips, projectAssets: assets, selectedTrackId: "keys", selectedClipId: "clip-midi",
     snapEnabled: true, gridValue: "1/16", gridMode: "absolute", zoomPct: 125, playheadPosBars: 6,
     loopL: 1, loopR: 9, endBar: 17, endMarkerMode: "manual", loopEnabled: true, bpm: 94,
-    sigNum: 4, sigDen: 4, trackHeights: { voice: 150, keys: 170 }, masterLevel: 92,
+    sigNum: 4, sigDen: 4, timelineMarkers: [], trackHeights: { voice: 150, keys: 170 }, masterLevel: 92,
     approvedComposerArrangement: null, progressiveStemState: { universe: null, nodes: [], activeByRole: {} },
     normalizeProjectAssetForPersist: (asset) => asset.objectKey ? { ...asset, url: undefined } : asset,
   });
@@ -81,13 +81,13 @@ test("DAW save and reopen retain ordered tracks, mixer, FX, plugin, MIDI, proven
     normalizeProjectAssetForPersist: (asset) => asset.objectKey ? { ...asset, url: undefined } : asset,
     parseSongGenerationResult: () => null, clamp: (v, min, max) => Math.min(max, Math.max(min, v)),
     MIN_TRACK_H: 132, ROW_H: 136, MIN_ZOOM_PCT: 25, MAX_ZOOM_PCT: 400,
-    MIN_BARS: 64, DEFAULT_END_BAR: 2, activeProjectId: "project-1", storedName: "Fixture Song",
+    MIN_BARS: 64, MAX_BARS: 10000, DEFAULT_END_BAR: 2, activeProjectId: "project-1", storedName: "Fixture Song",
     setPersistedSnapshot() {}, setHydratedProjectId() {}, setDawHydrated() {},
   };
   for (const name of ["ProjectGeneration", "Tracks", "Clips", "ProjectAssets", "ApprovedComposerArrangement",
     "ProgressiveStemState", "TrackHeights", "SelectedTrackId", "SelectedClipId", "SnapEnabled", "GridValue",
     "GridMode", "ZoomPct", "PlayheadPosBars", "LoopL", "LoopR", "EndBar", "EndMarkerMode", "Bars",
-    "LoopEnabled", "Bpm", "SigNum", "SigDen", "MasterLevel"]) {
+    "LoopEnabled", "TimelineMarkers", "Bpm", "SigNum", "SigDen", "MasterLevel"]) {
     context[`set${name}`] = (value) => { restored[name] = plain(value); };
   }
   run(section("\t\tconst restoredTracks =", "\n\t\tsetPersistedSnapshot("), context);
