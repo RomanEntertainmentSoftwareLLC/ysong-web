@@ -6,6 +6,7 @@ import {
   originalAudioUrl,
   type MasteringReport,
 } from "./api";
+import { syncABStreams } from "./abSync";
 
 type Mode = "original" | "master" | "difference";
 type AnalyzerSet = { original: AnalyserNode; master: AnalyserNode; difference: AnalyserNode };
@@ -291,8 +292,7 @@ export default function ABMonitor({ assetId, originalFilename, report }: { asset
       const difference = differenceRef.current;
       if (!original || !master || !difference || original.paused) return;
       const clock = original.currentTime;
-      if (master.readyState >= 2 && Math.abs(master.currentTime - clock) > 0.02) master.currentTime = clock;
-      if (difference.readyState >= 2 && Math.abs(difference.currentTime - clock) > 0.02) difference.currentTime = clock;
+      syncABStreams(original, [master, difference]);
       if (stamp - lastUiTickRef.current > 80) {
         setCurrentTime(clock);
         lastUiTickRef.current = stamp;
