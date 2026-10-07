@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import ABMonitor from "./ABMonitor";
+import BatchQueue from "./BatchQueue";
 import { compareReferenceDescriptors, descriptorProfile, parseReferenceProfile, type ReferenceProfile } from "./referenceDescriptors";
 import { defaultMatchSelection, referenceTargets, tonalMatchAssessment } from "./referenceTargets";
 import { stereoGuard } from "./stereoGuard";
@@ -381,6 +382,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     </div>
 
     {health === "offline" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm text-neutral-500">YSong Audio Engine is offline. Restart YSong to relaunch the integrated local engine.</div>}
+
+    <BatchQueue online={health === "online"} referenceName={reference?.original_filename || (savedReference ? "descriptor target" : "")} settings={{ mode: reference ? "reference" : "assistant", remasterMode, targetLufs, truePeak, strength, stereoWidth: widthGuard.width, transientAmount, applyDynamicEq, referenceAssetId: reference?.asset_id || null, referenceInfluence: reference ? tonalAssessment?.influence ?? 0 : 0 }}/>
 
     {trackedProgress && <div className="fixed bottom-5 left-1/2 z-[1000] w-[min(680px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border border-violet-500/45 bg-neutral-950/95 p-3.5 text-neutral-100 shadow-2xl backdrop-blur-xl">
       <div className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{stage === "rendering" ? "Building remaster candidate" : "Analyzing master"}</span><span className="font-mono tabular-nums text-violet-300">{Math.round(displayProgress)}%</span></div>
