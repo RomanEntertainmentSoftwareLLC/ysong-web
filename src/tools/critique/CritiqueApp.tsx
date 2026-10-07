@@ -9,6 +9,7 @@ import {
   type CritiqueReport,
 } from "./api";
 import { analyzeCritique, prepareCritique } from "./workflow";
+import { critiqueSourceHash, loadCritiques, saveCritique, type SavedCritique } from "./reportLibrary";
 
 type Props = {
   onBack: () => void;
@@ -65,6 +66,9 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
   const [deepScan, setDeepScan] = useState(true);
   const [job, setJob] = useState<LocalJob | null>(null);
   const [report, setReport] = useState<CritiqueReport | null>(null);
+  const [savedReports, setSavedReports] = useState<SavedCritique[]>(loadCritiques);
+  const [sourceHash, setSourceHash] = useState("");
+  const [reopened, setReopened] = useState(false);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const abortRef = useRef<AbortController | null>(null);
@@ -114,7 +118,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
 
   function selectFile(next: File | null) {
     abortRef.current?.abort();
-    setFile(next); setUpload(null); setJob(null); setReport(null); setError(""); setFilter("all"); setStage("idle");
+    setFile(next); setUpload(null); setJob(null); setReport(null); setError(""); setFilter("all"); setStage("idle"); setSourceHash(""); setReopened(false);
     setAiCritique(null); setAiCritiqueState("idle"); setAiCritiqueError("");
   }
 
@@ -159,8 +163,9 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     if (!file || busy) return;
     setError(""); setStage("uploading");
     try {
+      const hash = await critiqueSourceHash(file);
       const result = await prepareCritique(file);
-      setUpload(result); setStage("ready");
+      setSourceHash(hash); setUpload(result); setStage("ready");
     } catch (e: unknown) {
       setError(errorMessage(e, "Audio preparation failed.")); setStage("error");
     }
@@ -176,18 +181,34 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
     }
   }
 
-  async function analyze() {
+  async function analyze(force = false) {
     if (!upload || busy) return;
+    const existing = savedReports.find(item => item.sourceSha256 === sourceHash && item.analysisMode === (deepScan ? "deep" : "quick"));
+    if (existing && !force) { openSaved(existing); return; }
     setError(""); setReport(null); setStage("analyzing");
     const controller = new AbortController(); abortRef.current = controller;
     try {
       const next = await analyzeCritique(upload, deepScan, setJob, controller.signal);
       setReport(next); setStage("done");
+      setReopened(false);
+      try {
+        saveCritique({ id: crypto.randomUUID(), savedAt: Date.now(), sourceName: file?.name || upload.original_filename,
+          sourceSha256: sourceHash, analysisMode: next.analysis_mode, engine: next.engine,
+          upload, report: next, reportArtifactUrl: critiqueReportUrl(upload.asset_id), sourceArtifactUrl: sourceAudioUrl(upload.asset_id) });
+        setSavedReports(loadCritiques());
+      } catch { setError("Report is ready, but this browser could not save it for later."); }
       void runAiCritique(next);
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(errorMessage(e, "Critique failed.")); setStage("error");
     }
+  }
+
+  function openSaved(item: SavedCritique) {
+    abortRef.current?.abort();
+    setFile(null); setUpload(item.upload); setReport(item.report); setSourceHash(item.sourceSha256);
+    setDeepScan(item.analysisMode === "deep"); setStage("done"); setJob(null); setError(""); setReopened(true);
+    setAiCritique(null); setAiCritiqueState("idle"); setAiCritiqueError("");
   }
 
   function jumpTo(finding: CritiqueFinding) {
@@ -223,6 +244,8 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
 
         {health !== "online" && <div className="mt-5 rounded-2xl border border-amber-500/25 bg-amber-500/[.06] p-4 text-sm"><div className="font-medium text-amber-500">The integrated YSong Audio Engine powers Critique.</div><div className="mt-1 text-neutral-500">{healthMessage || `YSong should launch it automatically. Restart YSong if it remains offline.`}</div><button type="button" onClick={refreshHealth} className="mt-3 rounded-lg border border-amber-500/30 px-3 py-1.5 text-xs text-amber-500">Check again</button></div>}
 
+        {savedReports.length > 0 && <section className="mt-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 p-4"><h2 className="text-sm font-semibold">Saved critiques</h2><p className="mt-1 text-xs text-neutral-500">Stored in this browser. Reopen a measured report without running the analyzer.</p><div className="mt-3 flex flex-wrap gap-2">{savedReports.map(item => <button key={item.id} type="button" onClick={() => openSaved(item)} className="rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-left text-xs"><span className="block font-medium">{item.sourceName}</span><span className="text-neutral-500">{new Date(item.savedAt).toLocaleString()} ? {item.analysisMode} ? {item.engine}</span></button>)}</div></section>}
+
         <div className="mt-7 grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
           <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Source</div><h2 className="mt-1 text-lg font-semibold">Give YSong a finished mix</h2>
@@ -234,7 +257,8 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
           <section className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">Scan</div><h2 className="mt-1 text-lg font-semibold">How hard should Ears listen?</h2>
             <label className="mt-4 flex items-start gap-3 rounded-xl border border-neutral-200 dark:border-neutral-800 p-3"><input type="checkbox" checked={deepScan} disabled={busy} onChange={e => setDeepScan(e.target.checked)} className="mt-0.5 h-4 w-4 accent-violet-500"/><span><span className="block text-sm font-medium">Deep spectral scan</span><span className="mt-0.5 block text-xs text-neutral-500">Adds STFT spectral discontinuity and tempo-variability evidence. Slower, but still local.</span></span></label>
-            <button type="button" disabled={!upload || busy || health !== "online"} onClick={analyze} className="mt-4 min-h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-40">{stage === "analyzing" ? `Listening… ${job?.progress_percent ?? 0}%` : report ? "Re-run critique" : "Analyze track"}</button>
+            <button type="button" disabled={!upload || busy || health !== "online"} onClick={() => void analyze(!!report)} className="mt-4 min-h-11 w-full rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white disabled:opacity-40">{stage === "analyzing" ? `Listening… ${job?.progress_percent ?? 0}%` : report ? "Re-run critique" : "Analyze track"}</button>
+            {upload && sourceHash && !report && savedReports.some(item => item.sourceSha256 === sourceHash && item.analysisMode === (deepScan ? "deep" : "quick")) && <p className="mt-2 text-xs text-emerald-500">An unchanged source and scan mode are saved. Analyze track will reopen that report.</p>}
             {stage === "analyzing" && <div className="mt-3"><div className="h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800"><div className="h-full bg-violet-500 transition-all" style={{ width: `${Math.max(3, Math.min(100, job?.progress_percent || 5))}%` }}/></div><div className="mt-1 text-[11px] text-neutral-500">{job?.stage || "listening"}</div></div>}
           </section>
         </div>
@@ -242,6 +266,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
         {error && <div className="mt-5 rounded-2xl border border-rose-500/30 bg-rose-500/[.06] p-4 text-sm text-rose-500">{error}</div>}
 
         {report && upload && <>
+          {reopened && <p className="mt-4 text-xs text-neutral-500">Saved result ? {report.engine} ? {report.analysis_mode}. Linked audio and JSON require their original local engine artifacts.</p>}
           <section className="mt-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
             <div className="flex flex-wrap items-center gap-6"><ScoreRing score={report.technical_score}/><div className="min-w-0 flex-1"><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">{report.engine}</div><h2 className="mt-1 text-2xl font-semibold">{report.verdict}</h2><p className="mt-1 text-sm text-neutral-500">This is a technical-integrity score, not a songwriting score. Candidates remain audition-first.</p><div className="mt-3 flex flex-wrap gap-2"><SeverityBadge severity="critical"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.critical || 0}</span><SeverityBadge severity="warning"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.warning || 0}</span><SeverityBadge severity="info"/><span className="text-xs tabular-nums text-neutral-500">{report.finding_counts?.info || 0}</span></div></div><div className="flex flex-wrap gap-2">{onOpenMastering && <button type="button" onClick={() => onOpenMastering(upload)} className="rounded-xl border border-violet-500/35 bg-violet-500/[.05] px-3 py-2 text-xs text-violet-500">Send findings to Master / Remaster</button>}{onOpenAudioIntelligence && <button type="button" onClick={() => onOpenAudioIntelligence(upload)} className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-xs">Analyze musical identity</button>}<a href={critiqueReportUrl(upload.asset_id)} target="_blank" rel="noreferrer" className="rounded-xl border border-neutral-300 dark:border-neutral-700 px-3 py-2 text-xs hover:border-violet-500/60">JSON report</a></div></div>
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-6"><Metric label="Peak" value={fmt(report.metrics?.peak_dbfs, 2, " dBFS")}/><Metric label="RMS" value={fmt(report.metrics?.rms_dbfs, 2, " dBFS")}/><Metric label="Crest" value={fmt(report.metrics?.crest_factor_db, 1, " dB")}/><Metric label="Dynamics" value={fmt(report.metrics?.dynamic_range_proxy_db, 1, " dB")} note="proxy"/><Metric label="Tempo" value={report.metrics?.tempo?.estimated_bpm ? fmt(report.metrics.tempo.estimated_bpm, 1, " BPM") : "—"} note={report.metrics?.tempo?.alternate_bpm ? `${report.metrics.tempo.interpretation === "double_time_preferred" ? "Half-time alt" : "Alternate"}: ${fmt(report.metrics.tempo.alternate_bpm, 1, " BPM")}` : undefined}/><Metric label="Stereo corr." value={fmt(report.metrics?.stereo?.correlation, 2)}/></div>
