@@ -1006,6 +1006,13 @@ export default function DAW(_props: TabRendererProps) {
 	const liveVstNoteIdsRef = useRef<Map<string, number>>(new Map());
 	type RecordingSession = { clipId: string; trackId: string; startedAtMs: number; startBar: number; active: Map<number, { id: string; startBars: number; velocity: number }> };
 	const recordingSessionRef = useRef<RecordingSession | null>(null);
+	const audioRecordingRef = useRef<{ recorder: MediaRecorder; stream: MediaStream; trackId: string; startBar: number; startedAt: number; chunks: Blob[]; monitor?: MediaStreamAudioSourceNode; timer?: number } | null>(null);
+	const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+	const [audioInputId, setAudioInputId] = useState("");
+	const [audioMonitor, setAudioMonitor] = useState(false);
+	const [audioCountIn, setAudioCountIn] = useState(0);
+	const [audioRecordStatus, setAudioRecordStatus] = useState("");
+	const [audioRecordBusy, setAudioRecordBusy] = useState(false);
 	const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
 	const lastPosRef = useRef<number>(1);
 	const meterRafRef = useRef<number | null>(null);
@@ -2705,6 +2712,87 @@ export default function DAW(_props: TabRendererProps) {
 		}
 		recordingSessionRef.current = null;
 		setIsRecording(false);
+	};
+
+	const finishAudioRecording = () => {
+		const session = audioRecordingRef.current;
+		if (!session) return;
+		if (session.timer) window.clearTimeout(session.timer);
+		if (session.recorder.state !== "inactive") session.recorder.stop();
+		else {
+			session.monitor?.disconnect();
+			session.stream.getTracks().forEach((track) => track.stop());
+			audioRecordingRef.current = null;
+			setAudioRecordBusy(false);
+		}
+		setIsRecording(false);
+	};
+
+	const toggleAudioRecording = async () => {
+		if (audioRecordingRef.current) { finishAudioRecording(); return; }
+		if (audioRecordBusy) return;
+		const armed = tracks.filter((track) => track.type === "audio" && track.arm);
+		if (armed.length !== 1) { setAudioRecordStatus("Arm exactly one audio track to record."); return; }
+		if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setAudioRecordStatus("Microphone recording is unavailable in this browser or context."); return; }
+		setAudioRecordBusy(true);
+		setAudioRecordStatus("");
+		let stream: MediaStream | undefined;
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: audioInputId ? { deviceId: { exact: audioInputId } } : true });
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			setAudioInputs(devices.filter((device) => device.kind === "audioinput"));
+			const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
+			const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+			const session = { recorder, stream, trackId: armed[0].id, startBar: playheadPosBars, startedAt: 0, chunks: [] as Blob[], monitor: undefined as MediaStreamAudioSourceNode | undefined, timer: undefined as number | undefined };
+			audioRecordingRef.current = session;
+			stream.getAudioTracks().forEach((track) => { track.onended = () => { setAudioRecordStatus("Microphone input disconnected."); finishAudioRecording(); }; });
+			recorder.ondataavailable = (event) => { if (event.data.size) session.chunks.push(event.data); };
+			recorder.onerror = () => { setAudioRecordStatus("Microphone capture failed. Check the input and try again."); finishAudioRecording(); };
+			recorder.onstop = async () => {
+				session.monitor?.disconnect();
+				session.stream.getTracks().forEach((track) => track.stop());
+				if (audioRecordingRef.current === session) audioRecordingRef.current = null;
+				if (!session.startedAt || !session.chunks.length) { setAudioRecordBusy(false); return; }
+				const duration = Math.max(0.01, (performance.now() - session.startedAt) / 1000);
+				const blob = new Blob(session.chunks, { type: recorder.mimeType || session.chunks[0].type });
+				const extension = blob.type.includes("mp4") ? "m4a" : "webm";
+				const file = new File([blob], `Recording-${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`, { type: blob.type });
+				try {
+					const uploaded = await uploadFileToCloud(file);
+					const objectKey = String(uploaded?.objectKey || "");
+					if (!objectKey) throw new Error("Upload did not return an asset key.");
+					const assetId = crypto.randomUUID();
+					setProjectAssets((prev) => [...prev, { id: assetId, kind: "audio", name: file.name, objectKey, sourceObjectKey: objectKey, sizeMB: file.size / 1048576, durationSec: duration }]);
+					setClips((prev) => [...prev, { id: crypto.randomUUID(), trackId: session.trackId, name: file.name, assetId, startBar: session.startBar, lengthBars: durationSecToBars(duration), sourceOffsetSec: 0, sourceDurationSec: duration }]);
+					setAudioRecordStatus("Recording saved to project assets.");
+				} catch {
+					setAudioRecordStatus("Recording upload failed. Download the take now; it has not been added to the project.");
+					downloadBlob(blob, file.name);
+				} finally { setAudioRecordBusy(false); }
+			};
+			const begin = () => {
+				if (audioRecordingRef.current !== session) return;
+				if (audioMonitor) {
+					const ctx = ensureAudioCtx();
+					session.monitor = ctx.createMediaStreamSource(session.stream);
+					session.monitor.connect(ensureTrackAudioBus(session.trackId).input);
+				}
+				session.startedAt = performance.now();
+				try { recorder.start(250); } catch { setAudioRecordStatus("Microphone capture could not start."); finishAudioRecording(); return; }
+				setIsRecording(true);
+				setAudioRecordStatus("Recording. Browser input and playback timing may vary.");
+				if (!isPlaying) void start(loopEnabled, session.startBar, 0);
+			};
+			if (audioCountIn > 0) {
+				setAudioRecordStatus(`Count-in: ${audioCountIn} bar${audioCountIn === 1 ? "" : "s"}.`);
+				session.timer = window.setTimeout(begin, audioCountIn * sigNum * (4 / sigDen) * 60000 / Math.max(1, bpm));
+			} else begin();
+		} catch (error) {
+			stream?.getTracks().forEach((track) => track.stop());
+			audioRecordingRef.current = null;
+			setAudioRecordBusy(false);
+			setAudioRecordStatus(error instanceof DOMException && error.name === "NotAllowedError" ? "Microphone permission was denied." : `Could not start audio recording: ${error instanceof Error ? error.message : "unknown error"}`);
+		}
 	};
 
 	const toggleMidiRecording = () => {
@@ -4477,6 +4565,7 @@ export default function DAW(_props: TabRendererProps) {
 	};
 
 	const stop = () => {
+		finishAudioRecording();
 		transportStartGenerationRef.current += 1;
 		transportStartPendingRef.current = false;
 		if (recordingSessionRef.current) finishMidiRecording();
@@ -6736,7 +6825,7 @@ export default function DAW(_props: TabRendererProps) {
 				<span className="text-neutral-500">Approximate; true peak and LUFS require dedicated analysis.</span>
 			</div>
 			<div
-				className="shrink-0 border-t border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/60 backdrop-blur px-2 pt-2 flex justify-center"
+				className="shrink-0 border-t border-neutral-200/20 dark:border-neutral-800 bg-neutral-950/60 backdrop-blur px-2 pt-2 flex flex-col items-center"
 				style={{ paddingBottom: BOTTOM_DOCK_SAFE_PX }}
 			>
 				<TransportConsole
@@ -6749,7 +6838,7 @@ export default function DAW(_props: TabRendererProps) {
 					onReturnStart={() => setPlayheadPosBars(1)}
 					onStop={() => { finishMidiRecording(); stop(); setPlayheadPosBars(1); }}
 					onTogglePlay={togglePlay}
-					onRecord={toggleMidiRecording}
+					onRecord={() => { if (audioRecordingRef.current || tracks.some((track) => track.type === "audio" && track.arm)) void toggleAudioRecording(); else toggleMidiRecording(); }}
 					recording={isRecording}
 					onToggleKeyboard={() => setOnScreenKeyboardOpen((v) => !v)}
 					keyboardOpen={onScreenKeyboardOpen}
@@ -6758,6 +6847,12 @@ export default function DAW(_props: TabRendererProps) {
 					onBpmChange={changeBpm}
 					onSignatureChange={changeSignature}
 				/>
+				<div className="flex flex-wrap items-center justify-center gap-2 py-1 text-xs text-neutral-300" aria-label="Audio recording settings">
+					<label>Input <select value={audioInputId} onChange={(event) => setAudioInputId(event.target.value)} disabled={audioRecordBusy} onFocus={() => { void navigator.mediaDevices?.enumerateDevices().then((devices) => setAudioInputs(devices.filter((device) => device.kind === "audioinput"))).catch(() => {}); }} className="bg-neutral-900"><option value="">System default</option>{audioInputs.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${audioInputs.indexOf(device) + 1}`}</option>)}</select></label>
+					<label><input type="checkbox" checked={audioMonitor} onChange={(event) => setAudioMonitor(event.target.checked)} disabled={audioRecordBusy} /> Monitor input</label>
+					<label>Count-in <select value={audioCountIn} onChange={(event) => setAudioCountIn(Number(event.target.value))} disabled={audioRecordBusy} className="bg-neutral-900"><option value={0}>Off</option><option value={1}>1 bar</option><option value={2}>2 bars</option></select></label>
+					{audioRecordStatus && <span role="status">{audioRecordStatus}</span>}
+				</div>
 			</div>
 
 			<OnScreenKeyboard

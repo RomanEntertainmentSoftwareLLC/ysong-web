@@ -106,7 +106,7 @@ export default function TransportConsole({
         <YSButton className="px-3 py-1 text-sm rounded-md" onClick={onTogglePlay} title="Play/Pause (Space)">
           {isPlaying ? "❚❚" : "▶"}
         </YSButton>
-        <YSButton className={`px-2 py-1 text-sm rounded-md ${recording ? "!bg-rose-400 !text-black opacity-100 shadow-[0_0_12px_rgba(251,113,133,0.45)]" : "opacity-70"}`} onClick={onRecord ?? (() => {})} title={recording ? "Stop MIDI recording" : "Record armed/selected instrument track"}>
+        <YSButton className={`px-2 py-1 text-sm rounded-md ${recording ? "!bg-rose-400 !text-black opacity-100 shadow-[0_0_12px_rgba(251,113,133,0.45)]" : "opacity-70"}`} onClick={onRecord ?? (() => {})} title={recording ? "Stop recording" : "Record armed audio track or selected instrument track"}>
           ●
         </YSButton>
         {onToggleKeyboard && (
