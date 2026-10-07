@@ -1,4 +1,5 @@
 import type { GeneratedMidiRegion, GeneratedSessionManifest } from "./generatedSession";
+import type { SingerIdentity } from "./singerLibrary";
 
 /** Versioned, provider-neutral result carried by a YSong project and its library record.
  * Bars are one-based at the project boundary; MIDI note starts are relative to a region.
@@ -18,6 +19,11 @@ export type SongGenerationPart = {
   role: string;
   kind: "audio" | "midi";
   status: "ready" | "failed";
+  singerAssignment?: {
+    singer: SingerIdentity;
+    sections: Array<{ name: string; startBar: number; endBar: number }>;
+    synthesis: "identity-reference-only";
+  };
   audio?: { objectKey: string; startBar: 1; lengthBars: number; sourceOffsetSec: 0; durationSec?: number };
   midi?: { regions: GeneratedMidiRegion[] };
   failure?: { code: "generation_failed" | "upload_failed"; message: string };
@@ -56,6 +62,27 @@ export function parseSongGenerationResult(value: unknown): SongGenerationResult 
         (item.kind !== "audio" && item.kind !== "midi") || (item.status !== "ready" && item.status !== "failed")) return null;
     ids.add(item.id);
     const base = { id: item.id, name: item.name, role: item.role, kind: item.kind, status: item.status } as SongGenerationPart;
+    if (item.singerAssignment !== undefined) {
+      const assignment = item.singerAssignment;
+      if (!record(assignment) || !record(assignment.singer) || !nonempty(assignment.singer.id) ||
+          !nonempty(assignment.singer.displayName) || assignment.synthesis !== "identity-reference-only" ||
+          !Array.isArray(assignment.sections)) return null;
+      const sections = [];
+      for (const section of assignment.sections) {
+        if (!record(section) || !nonempty(section.name) || !Number.isInteger(section.startBar) ||
+            !Number.isInteger(section.endBar) || (section.startBar as number) < 1 ||
+            (section.endBar as number) < (section.startBar as number) || (section.endBar as number) > time.totalBars) return null;
+        sections.push({ name: section.name, startBar: section.startBar as number, endBar: section.endBar as number });
+      }
+      const singer = assignment.singer;
+      base.singerAssignment = { singer: { id: singer.id as string, displayName: singer.displayName as string,
+        avatarRef: typeof singer.avatarRef === "string" ? singer.avatarRef : "",
+        voiceDescription: typeof singer.voiceDescription === "string" ? singer.voiceDescription : "",
+        vocalRange: typeof singer.vocalRange === "string" ? singer.vocalRange : "",
+        vocalStyle: typeof singer.vocalStyle === "string" ? singer.vocalStyle : "",
+        tags: Array.isArray(singer.tags) ? singer.tags.filter((tag): tag is string => typeof tag === "string") : [] },
+        sections, synthesis: "identity-reference-only" };
+    }
     if (item.status === "failed") {
       if (item.audio !== undefined || item.midi !== undefined || !record(item.failure) ||
           (item.failure.code !== "generation_failed" && item.failure.code !== "upload_failed") || !nonempty(item.failure.message)) return null;
@@ -106,7 +133,8 @@ export function resultFromGeneratedSession(
     timebase: { bpm: manifest.bpm, sigNum: manifest.sigNum, sigDen: manifest.sigDen, startBar: 1, totalBars: manifest.totalBars },
     source, model,
     parts: manifest.tracks.map((track) => {
-      const base = { id: track.id, name: track.name, role: track.role, kind: track.mode };
+      const base = { id: track.id, name: track.name, role: track.role, kind: track.mode,
+        ...(track.singer ? { singerAssignment: { singer: track.singer, sections: track.singerSections ?? [], synthesis: "identity-reference-only" as const } } : {}) };
       const failure = failures.get(track.id);
       if (failure) return { ...base, status: "failed", failure } as SongGenerationPart;
       if (track.mode === "audio") {

@@ -41,6 +41,8 @@ export type GeneratedSessionTrack = {
   role: string;
   vocalRole?: "lead vocal" | "harmony vocal" | "backing vocal" | "vocal double" | "ad-lib vocal" | "ensemble vocal";
   singer?: SingerIdentity;
+  /** Intended performance ranges on the shared project timeline. */
+  singerSections?: Array<{ name: string; startBar: number; endBar: number }>;
   mode: "audio" | "midi";
   instructions: string;
   useLyrics?: boolean;

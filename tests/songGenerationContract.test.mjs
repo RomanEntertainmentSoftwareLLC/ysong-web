@@ -38,3 +38,13 @@ test("rejects inconsistent status, duplicate ids, and unaligned audio", () => {
   assert.equal(parseSongGenerationResult({ ...result, parts: [result.parts[0], result.parts[0]] }), null);
   assert.equal(parseSongGenerationResult({ ...result, parts: [result.parts[0], { ...result.parts[1], audio: { ...result.parts[1].audio, startBar: 2 } }] }), null);
 });
+
+test("retains singer identity and section intent without claiming synthesis support", () => {
+  const input = manifest();
+  input.tracks[1].singer = { id: "singer-1", displayName: "Ari", avatarRef: "local-singer:singer-1", voiceDescription: "alto", vocalRange: "A3-E5", vocalStyle: "soft", tags: ["jazz"] };
+  input.tracks[1].singerSections = [{ name: "Verse", startBar: 1, endBar: 4 }];
+  const result = resultFromGeneratedSession(input, { origin: "create-song", prompt: "A song" }, { provider: "local", name: "music-v1" });
+  assert.deepEqual(result.parts[1].singerAssignment, { singer: input.tracks[1].singer, sections: input.tracks[1].singerSections, synthesis: "identity-reference-only" });
+  assert.equal(parseSongGenerationResult({ ...result, parts: [result.parts[0], { ...result.parts[1], singerAssignment: { ...result.parts[1].singerAssignment, synthesis: "available" } }] }), null);
+  assert.equal(parseSongGenerationResult({ ...result, parts: [result.parts[0], { ...result.parts[1], singerAssignment: { ...result.parts[1].singerAssignment, sections: [{ name: "Outro", startBar: 8, endBar: 9 }] } }] }), null);
+});

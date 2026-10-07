@@ -153,6 +153,13 @@ function normalizePlan(raw: any, draft: Draft, plugins: BridgePlugin[], singers:
     };
     const plannedSinger = singerById.get(String(track?.singerId || "")) ?? (vocalRole && selectedSingers.length === 1 ? selectedSingers[0] : undefined);
     if (plannedSinger && isVocalPart(result)) result.singer = singerIdentity(plannedSinger);
+    if (result.singer) result.singerSections = (Array.isArray(track?.singerSections) ? track.singerSections as unknown[] : []).flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const section = value as Record<string, unknown>;
+      if (typeof section.name !== "string" || !Number.isInteger(section.startBar) || !Number.isInteger(section.endBar) ||
+          (section.startBar as number) < 1 || (section.endBar as number) < (section.startBar as number) || (section.endBar as number) > totalBars) return [];
+      return [{ name: section.name, startBar: section.startBar as number, endBar: section.endBar as number }];
+    });
     if (mode === "midi") {
       result.instrumentIntent = normalizeInstrumentIntent(track?.instrumentIntent);
       result.desiredInstrument = normalizedText(track?.desiredInstrument) ?? normalizedText(track?.role);
@@ -356,7 +363,17 @@ export default function CreateSongPane(_props: TabRendererProps) {
   }
 
   function assignSinger(trackId: string, singer: SingerCharacter) {
-    setPlan((current) => current ? { ...current, tracks: current.tracks.map((track) => track.id === trackId ? { ...track, singer: singerIdentity(singer) } : track) } : current);
+    setPlan((current) => current ? { ...current, tracks: current.tracks.map((track) => track.id === trackId ? { ...track, singer: singerIdentity(singer), singerSections: track.singerSections ?? [] } : track) } : current);
+    setPlanApproved(false);
+  }
+
+  function toggleSingerSection(trackId: string, section: PlanDraft["sections"][number]) {
+    setPlan((current) => current ? { ...current, tracks: current.tracks.map((track) => {
+      if (track.id !== trackId) return track;
+      const sections = track.singerSections ?? [];
+      const selected = sections.some((item) => item.name === section.name && item.startBar === section.startBar && item.endBar === section.endBar);
+      return { ...track, singerSections: selected ? sections.filter((item) => !(item.name === section.name && item.startBar === section.startBar && item.endBar === section.endBar)) : [...sections, section] };
+    }) } : current);
     setPlanApproved(false);
   }
 
@@ -539,6 +556,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
           <div className={`rounded-xl border px-3 py-2 text-xs ${planApproved ? "border-emerald-400/25 bg-emerald-400/[.06] text-emerald-100" : "border-amber-400/25 bg-amber-400/[.06] text-amber-100"}`}>{planApproved ? "✓ Blueprint approved. Generate Session is unlocked." : "Blueprint is proposal-only. Review it and press Approve blueprint before YSong may create tracks."}</div>
           <div><SectionTitle>Hard constraints</SectionTitle><div className="mt-2 flex flex-wrap gap-2">{plan.hardConstraints.length ? plan.hardConstraints.map((x, i) => <span key={i} className="rounded-full border border-amber-300/20 bg-amber-300/[.06] px-2.5 py-1 text-xs text-amber-100">{x}</span>) : <span className="text-xs text-neutral-500">No explicit hard constraints beyond the session specification.</span>}</div></div>
           <div><SectionTitle>Tracks</SectionTitle><div className="mt-2 grid lg:grid-cols-2 gap-2">{plan.tracks.map((track) => <div key={track.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><b className="text-sm">{track.name}</b><span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${track.mode === "midi" ? "bg-cyan-400/10 text-cyan-200" : "bg-fuchsia-400/10 text-fuchsia-200"}`}>{track.mode === "midi" ? "MIDI + VST" : "AUDIO"}</span></div><div className="text-xs text-neutral-500 mt-1">{track.role}</div>{isVocalPart(track) && selectedSingers.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{selectedSingers.map((singer) => <SingerBubble key={singer.id} singer={singer} active={track.singer?.id === singer.id} compact onClick={() => assignSinger(track.id, singer)} />)}</div>}{track.vst && <div className="text-xs text-cyan-200/75 mt-2">{track.vst.name}{track.vst.presetHint ? ` · ${track.vst.presetHint}` : ""}</div>}{track.instrumentResolution && <div className="mt-1 text-[11px] text-neutral-400">{track.instrumentResolution.status === "resolved" ? `Bridge match${track.instrumentResolution.score != null ? ` (${track.instrumentResolution.score})` : ""}: ${track.instrumentResolution.reasons?.[0] ?? "instrument tag evidence"}` : `${track.instrumentResolution.message} ${track.instrumentResolution.source === "legacy-path" ? "Using the validated planner choice." : "Using an audio part."}`}</div>}</div>)}</div></div>
+          {plan.sections.length > 0 && plan.tracks.some((track) => track.singer) && <div><SectionTitle>Singer sections</SectionTitle><p className="mt-1 text-xs text-neutral-400">Choose where each assigned singer is intended to perform. An empty selection means the full track. Singer identity is direction only; synthesis requires a separate capable engine.</p><div className="mt-2 space-y-2">{plan.tracks.filter((track) => track.singer).map((track) => <div key={track.id} className="rounded-xl border border-white/10 p-3 text-xs"><b>{track.name} · {track.singer?.displayName}</b><div className="mt-2 flex flex-wrap gap-2">{plan.sections.map((section, index) => <label key={`${index}-${section.startBar}`} className="flex items-center gap-1"><input type="checkbox" checked={(track.singerSections ?? []).some((item) => item.name === section.name && item.startBar === section.startBar && item.endBar === section.endBar)} onChange={() => toggleSingerSection(track.id, section)} />{section.name} ({section.startBar}–{section.endBar})</label>)}</div></div>)}</div></div>}
           <details className="rounded-xl border border-white/10 p-3"><summary className="cursor-pointer text-sm">MiniMax structured caption</summary><pre className="mt-3 whitespace-pre-wrap text-xs leading-5 text-neutral-400 font-sans">{plan.structuredCaption}</pre></details>
         </div>}
       </section>

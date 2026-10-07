@@ -1,4 +1,4 @@
-import { parseSongGenerationResult, type SongGenerationResult } from "./songGenerationContract.ts";
+import { parseSongGenerationResult, type SongGenerationResult, type SongGenerationPart } from "./songGenerationContract.ts";
 import type { GeneratedMidiNote } from "./generatedSession.ts";
 
 export type SongGenerationImportPart = {
@@ -6,6 +6,7 @@ export type SongGenerationImportPart = {
   name: string;
   role: string;
   kind: "audio" | "midi";
+  singerAssignment?: SongGenerationPart["singerAssignment"];
   audio?: { objectKey: string; durationSec?: number; startBar: 1; lengthBars: number };
   midiClips?: Array<{ startBar: number; lengthBars: number; notes: GeneratedMidiNote[] }>;
 };
@@ -18,7 +19,7 @@ export function planSongGenerationImport(value: unknown): { result: SongGenerati
   for (const part of result.parts) {
     if (part.status !== "ready") continue;
     if (part.kind === "audio" && part.audio) {
-      parts.push({ id: part.id, name: part.name, role: part.role, kind: "audio",
+      parts.push({ id: part.id, name: part.name, role: part.role, kind: "audio", singerAssignment: part.singerAssignment,
         audio: { objectKey: part.audio.objectKey, durationSec: part.audio.durationSec, startBar: 1, lengthBars: result.timebase.totalBars } });
     } else if (part.kind === "midi" && part.midi) {
       const midiClips: NonNullable<SongGenerationImportPart["midiClips"]> = [];
@@ -32,7 +33,7 @@ export function planSongGenerationImport(value: unknown): { result: SongGenerati
             .map((note) => ({ ...note, lengthBars: Math.min(note.lengthBars, lengthBars - note.startBars) })) });
         }
       }
-      parts.push({ id: part.id, name: part.name, role: part.role, kind: "midi", midiClips });
+      parts.push({ id: part.id, name: part.name, role: part.role, kind: "midi", singerAssignment: part.singerAssignment, midiClips });
     }
   }
   return parts.length ? { result, parts } : null;
