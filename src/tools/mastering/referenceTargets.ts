@@ -29,7 +29,7 @@ export function tonalMatchAssessment(source: MasterMetrics, reference: Reference
 
 export function referenceTargets(source: MasterMetrics, reference: ReferenceProfile, selected: MatchSelection, matchStrength: number) {
   const influence = clamp(matchStrength, 0, 0.6);
-  const result: { targetLufs?: number; stereoWidth?: number; transientAmount?: number; notes: string[] } = { notes: [] };
+  const result: { targetLufs?: number; targetCrestDb?: number; stereoWidth?: number; transientAmount?: number; notes: string[] } = { notes: [] };
   if (selected.loudness) {
     const target = reference.values.integrated_lufs;
     if (target !== undefined && Number.isFinite(target) && Number.isFinite(source.integrated_lufs) && !source.loudness_proxy && !reference.proxies.loudness) {
@@ -45,7 +45,19 @@ export function referenceTargets(source: MasterMetrics, reference: ReferenceProf
       result.notes.push("Width filled from side/mid ratio, capped at 10%; check mono compatibility.");
     } else result.notes.push("Width unchanged: a usable side/mid ratio is unavailable.");
   }
-  if (selected.dynamics) result.notes.push("Crest and 50 ms dynamics are comparison guides. Set transient shape and correction strength by ear; no compressor target is inferred.");
+  if (selected.dynamics) {
+    const sourceCrest = source.crest_factor_db;
+    const referenceCrest = reference.values.crest_factor_db;
+    if (Number.isFinite(sourceCrest) && sourceCrest >= 0 && sourceCrest <= 30 &&
+      typeof referenceCrest === "number" && Number.isFinite(referenceCrest) && referenceCrest >= 0 && referenceCrest <= 30) {
+      // Transient shaping is a hint, not a compressor or a promise of crest matching.
+      // Limit the suggested move independently of the control's wider manual range.
+      const difference = clamp(referenceCrest - sourceCrest, -4, 4) * influence / 0.6;
+      result.targetCrestDb = Math.round((sourceCrest + difference) * 10) / 10;
+      result.transientAmount = Math.round(clamp(difference * 0.035, -0.14, 0.14) * 100) / 100;
+      result.notes.push("Crest suggests a bounded transient setting (at most 0.14); the rendered crest may differ. The 50 ms dynamics proxy remains a listening guide.");
+    } else result.notes.push("Transient setting unchanged: usable crest measurements are unavailable.");
+  }
   if (selected.tonal) {
     const tonal = tonalMatchAssessment(source, reference, matchStrength);
     result.notes.push(tonal.confidence === 1
