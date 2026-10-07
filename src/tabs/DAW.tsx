@@ -42,6 +42,7 @@ import { transcribeMonophonicVocal } from "../lib/vocalToMidi";
 import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type FxChainPlan } from "../lib/fxChainPlanner";
 import { localAiChat } from "../lib/localAiApi";
 import { projectEndBar } from "../lib/dawDuration";
+import { automationValue, normalizeAutomationLanes, type AutomationLane, type AutomationParameter } from "../lib/dawAutomation";
 import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
 import { addCompRange, MAX_DAW_TAKES, normalizeCompRanges, type DawTake, type DawCompRange } from "../lib/dawTakes";
 import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
@@ -96,6 +97,7 @@ type Track = {
 	midiInputName?: string;
 	// Ordered insert chain. Audio flows through this array from first to last.
 	effects?: DawTrackEffect[];
+	automation?: AutomationLane[];
 	// Full console channel-strip state shared by the DAW and YC-9000 mixer.
 	mixer?: DawMixerStripState;
 	partGeneration?: PartGeneration;
@@ -670,6 +672,8 @@ export default function DAW(_props: TabRendererProps) {
 	const PROJECTS_KEY = "ysong:projects:v1";
 
 	const [tracks, setTracks] = useState<Track[]>(() => []);
+	const [automationTrackId, setAutomationTrackId] = useState<string | null>(null);
+	const [automationParameter, setAutomationParameter] = useState<AutomationParameter>("track:level");
 	const [dawHydrated, setDawHydrated] = useState(false);
 	const [vst3Plugins, setVst3Plugins] = useState<BridgePlugin[]>([]);
 	const [bridgeAvailable, setBridgeAvailable] = useState<boolean | null>(null);
@@ -1153,6 +1157,15 @@ export default function DAW(_props: TabRendererProps) {
 
 	const toggle = (id: string, key: "mute" | "solo" | "arm") => {
 		setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, [key]: !t[key] } : t)));
+	};
+
+	const updateAutomationLane = (trackId: string, parameter: AutomationParameter, update: (lane: AutomationLane) => AutomationLane) => {
+		setTracks((previous) => previous.map((track) => {
+			if (track.id !== trackId) return track;
+			const lanes = normalizeAutomationLanes(track.automation);
+			const lane = lanes.find((item) => item.parameter === parameter) ?? { parameter, enabled: true, interpolation: "linear" as const, points: [] };
+			return { ...track, automation: [...lanes.filter((item) => item.parameter !== parameter), update(lane)] };
+		}));
 	};
 
 	const setTrackLevel = (id: string, level: number) => {
@@ -2015,7 +2028,7 @@ export default function DAW(_props: TabRendererProps) {
 	const computedTrackGain = (track: Track, trackList = tracks) => {
 		const anySolo = trackList.some((t) => t.solo);
 		const audible = !track.mute && (!anySolo || track.solo);
-		return audible ? trackLevelToGain(track.level) : 0;
+		return audible ? trackLevelToGain(automationValue(track.automation?.find((lane) => lane.parameter === "track:level"), playheadPosBars, track.level ?? 100)) : 0;
 	};
 
 	const trackUsesNativeVst = (track: Track | null | undefined) => !!track?.vst3PluginPath && bridgeAvailable !== false;
@@ -2074,7 +2087,7 @@ export default function DAW(_props: TabRendererProps) {
 		bus.widthRR.gain.setTargetAtTime(same, ctx.currentTime, 0.008);
 		bus.widthLR.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
 		bus.widthRL.gain.setTargetAtTime(cross, ctx.currentTime, 0.008);
-		bus.panner.pan.setTargetAtTime(mixer.pan, ctx.currentTime, 0.008);
+		bus.panner.pan.setTargetAtTime(automationValue(track.automation?.find((lane) => lane.parameter === "track:pan"), playheadPosBars, mixer.pan), ctx.currentTime, 0.008);
 	};
 
 	const rebuildTrackAudioEffects = (track: Track, bus: TrackAudioBus) => {
@@ -2148,13 +2161,20 @@ export default function DAW(_props: TabRendererProps) {
 			const target = computedTrackGain(track, trackList);
 			bus.gain.gain.cancelScheduledValues(ctx.currentTime);
 			bus.gain.gain.setTargetAtTime(target, ctx.currentTime, 0.008);
+			for (const effect of track.effects ?? []) {
+				if (effect.type !== "compressor") continue;
+				const runtime = bus.effectRuntimes.get(effect.id)?.compressor;
+				if (!runtime) continue;
+				const lane = track.automation?.find((item) => item.parameter === `effect:${effect.id}:thresholdDb`);
+				runtime.threshold.setTargetAtTime(automationValue(lane, playheadPosBars, effect.thresholdDb), ctx.currentTime, 0.008);
+			}
 		}
 	};
 
 	useEffect(() => {
 		syncTrackAudioBuses(tracks);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dawHydrated, tracks]);
+	}, [dawHydrated, tracks, playheadPosBars]);
 
 	// Persisted VST assignments are part of the DAW project. Once project state is
 	// hydrated, reconcile the native Bridge instances with those assignments.
@@ -2947,7 +2967,7 @@ export default function DAW(_props: TabRendererProps) {
 		rafRef.current = null;
 		setIsPlaying(false);
 
-		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), mixer: normalizeMixerStrip(t.mixer) }));
+		const restoredTracks = (data.tracks ?? []).map((t) => ({ ...t, level: clamp(t.level ?? 100, 0, 127), effects: normalizeTrackEffects(t.effects), automation: normalizeAutomationLanes(t.automation), mixer: normalizeMixerStrip(t.mixer) }));
 		const savedGeneration = parseSongGenerationResult(data.generation?.songResult);
 		if (data.generation?.origin === "create-song" && savedGeneration) {
 			for (const part of savedGeneration.parts) {
@@ -2956,7 +2976,7 @@ export default function DAW(_props: TabRendererProps) {
 				track.name = part.name;
 				track.partGeneration = { origin: "create-song", role: part.role, sourceTrackId: part.id, sessionId: savedGeneration.id,
 					createdAt: new Date(savedGeneration.createdAt).toISOString(), failure: part.failure };
-				restoredTracks.push({ ...track, level: track.level ?? 100, effects: normalizeTrackEffects(track.effects), mixer: normalizeMixerStrip(track.mixer) });
+				restoredTracks.push({ ...track, level: track.level ?? 100, effects: normalizeTrackEffects(track.effects), automation: normalizeAutomationLanes(track.automation), mixer: normalizeMixerStrip(track.mixer) });
 			}
 		}
 		setProjectGeneration(data.generation && (data.generation.origin === "create-song" || data.generation.origin === "generation-library") ? data.generation : undefined);
@@ -3231,7 +3251,7 @@ export default function DAW(_props: TabRendererProps) {
 		const name = String(parsed.name || file.name.replace(/\.ysong$/i, "") || "Untitled Project");
 		const state: DawPersistV1 = {
 			...parsed.state,
-			tracks: (parsed.state.tracks ?? []).map((track) => ({ ...track, level: clamp(track.level ?? 100, 0, 127), effects: normalizeTrackEffects(track.effects), mixer: normalizeMixerStrip(track.mixer) })),
+			tracks: (parsed.state.tracks ?? []).map((track) => ({ ...track, level: clamp(track.level ?? 100, 0, 127), effects: normalizeTrackEffects(track.effects), automation: normalizeAutomationLanes(track.automation), mixer: normalizeMixerStrip(track.mixer) })),
 			projectAssets: (parsed.state.projectAssets ?? []).map(normalizeProjectAssetForPersist),
 		};
 		localStorage.setItem(`ysong:daw:${id}`, JSON.stringify(state));
@@ -5548,6 +5568,7 @@ export default function DAW(_props: TabRendererProps) {
 											<YSButton className="w-6 h-6 p-0 rounded-md justify-center text-[10px] opacity-55 hover:opacity-100" onClick={(e) => { e.stopPropagation(); beginTrackRename(t); }} title="Rename track">✎</YSButton>
 										</div>
 										<div className="flex items-center gap-1 shrink-0">
+										<button type="button" className="text-[10px] px-1 text-cyan-200" onClick={(event) => { event.stopPropagation(); setAutomationTrackId(automationTrackId === t.id ? null : t.id); setSelectedTrackId(t.id); }} title="Edit automation">AUTO</button>
 										<YSButton
 											className={`text-[10px] px-1.5 py-1 rounded-md transition ${(t.effects?.length ?? 0) > 0 ? "!border-amber-200/25 !text-amber-100" : "opacity-65 hover:opacity-100"}`}
 											onClick={(e) => { e.stopPropagation(); setSelectedTrackId(t.id); setSelectedClipId(null); setFxChainTrackId(t.id); setFxEditorEffectId(null); }}
@@ -5641,6 +5662,24 @@ export default function DAW(_props: TabRendererProps) {
 								</div>
 							);
 						})}
+
+						{trackPanelOpen && automationTrackId && tracks.some((track) => track.id === automationTrackId) && (() => {
+							const track = tracks.find((item) => item.id === automationTrackId)!;
+							const lane = track.automation?.find((item) => item.parameter === automationParameter);
+							const currentValue = automationParameter === "track:level" ? track.level ?? 100 : automationParameter === "track:pan" ? normalizeMixerStrip(track.mixer).pan : track.effects?.find((effect) => `effect:${effect.id}:thresholdDb` === automationParameter && effect.type === "compressor")?.type === "compressor" ? (track.effects.find((effect) => `effect:${effect.id}:thresholdDb` === automationParameter) as DynamicsC1Effect).thresholdDb : -18;
+							return <div className="p-2 border-b border-white/10 text-[11px] space-y-2" onPointerDown={(event) => event.stopPropagation()}>
+							<div className="font-semibold truncate">Automation: {track.name}</div>
+							<select aria-label="Automation parameter" className="w-full bg-neutral-900 border border-white/20 rounded p-1" value={automationParameter} onChange={(event) => setAutomationParameter(event.target.value as AutomationParameter)}>
+								<option value="track:level">Track level</option><option value="track:pan">Track pan</option>{track.effects?.filter((effect) => effect.type === "compressor").map((effect) => <option key={effect.id} value={`effect:${effect.id}:thresholdDb`}>{effect.name} threshold</option>)}
+							</select>
+							<div className="flex gap-2 items-center">
+								<label><input type="checkbox" checked={lane?.enabled ?? true} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, enabled: event.target.checked }))} /> Enabled</label>
+								<select aria-label="Automation interpolation" className="bg-neutral-900 border border-white/20 rounded" value={lane?.interpolation ?? "linear"} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, interpolation: event.target.value as "linear" | "step" }))}><option value="linear">Linear</option><option value="step">Step</option></select>
+							</div>
+							<button type="button" className="rounded border border-white/20 px-2 py-1" onClick={() => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: [...old.points, { id: crypto.randomUUID(), bar: playheadPosBars, value: automationValue(old, playheadPosBars, currentValue) }].sort((a, b) => a.bar - b.bar) }))}>+ Point at playhead</button>
+							{lane?.points.map((point) => <div key={point.id} className="flex gap-1 items-center"><label>Bar <input aria-label="Point bar" type="number" min="1" step="0.01" className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.bar} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, bar: Math.max(1, Number(event.target.value) || 1) } : item).sort((a, b) => a.bar - b.bar) }))} /></label><label>Value <input aria-label="Point value" type="number" min={automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60} max={automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 1 : 0} step={automationParameter === "track:pan" ? 0.01 : 1} className="w-14 bg-neutral-900 border border-white/20 rounded px-1" value={point.value} onChange={(event) => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.map((item) => item.id === point.id ? { ...item, value: Math.max(automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60, Math.min(automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 1 : 0, Number(event.target.value) || 0)) } : item) }))} /></label><button type="button" aria-label="Delete automation point" onClick={() => updateAutomationLane(track.id, automationParameter, (old) => ({ ...old, points: old.points.filter((item) => item.id !== point.id) }))}>Delete</button></div>)}
+						</div>;
+						})()}
 
 						<div className={trackPanelOpen ? "p-3" : "p-1.5"}>
 							<YSButton
@@ -6032,6 +6071,19 @@ export default function DAW(_props: TabRendererProps) {
 												</div>
 											</div>
 										)}
+										{automationTrackId === t.id && (() => {
+											const lane = t.automation?.find((item) => item.parameter === automationParameter);
+											if (!lane?.points.length) return null;
+											const minimum = automationParameter === "track:level" ? 0 : automationParameter === "track:pan" ? -1 : -60;
+											const range = automationParameter === "track:level" ? 127 : automationParameter === "track:pan" ? 2 : 60;
+											const line = [{ bar: 1, value: lane.points[0].value }, ...lane.points, { bar: bars, value: lane.points[lane.points.length - 1].value }];
+											const displayPoints = lane.interpolation === "step" ? line.flatMap((point, index) => index === 0 ? [point] : [{ bar: point.bar, value: line[index - 1].value }, point]) : line;
+											const coordinates = displayPoints.map((point) => `${barToLeftPx(point.bar)},${(1 - (point.value - minimum) / range) * (trackH - 12) + 6}`).join(" ");
+											return <svg aria-label={`${t.name} ${automationParameter} automation lane`} className={`absolute inset-0 z-30 pointer-events-none ${lane.enabled ? "opacity-90" : "opacity-35"}`} width={Math.max(1, bars * barWidth)} height={trackH}>
+											<polyline points={coordinates} fill="none" stroke="#67e8f9" strokeWidth="2" />
+											{lane.points.map((point) => <circle key={point.id} cx={barToLeftPx(point.bar)} cy={(1 - (point.value - minimum) / range) * (trackH - 12) + 6} r="4" fill="#67e8f9" stroke="#082f49" strokeWidth="1" />)}
+										</svg>;
+										})()}
 										{trackClips.map((c) => {
 											const isSelected = c.id === selectedClipId;
 											const isMidiClip = t.type === "instrument" && !c.assetId;
