@@ -1,3 +1,5 @@
+import { barToQuarterBeats, normalizeTempoMap, type DawTempoMap } from "./dawTempoMap.ts";
+
 export type DawExportNote = {
   pitch: number;
   startBars: number;
@@ -24,6 +26,7 @@ export type DawMidiBuildOptions = {
   sigDen: number;
   endBar: number;
   tracks: DawExportMidiTrack[];
+  tempoMap?: DawTempoMap;
 };
 
 const PPQ = 480;
@@ -82,8 +85,8 @@ function ticksPerBar(sigNum: number, sigDen: number) {
   return PPQ * Math.max(1, sigNum) * (4 / Math.max(1, sigDen));
 }
 
-function barPositionToTick(barPosition: number, sigNum: number, sigDen: number) {
-  return Math.max(0, Math.round(barPosition * ticksPerBar(sigNum, sigDen)));
+function barPositionToTick(barPosition: number, sigNum: number, sigDen: number, map?: DawTempoMap) {
+  return Math.max(0, Math.round(map ? barToQuarterBeats(barPosition + 1, map) * PPQ : barPosition * ticksPerBar(sigNum, sigDen)));
 }
 
 /**
@@ -96,12 +99,17 @@ export function buildStandardMidiFile(options: DawMidiBuildOptions) {
   const sigNum = clampInt(options.sigNum || 4, 1, 32);
   const sigDen = Math.max(1, options.sigDen || 4);
   const maxBarPosition = Math.max(0, options.endBar - 1);
+  const map = options.tempoMap ? normalizeTempoMap(options.tempoMap, { bpm, sigNum, sigDen }) : undefined;
 
   const tempoEvents: MidiEvent[] = [];
-  const tempoUs = clampInt(60_000_000 / bpm, 1, 0xffffff);
-  tempoEvents.push({ tick: 0, order: 0, bytes: [0xff, 0x51, 0x03, (tempoUs >>> 16) & 0xff, (tempoUs >>> 8) & 0xff, tempoUs & 0xff] });
-  const denominatorPower = clampInt(Math.log2(sigDen), 0, 7);
-  tempoEvents.push({ tick: 0, order: 1, bytes: [0xff, 0x58, 0x04, sigNum & 0xff, denominatorPower & 0xff, 24, 8] });
+  for (const event of map ?? [{ bar: 1, bpm, sigNum, sigDen }]) {
+    if (event.bar >= options.endBar) continue;
+    const tick = barPositionToTick(event.bar - 1, sigNum, sigDen, map);
+    const tempoUs = clampInt(60_000_000 / event.bpm, 1, 0xffffff);
+    tempoEvents.push({ tick, order: 0, bytes: [0xff, 0x51, 0x03, (tempoUs >>> 16) & 0xff, (tempoUs >>> 8) & 0xff, tempoUs & 0xff] });
+    const denominatorPower = clampInt(Math.log2(event.sigDen), 0, 7);
+    tempoEvents.push({ tick, order: 1, bytes: [0xff, 0x58, 0x04, event.sigNum & 0xff, denominatorPower & 0xff, 24, 8] });
+  }
   const sequenceName = asciiBytes("YSong Export");
   tempoEvents.push({ tick: 0, order: 2, bytes: [0xff, 0x03, ...variableLength(sequenceName.length), ...sequenceName] });
 
@@ -121,8 +129,8 @@ export function buildStandardMidiFile(options: DawMidiBuildOptions) {
       if (startBars >= maxBarPosition) continue;
       const endBars = Math.min(maxBarPosition, startBars + Math.max(1 / 128, note.lengthBars));
       if (endBars <= startBars) continue;
-      const startTick = barPositionToTick(startBars, sigNum, sigDen);
-      const endTick = Math.max(startTick + 1, barPositionToTick(endBars, sigNum, sigDen));
+      const startTick = barPositionToTick(startBars, sigNum, sigDen, map);
+      const endTick = Math.max(startTick + 1, barPositionToTick(endBars, sigNum, sigDen, map));
       const pitch = clampInt(note.pitch, 0, 127);
       const velocity = clampInt(note.velocity, 1, 127);
       events.push({ tick: startTick, order: 20, bytes: [0x90 | channel, pitch, velocity] });
@@ -134,7 +142,7 @@ export function buildStandardMidiFile(options: DawMidiBuildOptions) {
       const atBars = Math.max(0, point.atBars);
       if (atBars > maxBarPosition) continue;
       events.push({
-        tick: barPositionToTick(atBars, sigNum, sigDen),
+        tick: barPositionToTick(atBars, sigNum, sigDen, map),
         order: 5,
         bytes: [0xb0 | channel, 1, clampInt(point.value, 0, 127)],
       });
@@ -148,7 +156,7 @@ export function buildStandardMidiFile(options: DawMidiBuildOptions) {
       const normalized = Math.max(-1, Math.min(1, Number(point.value || 0) / 12));
       const bend = clampInt(8192 + normalized * 8191, 0, 16383);
       events.push({
-        tick: barPositionToTick(atBars, sigNum, sigDen),
+        tick: barPositionToTick(atBars, sigNum, sigDen, map),
         order: 5,
         bytes: [0xe0 | channel, bend & 0x7f, (bend >>> 7) & 0x7f],
       });
