@@ -2,6 +2,8 @@
 
 Select a MIDI clip in the DAW and expand **MIDI to Vocal**. Choose a saved Singer Studio identity, enter one syllable per note (or `ah`), and prepare a request. Pitch, duration, velocity and expression remain editable in the existing MIDI editor. Overlapping notes and notes outside the clip must be corrected before preparation.
 
+The workspace shows note order, pitch, clip-relative position and syllable coverage alongside the saved singer snapshot. Its status area distinguishes a current prepared request from a stale one and explicitly shows that no render job or vocal preview artifact exists. The DAW's ordinary MIDI playback is an instrumental preview only.
+
 `Clip.vocalSetup` is optional, so old projects remain compatible. Existing DAW autosave, explicit local save, project file export/import and undo snapshots carry the setup with the clip. It contains a stable singer ID plus a detached identity snapshot, lyrics keyed by note ID, and an optional versioned request. Singer library edits/deletion do not rewrite project history; refreshing a singer is explicit. Copy/paste remaps lyrics to new note IDs and clears the copied request.
 
 The pure `prepareVocalRequest` boundary stores editable source MIDI and its existing provenance, a singer snapshot, tempo/signature, clip placement, expression lanes and per-note syllables. Bars use the DAW's one-based project start and zero-based relative note timing. BPM is quarter notes per minute; seconds per bar is `60 / bpm * numerator * 4 / denominator`. Note seconds are clip-relative; request start seconds are project-relative. Leading silence is retained. There is no tempo map in this foundation.
