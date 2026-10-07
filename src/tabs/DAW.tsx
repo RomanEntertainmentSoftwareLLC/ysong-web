@@ -1447,6 +1447,40 @@ export default function DAW(_props: TabRendererProps) {
 		setClipContextMenu({ x: e.clientX, y: e.clientY, clipId });
 	};
 
+	const crossfadeIntoNextClip = (clipId: string) => {
+		const left = clips.find((clip) => clip.id === clipId);
+		if (!left?.assetId) return;
+		const right = clips.filter((clip) => clip.assetId && clip.trackId === left.trackId && clip.id !== left.id && clip.startBar >= left.startBar)
+			.sort((a, b) => a.startBar - b.startBar)[0];
+		if (!right) return;
+		const leftEnd = left.startBar + left.lengthBars;
+		const gap = right.startBar - leftEnd;
+		if (gap > 0.001 || gap < -left.lengthBars) return;
+		const barSec = getBarSeconds();
+		const overlap = Math.max(0, leftEnd - right.startBar);
+		const leftAsset = findAssetById(left.assetId);
+		const sourceOffset = Math.max(0, left.sourceOffsetSec ?? 0);
+		const sourceDuration = Math.max(0.001, left.sourceDurationSec ?? left.lengthBars * barSec);
+		const sourcePerBar = sourceDuration / left.lengthBars;
+		const availableTail = leftAsset?.durationSec == null ? 0 : Math.max(0, (leftAsset.durationSec - sourceOffset - sourceDuration) / sourcePerBar);
+		const extension = overlap > 0 ? 0 : Math.min(0.25, availableTail, right.lengthBars, bars + 1 - leftEnd);
+		const fadeBars = Math.min(overlap || extension, right.lengthBars, left.lengthBars + extension);
+		if (fadeBars <= 0.001) return;
+		setClips((current) => current.map((clip) => {
+			if (clip.id === left.id) return {
+				...clip,
+				lengthBars: clip.lengthBars + extension,
+				sourceDurationSec: extension > 0 ? sourceDuration + extension * sourcePerBar : clip.sourceDurationSec,
+				fadeOutBars: fadeBars,
+				fadeInBars: Math.min(clip.fadeInBars ?? 0, clip.lengthBars + extension - fadeBars),
+			};
+			if (clip.id === right.id) return { ...clip, fadeInBars: fadeBars, fadeOutBars: Math.min(clip.fadeOutBars ?? 0, clip.lengthBars - fadeBars) };
+			return clip;
+		}));
+		setClipContextMenu(null);
+		if (isPlaying) { stop(); requestAnimationFrame(() => start(loopEnabled)); }
+	};
+
 	const openLaneContextMenu = (trackId: string) => (e: React.MouseEvent<HTMLDivElement>) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -6055,13 +6089,13 @@ export default function DAW(_props: TabRendererProps) {
 														<>
 															{/* Fade handles follow their current fade boundaries. */}
 															<div
-													className="daw-clip-handle absolute top-0 z-50 w-3 h-3 -translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute top-0 z-50 w-6 h-6 -translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-80 group-hover:opacity-100"
 																style={{ left: `${fadeInPct}%` }}
 																onPointerDown={beginClipFade(c.id, "fadeIn")}
 																title="Fade in (drag; ALT bypasses snap)"
 															/>
 															<div
-													className="daw-clip-handle absolute top-0 z-50 w-3 h-3 translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-0 group-hover:opacity-100"
+													className="daw-clip-handle absolute top-0 z-50 w-6 h-6 translate-x-1/2 rounded-b bg-white/85 shadow cursor-ew-resize opacity-80 group-hover:opacity-100"
 																style={{ right: `${fadeOutPct}%` }}
 																onPointerDown={beginClipFade(c.id, "fadeOut")}
 																title="Fade out (drag; ALT bypasses snap)"
@@ -6311,6 +6345,7 @@ export default function DAW(_props: TabRendererProps) {
 						{menuTrack?.type === "instrument" && (
 							<button className="w-full text-left px-3 py-2 hover:bg-violet-400/10" onClick={() => { setMidiEditorClipId(clipContextMenu.clipId); setClipContextMenu(null); }}>♬ Edit MIDI</button>
 						)}
+						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => crossfadeIntoNextClip(menuClip.id)}>Crossfade into next clip</button>}
 						<button className="w-full text-left px-3 py-2 hover:bg-white/10 flex justify-between" onClick={() => cutClip(clipContextMenu.clipId)}><span>Cut</span><span className="opacity-45 text-xs">Ctrl+X</span></button>
 						<button className="w-full text-left px-3 py-2 hover:bg-white/10 flex justify-between" onClick={() => copyClip(clipContextMenu.clipId)}><span>Copy</span><span className="opacity-45 text-xs">Ctrl+C</span></button>
 						<div className="h-px bg-white/10" />
