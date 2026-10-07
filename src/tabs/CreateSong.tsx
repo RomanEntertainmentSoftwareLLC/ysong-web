@@ -13,10 +13,13 @@ import { listSingerCharacters, saveSingerCharacter, singerIdentity, type SingerC
 import AccountPlan from "../components/AccountPlan";
 import GenerationJobs from "../components/GenerationJobs";
 import { apiGet, apiPost } from "../lib/authApi";
+import LyricsWorkspace from "../components/LyricsWorkspace";
+import { importPlainLyrics, lyricsToPlainText, type LyricsDocument } from "../lib/lyricsDocument";
 
 const STORAGE_KEY = "ysong:create-song:draft:v3";
 const RECOVERY_KEY = "ysong:create-song:recovery:v1";
 const BLUEPRINT_KEY = "ysong:create-song:blueprint:v1";
+const LYRICS_KEY = "ysong:create-song:lyrics:v1";
 type Draft = { title: string; lyrics: string; style: string; instrumental: boolean; bpm: string; key: string; duration: string; bandId: string; singerIds: string[] };
 const emptyDraft: Draft = { title: "", lyrics: "", style: "", instrumental: false, bpm: "", key: "", duration: "", bandId: "", singerIds: [] };
 
@@ -265,6 +268,15 @@ export default function CreateSongPane(_props: TabRendererProps) {
       return { ...emptyDraft, ...old, ...current, bandId: current.bandId || getActiveBandId() || "", singerIds: Array.isArray(current.singerIds) ? current.singerIds : [] };
     } catch { return { ...emptyDraft, bandId: getActiveBandId() || "" }; }
   });
+  const [lyricsDocument, setLyricsDocument] = useState<LyricsDocument>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LYRICS_KEY) || "null");
+      if (saved?.id && Array.isArray(saved.sections) && Array.isArray(saved.versions)) return saved;
+      const current = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const old = JSON.parse(localStorage.getItem("ysong:create-song:draft:v2") || localStorage.getItem("ysong:create-song:draft:v1") || "{}");
+      return importPlainLyrics(current.lyrics || old.lyrics || "");
+    } catch { return importPlainLyrics(""); }
+  });
   const [bands, setBands] = useState<BandProfile[]>([]);
   const [singers, setSingers] = useState<SingerCharacter[]>([]);
   const [newSinger, setNewSinger] = useState({ displayName: "", voiceDescription: "", vocalRange: "", vocalStyle: "", avatar: null as File | null });
@@ -291,9 +303,10 @@ export default function CreateSongPane(_props: TabRendererProps) {
   const [parentId,setParentId]=useState<string|undefined>();
   useEffect(()=>{void apiGet<{enabled:boolean;remaining:number|null;superadmin:boolean}>('/api/account/entitlements').then(setEntitlement).catch(()=>{});},[]);
   const reuseRequest=_props.tab.payload?.reuseGeneration as {requestId:string;title:string;prompt:string;lyrics:string;parentId?:string}|undefined;
-  useEffect(()=>{if(!reuseRequest)return;setDraft(old=>({...old,title:reuseRequest.title,style:reuseRequest.prompt,lyrics:reuseRequest.lyrics}));setParentId(reuseRequest.parentId);setPlan(null);setPlanApproved(false);setRecovery(null);},[reuseRequest]);
+  useEffect(()=>{if(!reuseRequest)return;setDraft(old=>({...old,title:reuseRequest.title,style:reuseRequest.prompt,lyrics:reuseRequest.lyrics}));setLyricsDocument(importPlainLyrics(reuseRequest.lyrics));setParentId(reuseRequest.parentId);setPlan(null);setPlanApproved(false);setRecovery(null);},[reuseRequest]);
 
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draft)); } catch {} }, [draft]);
+  useEffect(() => { try { localStorage.setItem(LYRICS_KEY, JSON.stringify(lyricsDocument)); } catch { /* Storage can be unavailable in private browsing. */ } }, [lyricsDocument]);
   useEffect(() => { try { localStorage.setItem(BLUEPRINT_KEY, JSON.stringify({ plan, approved: planApproved })); } catch {} }, [plan, planApproved]);
   useEffect(() => { try { if (recovery) localStorage.setItem(RECOVERY_KEY, JSON.stringify(recovery)); else localStorage.removeItem(RECOVERY_KEY); } catch {} }, [recovery]);
   useEffect(() => {
@@ -314,6 +327,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
   }, []);
 
   const patch = (next: Partial<Draft>) => { setDraft((d) => ({ ...d, ...next })); setPlan(null); setPlanApproved(false); };
+  const changeLyrics = (next: LyricsDocument) => { setLyricsDocument(next); patch({ lyrics: lyricsToPlainText(next) }); };
   const selectedBand = useMemo(() => bands.find((b) => b.id === draft.bandId) ?? null, [bands, draft.bandId]);
   const selectedSingers = useMemo(() => singers.filter((singer) => draft.singerIds.includes(singer.id)), [singers, draft.singerIds]);
   const usableVsts = useMemo(() => plugins.filter((p) => p.kind === "instrument" && p.loadable !== false), [plugins]);
@@ -510,7 +524,7 @@ export default function CreateSongPane(_props: TabRendererProps) {
           <button type="button" onClick={() => void createSinger()} className="rounded-lg border border-indigo-400/30 bg-indigo-500/15 px-3 py-1.5 text-xs">Save singer</button>
         </div>}
         <label className="flex items-center gap-3 rounded-xl border border-white/10 p-3"><input type="checkbox" checked={draft.instrumental} onChange={(e) => patch({ instrumental: e.target.checked })} /><span className="text-sm">Instrumental</span></label>
-        {!draft.instrumental && <Field label="Lyrics"><textarea value={draft.lyrics} onChange={(e) => patch({ lyrics: e.target.value })} placeholder="Write or paste lyrics…" className="input min-h-[230px] resize-y" /></Field>}
+        {!draft.instrumental && <LyricsWorkspace document={lyricsDocument} onChange={changeLyrics} />}
         <Field label="Style"><textarea value={draft.style} onChange={(e) => patch({ style: e.target.value })} placeholder="Genre, instruments, mood, vocal style, production direction…" className="input min-h-[120px] resize-y" /></Field>
         <div className="grid grid-cols-3 gap-2"><Field label="BPM"><input value={draft.bpm} onChange={(e) => patch({ bpm: e.target.value })} placeholder="Auto" className="input" /></Field><Field label="Key / mode"><input value={draft.key} onChange={(e) => patch({ key: e.target.value })} placeholder="E Phrygian" className="input" /></Field><Field label="Length"><input value={draft.duration} onChange={(e) => patch({ duration: e.target.value })} placeholder="Auto" className="input" /></Field></div>
         <div className="text-[11px] text-neutral-500">Installed VST3 instruments visible to the producer: {usableVsts.length}. If none fits a part, YSong asks MiniMax for a separate audio track instead of silently substituting General MIDI.</div>
