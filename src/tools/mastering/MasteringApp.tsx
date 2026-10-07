@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent 
 import { checkVocalHealth, type LocalJob, type UploadResult } from "../stemrestore/api";
 import ABMonitor from "./ABMonitor";
 import { compareReferenceDescriptors, descriptorProfile, parseReferenceProfile, type ReferenceProfile } from "./referenceDescriptors";
+import { defaultMatchSelection, referenceTargets } from "./referenceTargets";
 import {
   masteringAnalysisUrl,
   startMasteringAnalysis,
@@ -163,6 +164,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
   const [transientAmount, setTransientAmount] = useState(0);
   const [applyDynamicEq, setApplyDynamicEq] = useState(true);
   const [referenceInfluence, setReferenceInfluence] = useState(0.2);
+  const [matchSelection, setMatchSelection] = useState(defaultMatchSelection);
+  const [targetNotes, setTargetNotes] = useState<string[]>([]);
   const [dragTarget, setDragTarget] = useState<"source" | "reference" | null>(null);
   const [displayProgress, setDisplayProgress] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -175,6 +178,15 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
     : savedReference, [analysis, reference, savedReference]);
   const descriptorDifferences = useMemo(() => analysis && activeReference
     ? compareReferenceDescriptors(analysis.analysis, activeReference) : [], [analysis, activeReference]);
+
+  function applyReferenceTargets() {
+    if (!analysis || !activeReference) return;
+    const targets = referenceTargets(analysis.analysis, activeReference, matchSelection, referenceInfluence);
+    if (targets.targetLufs !== undefined) setTargetLufs(targets.targetLufs);
+    if (targets.stereoWidth !== undefined) setStereoWidth(targets.stereoWidth);
+    if (targets.transientAmount !== undefined) setTransientAmount(targets.transientAmount);
+    setTargetNotes(targets.notes);
+  }
 
   async function refreshHealth() {
     setHealth("checking");
@@ -224,11 +236,12 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
 
   function resetSource(file: File | null) {
     abortRef.current?.abort();
-    setSourceFile(file); setSource(null); setAnalysis(null); setReport(null); setError(""); setStage("idle");
+    setSourceFile(file); setSource(null); setAnalysis(null); setReport(null); setError(""); setStage("idle"); setTargetNotes([]);
   }
 
   function resetReference(file: File | null) {
     setReferenceFile(file); setReference(null); setSavedReference(null); setAnalysis(null); setReport(null); setError("");
+    setTargetNotes([]);
     if (stage === "error") setStage(source ? "ready" : "idle");
   }
 
@@ -238,6 +251,7 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
       if (file.size > 64_000) throw new Error("Reference descriptor file is too large.");
       const profile = parseReferenceProfile(JSON.parse(await file.text()));
       setSavedReference(profile); setReference(null); setReferenceFile(null); setReport(null); setError("");
+      setTargetNotes([]);
       setAnalysis(previous => previous ? { ...previous, reference: null } : null);
     } catch (e: unknown) { setError(errorMessage(e, "Could not read reference descriptors.")); }
   }
@@ -319,8 +333,8 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
       stereoWidth: quick ? 1 : stereoWidth,
       transientAmount: quick ? 0 : transientAmount,
       applyDynamicEq,
-      referenceAssetId: quick ? null : reference?.asset_id || null,
-      referenceInfluence: quick ? 0 : referenceInfluence,
+      referenceAssetId: mode === "reference" ? reference?.asset_id || null : null,
+      referenceInfluence: mode === "reference" ? referenceInfluence : 0,
     };
     try {
       const started = await startMasteringRender(source.asset_id, settings);
@@ -388,6 +402,21 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
 
     {error && <div className="mt-5 rounded-2xl border border-rose-500/30 bg-rose-500/[.06] p-4 text-sm text-rose-500">{error}</div>}
 
+    {analysis && activeReference && <section className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/[.035] p-5">
+      <div className="text-[10px] uppercase tracking-[.18em] text-sky-500">Reference targets</div>
+      <h2 className="mt-1 text-lg font-semibold">Choose what to match</h2>
+      <p className="mt-1 text-xs text-neutral-500">Measurements describe broad sound characteristics. Choose dimensions, then fill supported controls. Review the controls before rendering.</p>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{([
+        ["tonal", "Tone", "Broad spectral balance; audio reference guidance only"],
+        ["loudness", "Loudness", "Measured LUFS target, subject to peak guard"],
+        ["dynamics", "Dynamics", "Crest and short-term dynamics for listening comparison"],
+        ["stereo", "Stereo", "Side/mid width target, capped at 10%"],
+      ] as const).map(([key, label, note]) => <label key={key} className="flex gap-2 rounded-xl border border-sky-500/20 p-3 text-xs"><input type="checkbox" checked={matchSelection[key]} onChange={e => setMatchSelection(previous => ({ ...previous, [key]: e.target.checked }))} className="h-4 w-4 accent-sky-500"/><span><span className="block font-medium">{label}</span><span className="mt-1 block text-neutral-500">{note}</span></span></label>)}</div>
+      <div className="mt-4 flex flex-wrap items-center gap-3"><label htmlFor="reference-match-strength" className="text-xs">Match strength {Math.round(referenceInfluence / 0.6 * 100)}%</label><input id="reference-match-strength" type="range" min="0" max="0.6" step="0.01" value={referenceInfluence} onChange={e => setReferenceInfluence(Number(e.target.value))} className="w-44 accent-sky-500"/><button type="button" onClick={applyReferenceTargets} disabled={!Object.values(matchSelection).some(Boolean)} className="rounded-xl border border-sky-500/40 px-3 py-2 text-xs text-sky-600 disabled:opacity-40 dark:text-sky-400">Fill selected controls</button></div>
+      {targetNotes.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-neutral-500">{targetNotes.map(note => <li key={note}>{note}</li>)}</ul>}
+      <p className="mt-3 text-xs text-neutral-500">Reference audio guides the engine's capped broad EQ when selected for rendering; saved JSON descriptors cannot drive the audio engine. Neither path copies reference samples or a waveform. The source stays separate, and the true-peak ceiling remains active.</p>
+    </section>}
+
     {analysis && <>
       <section className="mt-5 rounded-2xl border border-neutral-200 bg-white/70 p-5 dark:border-neutral-800 dark:bg-neutral-900/45"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="text-[10px] uppercase tracking-[.18em] text-violet-500">Measured source</div><h2 className="mt-1 text-xl font-semibold">{analysis.engine}</h2><p className="mt-1 text-xs text-neutral-500">Critique: {analysis.critique_integration?.verdict || "available"} · {analysis.critique_integration?.finding_count || 0} finding(s) considered · {analysis.critique_integration?.frequency_time_hints_used || 0} direct time/frequency hint(s).</p></div><a href={masteringAnalysisUrl(analysis.asset_id)} target="_blank" rel="noreferrer" className="rounded-xl border border-neutral-300 px-3 py-2 text-xs dark:border-neutral-700">JSON analysis</a></div><div className="mt-5"><MetricsGrid metrics={analysis.analysis}/></div>{analysis.tonal_description?.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{analysis.tonal_description.map((text, i) => <span key={i} className="rounded-full border border-neutral-200 px-3 py-1 text-xs text-neutral-500 dark:border-neutral-800">{text}</span>)}</div>}<div className="mt-5"><div className="mb-2 text-[10px] uppercase tracking-[.18em] text-neutral-500">Tonal balance</div><TonalBalance metrics={analysis.analysis}/></div></section>
       <AssistantPlan analysis={analysis}/>
@@ -410,10 +439,10 @@ export default function MasteringApp({ onBack, initialUpload = null }: Props) {
         <div><div className="flex justify-between text-xs"><span>Correction strength</span><span>{Math.round(strength * 100)}%</span></div><input type="range" min="0" max="1" step="0.01" value={strength} onChange={e => setStrength(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/></div>
         <div><div className="flex justify-between text-xs"><label htmlFor="master-stereo-width">Stereo width</label><span>{Math.round(stereoWidth * 100)}%</span></div><input id="master-stereo-width" type="range" min="0.5" max="1.5" step="0.01" value={stereoWidth} onChange={e => setStereoWidth(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">100% keeps source width. Check mono compatibility after widening.</div></div>
         <div><div className="flex justify-between text-xs"><label htmlFor="master-transient-shape">Transient shape</label><span>{transientAmount > 0 ? "+" : ""}{transientAmount.toFixed(2)}</span></div><input id="master-transient-shape" type="range" min="-0.35" max="0.35" step="0.01" value={transientAmount} onChange={e => setTransientAmount(Number(e.target.value))} className="mt-2 w-full accent-violet-600"/><div className="mt-1 text-[10px] text-neutral-500">Negative softens attacks; positive adds punch. Zero leaves attacks unchanged.</div></div>
-        <div><div className="flex justify-between text-xs"><span>Reference influence</span><span>{Math.round(referenceInfluence * 100)}%</span></div><input type="range" min="0" max="0.6" step="0.01" value={referenceInfluence} disabled={!reference} onChange={e => setReferenceInfluence(Number(e.target.value))} className="mt-2 w-full accent-violet-600 disabled:opacity-40"/></div>
+
       </div>
       <div className="mt-5"><Toggle checked={applyDynamicEq} onChange={setApplyDynamicEq} label="Apply localized dynamic corrections" note="Only time/frequency-specific candidates are touched. Preserve Mix raises the confidence threshold and caps correction strength automatically."/></div>
-      <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => render(reference ? "reference" : "assistant")} disabled={!source || busy || health !== "online"} className="min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white disabled:opacity-40">{stage === "rendering" ? `Rendering remaster… ${Math.round(displayProgress)}%` : reference ? "Create reference-guided remaster" : "Create remaster candidate"}</button><span className="self-center text-xs text-neutral-500">Source stays untouched. Preserve Mix stops short rather than crushing a target that exceeds its limiter guard.</span></div>
+      <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => render(reference && matchSelection.tonal ? "reference" : "assistant")} disabled={!source || busy || health !== "online"} className="min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white disabled:opacity-40">{stage === "rendering" ? `Rendering remaster… ${Math.round(displayProgress)}%` : reference && matchSelection.tonal ? "Create reference-guided remaster" : "Create remaster candidate"}</button><span className="self-center text-xs text-neutral-500">Source stays untouched. Preserve Mix stops short rather than crushing a target that exceeds its limiter guard.</span></div>
     </section>
 
     {report && source && <>
