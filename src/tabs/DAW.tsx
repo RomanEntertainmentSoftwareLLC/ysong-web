@@ -781,6 +781,8 @@ export default function DAW(_props: TabRendererProps) {
 	const [stemSampleRate, setStemSampleRate] = useState(48000);
 	const [stemPrefix, setStemPrefix] = useState("");
 	const [exporting, setExporting] = useState(false);
+	const exportCancelRef = useRef(false);
+	const [exportWarning, setExportWarning] = useState("");
 	const [exportStatus, setExportStatus] = useState("");
 	const [dawAgentOpen, setDawAgentOpen] = useState(false);
 	const [agentFxPlan, setAgentFxPlan] = useState<{ trackId: string; plan: FxChainPlan } | null>(null);
@@ -798,7 +800,7 @@ export default function DAW(_props: TabRendererProps) {
 	const generationImportPendingRef = useRef<GenerationRecord | null>(null);
 	const generationImportTargetRef = useRef<string | null>(null);
 	const handledGenerationImportRef = useRef<string | null>(null);
-	const exportSampleRate = 48000;
+	const [exportSampleRate, setExportSampleRate] = useState(48000);
 	const [isSavingUi, setIsSavingUi] = useState(false);
 	const [persistedSnapshot, setPersistedSnapshot] = useState<{ id: string; fingerprint: string } | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -5255,6 +5257,10 @@ export default function DAW(_props: TabRendererProps) {
 
 	const runMasterExport = async () => {
 		if (exporting) return;
+		const sampleRateChoice = exportMode === "stems" ? stemSampleRate : exportSampleRate;
+		if (![44100, 48000, 96000].includes(sampleRateChoice)) { setExportStatus("Choose a supported sample rate."); return; }
+		if (exportFormat === "mp3" && sampleRateChoice === 96000) { setExportStatus("MP3 supports 44.1 or 48 kHz here. Choose another sample rate."); return; }
+		if (exportFormat === "mp3" && ![64, 96, 128, 160, 192, 256, 320].includes(exportMp3Bitrate)) { setExportStatus("Choose a supported MP3 bitrate."); return; }
 		const targets = exportMode === "stems" ? stemIds : ["MASTER"];
 		if (!targets.length) { setExportStatus("Select at least one stem."); return; }
 		if (exportMode === "stems" && exportFormat === "midi") { setExportStatus("Choose an audio format for stems."); return; }
@@ -5262,6 +5268,7 @@ export default function DAW(_props: TabRendererProps) {
 			const mixer = mixerForTrack(track);
 			return trackUsesNativeVst(track) && !frozenBuffer(track) && (mixer.output === id || mixer.sends[DAW_AUX_IDS.indexOf(id)].level > 0);
 		}))) { setExportStatus("A selected bus contains a native VST; Bridge bus rendering is unavailable."); return; }
+		if (exportFormat !== "midi" && sampleRateChoice !== 48000 && tracks.some((track) => (exportMode === "master" || targets.includes(track.id)) && trackUsesNativeVst(track) && !frozenBuffer(track))) { setExportStatus("Native VST rendering requires 48 kHz. Choose 48 kHz or freeze the VST tracks first."); return; }
 		const unavailableDesktopVsts = tracks.filter((track) => (exportMode === "master" || targets.includes(track.id)) && track.type === "instrument" && !!track.vst3PluginPath && !trackUsesNativeVst(track) && !frozenBuffer(track));
 		if (exportFormat !== "midi" && unavailableDesktopVsts.length > 0) {
 			const names = unavailableDesktopVsts.slice(0, 4).map((track) => track.vst3PluginName ?? track.name);
@@ -5269,7 +5276,9 @@ export default function DAW(_props: TabRendererProps) {
 			const okay = window.confirm(`Some desktop VST instruments are unavailable on this device.\n\nYSong is previewing these tracks with Acoustic Grand Piano:\n• ${names.join("\n• ")}${more}\n\nIf you export here, the exported audio will use the preview sound and will not match the intended desktop VST sound.\n\nExport anyway?`);
 			if (!okay) return;
 		}
+		exportCancelRef.current = false;
 		setExporting(true);
+		setExportWarning("");
 		setExportStatus("");
 		setExportMasterAnalysis(null);
 		try {
@@ -5288,7 +5297,10 @@ export default function DAW(_props: TabRendererProps) {
 			const durationSeconds = Math.max(0.001, (endBar - 1) * barSec + (exportMode === "stems" ? stemTails : 0));
 			const frames = Math.max(1, Math.ceil(durationSeconds * sampleRate));
 			const downloads: { blob: Blob; name: string }[] = [];
+			const warnings: string[] = [];
+			const checkCancelled = () => { if (exportCancelRef.current) throw new Error("Export cancelled. No files downloaded."); };
 			for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
+			checkCancelled();
 			const target = targets[targetIndex];
 			const busId = DAW_AUX_IDS.includes(target) ? target : undefined;
 			const sourceIds = target === "MASTER" ? undefined : new Set(busId
@@ -5304,10 +5316,12 @@ export default function DAW(_props: TabRendererProps) {
 
 			setExportStatus(`Rendering ${targetIndex + 1}/${targets.length}: ${stemName} (audio)…`);
 			const audioMix = await renderAudioClipsForExport(durationSeconds, sampleRate, sourceIds, busId);
+			checkCancelled();
 			addToMaster(audioMix.left, audioMix.right);
 
 			setExportStatus("Rendering General MIDI…");
 			const gmMix = await renderGmForExport(durationSeconds, sampleRate, undefined, sourceIds, busId);
+			checkCancelled();
 			addToMaster(gmMix.left, gmMix.right);
 
 			const vstTracks = tracks.filter((track) => (!sourceIds || sourceIds.has(track.id)) && track.type === "instrument" && trackUsesNativeVst(track) && !frozenBuffer(track));
@@ -5323,7 +5337,8 @@ export default function DAW(_props: TabRendererProps) {
 				await bridgeApi.setVst3Master(100);
 				let vstWav: ArrayBuffer;
 				try { vstWav = await bridgeApi.renderVst3Mix(durationSeconds, buildOfflineVstTracks(barSec).filter((item) => !sourceIds || sourceIds.has(item.trackId))); }
-				finally { bridgeApi.setVst3Master(masterLevel).catch(() => {}); }
+				finally { await bridgeApi.setVst3Master(masterLevel); }
+				checkCancelled();
 				const vstMix = decodeStereoFloatWav(vstWav);
 				if (vstMix.sampleRate !== sampleRate) throw new Error(`Bridge rendered VST3 audio at ${vstMix.sampleRate} Hz; YSong export is ${sampleRate} Hz. Match the Bridge sample rate before exporting.`);
 				addToMaster(vstMix.left, vstMix.right);
@@ -5347,24 +5362,30 @@ export default function DAW(_props: TabRendererProps) {
 						Math.abs(masterR[i - 1] + (right - masterR[i - 1]) * step / 4));
 				}
 			}
+			if (peak >= 1) warnings.push(`${stemName}: sample peak reaches or exceeds 0 dBFS; PCM and compressed encoders may clip.`);
+			else if (peak >= Math.pow(10, -1 / 20)) warnings.push(`${stemName}: interpolated peak is above -1 dBFS; check true peak in a dedicated meter.`);
 			if (target === "MASTER") setExportMasterAnalysis({ loudness: 20 * Math.log10(Math.max(1e-9, Math.sqrt(energy / frames))), peak: 20 * Math.log10(Math.max(1e-9, peak)) });
 
 			setExportStatus(`Encoding ${targetIndex + 1}/${targets.length}: ${stemName}…`);
 			const floatWav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, 32)], { type: "audio/wav" });
 			if (exportFormat === "wav16" || exportFormat === "wav24") {
 				const bits = exportFormat === "wav16" ? 16 : 24;
-				const wav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, bits)], { type: "audio/wav" });
+				const wav = new Blob([encodeStereoWav(masterL, masterR, sampleRate, bits, stemName)], { type: "audio/wav" });
 				downloads.push({ blob: wav, name: `${stemName}.wav` });
 			} else if (exportFormat === "flac") {
 				setExportStatus("Encoding lossless FLAC…");
 				const encoded = await bridgeApi.encodeAudio(floatWav, "flac");
+				checkCancelled();
 				downloads.push({ blob: encoded, name: `${stemName}.flac` });
 			} else {
 				setExportStatus(`Encoding MP3 ${exportMp3Bitrate} kbps…`);
 				const encoded = await bridgeApi.encodeAudio(floatWav, "mp3", exportMp3Bitrate);
+				checkCancelled();
 				downloads.push({ blob: encoded, name: `${stemName}.mp3` });
 			}
 			}
+			checkCancelled();
+			setExportWarning(warnings.join(" "));
 			for (const file of downloads) downloadBlob(file.blob, file.name);
 			setExportStatus(`Export complete: ${targets.length} file${targets.length === 1 ? "" : "s"}.`);
 		} catch (error) {
@@ -6950,7 +6971,7 @@ export default function DAW(_props: TabRendererProps) {
 								) : exportFormat !== "midi" && exportMode === "master" ? (
 									<div className="text-[11px] uppercase tracking-wide opacity-70">
 										Sample Rate
-										<div className="mt-1 h-9 flex items-center px-3 rounded-lg border border-white/10 bg-neutral-950/40 text-sm normal-case tracking-normal opacity-80">48 kHz</div>
+										<select value={exportSampleRate} disabled={exporting} onChange={(e) => setExportSampleRate(Number(e.target.value))} className="mt-1 w-full h-9 bg-neutral-950 border border-white/15 rounded-lg px-2 text-sm normal-case"><option value={44100}>44.1 kHz</option><option value={48000}>48 kHz</option><option value={96000}>96 kHz</option></select>
 									</div>
 								) : (
 									<div className="text-[11px] uppercase tracking-wide opacity-70">
@@ -6976,6 +6997,7 @@ export default function DAW(_props: TabRendererProps) {
 									: exportMode === "stems" ? "Each stem starts at measure 001 and has the same duration. Track stems include their routed sends; bus stems capture their selected aux return. Native VST bus capture is unavailable." : "YSong renders the complete timeline from 001 to E: audio clips, General MIDI, active VST3 instruments, and each track’s ordered effects chain mixed into one master."}
 							</div>
 
+							{exportWarning && <div role="alert" className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[12px] text-amber-100">{exportWarning}</div>}
 							{exportStatus && (
 								<div className={`mt-3 rounded-lg border px-3 py-2 text-[12px] ${/failed|error|missing|cannot|could not|unavailable|select|choose/i.test(exportStatus) ? "border-rose-400/30 bg-rose-400/10 text-rose-100" : "border-cyan-300/20 bg-cyan-300/5"}`}>
 									<div className="flex items-center gap-2">
@@ -6986,7 +7008,7 @@ export default function DAW(_props: TabRendererProps) {
 							)}
 
 							<div className="mt-5 flex items-center justify-end gap-2">
-								<YSButton disabled={exporting} className="px-3 py-2 rounded-xl disabled:opacity-40" onClick={() => setExportOpen(false)}>Cancel</YSButton>
+								<YSButton className="px-3 py-2 rounded-xl" onClick={() => { if (exporting) { exportCancelRef.current = true; setExportStatus("Cancelling after current render step..."); } else setExportOpen(false); }}>{exporting ? "Cancel export" : "Close"}</YSButton>
 								<YSButton disabled={exporting} className="px-4 py-2 rounded-xl font-semibold disabled:opacity-50" onClick={() => void runMasterExport()}>
 									{exporting ? "Rendering…" : "Export"}
 								</YSButton>

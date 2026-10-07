@@ -167,15 +167,28 @@ export function buildStandardMidiFile(options: DawMidiBuildOptions) {
   return new Uint8Array(flat);
 }
 
-export function encodeStereoWav(left: Float32Array, right: Float32Array, sampleRate: number, bitDepth: 16 | 24 | 32) {
+export function encodeStereoWav(left: Float32Array, right: Float32Array, sampleRate: number, bitDepth: 16 | 24 | 32, title?: string) {
   const frames = Math.min(left.length, right.length);
   const bytesPerSample = bitDepth / 8;
   const dataBytes = frames * 2 * bytesPerSample;
-  const buffer = new ArrayBuffer(44 + dataBytes);
+  // RIFF INFO uses Latin-1 strings, with a NUL terminator and even byte alignment.
+  const infoFields = title ? [["INAM", title], ["ISFT", "YSong"]] : [];
+  const infoChunks = infoFields.map(([id, value]) => {
+    const bytes = Uint8Array.from(value.slice(0, 200).replace(/[^\x20-\x7e]/g, "_").split("").map((char) => char.charCodeAt(0)));
+    const size = bytes.length + 1;
+    const chunk = new Uint8Array(8 + size + (size & 1));
+    const chunkView = new DataView(chunk.buffer);
+    for (let i = 0; i < 4; i++) chunk[i] = id.charCodeAt(i);
+    chunkView.setUint32(4, size, true);
+    chunk.set(bytes, 8);
+    return chunk;
+  });
+  const infoBytes = infoChunks.length ? 12 + infoChunks.reduce((sum, chunk) => sum + chunk.length, 0) : 0;
+  const buffer = new ArrayBuffer(44 + dataBytes + infoBytes);
   const view = new DataView(buffer);
   let offset = 0;
   const writeAscii = (text: string) => { for (let i = 0; i < text.length; i++) view.setUint8(offset++, text.charCodeAt(i)); };
-  writeAscii("RIFF"); view.setUint32(offset, 36 + dataBytes, true); offset += 4;
+  writeAscii("RIFF"); view.setUint32(offset, 36 + dataBytes + infoBytes, true); offset += 4;
   writeAscii("WAVE"); writeAscii("fmt "); view.setUint32(offset, 16, true); offset += 4;
   view.setUint16(offset, bitDepth === 32 ? 3 : 1, true); offset += 2;
   view.setUint16(offset, 2, true); offset += 2;
@@ -200,6 +213,11 @@ export function encodeStereoWav(left: Float32Array, right: Float32Array, sampleR
         view.setFloat32(offset, sample, true); offset += 4;
       }
     }
+  }
+  if (infoBytes) {
+    writeAscii("LIST"); view.setUint32(offset, infoBytes - 8, true); offset += 4;
+    writeAscii("INFO");
+    for (const chunk of infoChunks) { new Uint8Array(buffer).set(chunk, offset); offset += chunk.length; }
   }
   return new Uint8Array(buffer);
 }
