@@ -43,6 +43,7 @@ import { fallbackFxChainPlan, normalizeFxChainPlan, parseFxChainPlanReply, type 
 import { localAiChat } from "../lib/localAiApi";
 import { projectEndBar } from "../lib/dawDuration";
 import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
+import { addCompRange, MAX_DAW_TAKES, normalizeCompRanges, type DawTake, type DawCompRange } from "../lib/dawTakes";
 import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
 import {
 	GM_PROGRAMS,
@@ -132,6 +133,9 @@ type Clip = {
 	sourceOffsetSec?: number;
 	sourceDurationSec?: number;
 	warpMarkers?: WarpMarker[];
+	// Alternate source lanes and non-destructive selections within this clip.
+	takes?: DawTake[];
+	compRanges?: DawCompRange[];
 	// Semitones relative to the original asset; rendered per clip, never into the asset.
 	pitchSemitones?: number;
 	timePitchMode?: "independent" | "linked";
@@ -1018,7 +1022,10 @@ export default function DAW(_props: TabRendererProps) {
 				if (clip.assetId && explicitIds.has(clip.assetId)) stopSourcesForClip(clip.id);
 			}
 			setProjectAssets((prev) => prev.filter((a) => !explicitIds.has(a.id)));
-			setClips((prev) => prev.filter((c) => !c.assetId || !explicitIds.has(c.assetId)));
+			setClips((prev) => prev.filter((c) => !c.assetId || !explicitIds.has(c.assetId)).map((clip) => {
+				const takes = clip.takes?.filter((take) => !explicitIds.has(take.assetId));
+				return { ...clip, takes, compRanges: clip.compRanges?.filter((range) => takes?.some((take) => take.id === range.takeId)) };
+			}));
 			setSelectedClipId((current) => {
 				if (!current) return current;
 				const hit = clips.find((c) => c.id === current);
@@ -4077,6 +4084,33 @@ export default function DAW(_props: TabRendererProps) {
 
 	const ensurePlaybackBufferForClip = async (clip: Clip) => {
 		if (!clip.assetId) throw new Error("clip_has_no_asset");
+		const takes = (clip.takes ?? []).slice(0, MAX_DAW_TAKES);
+		const ranges = normalizeCompRanges(clip.compRanges, clip.lengthBars, takes);
+		if (ranges.length) {
+			const base = await ensurePlaybackBufferForClip({ ...clip, id: `${clip.id}:base`, takes: undefined, compRanges: undefined });
+			const key = `comp|${JSON.stringify(ranges)}|${JSON.stringify(takes)}|${JSON.stringify({ assetId: clip.assetId, lengthBars: clip.lengthBars, sourceOffsetSec: clip.sourceOffsetSec, sourceDurationSec: clip.sourceDurationSec, warpMarkers: clip.warpMarkers, pitchSemitones: clip.pitchSemitones, timePitchMode: clip.timePitchMode, fadeInBars: clip.fadeInBars, fadeOutBars: clip.fadeOutBars })}|${getBarSeconds()}`;
+			const cached = stretchedBuffersRef.current.get(clip.id);
+			if (cached?.key === key) return cached.buffer;
+			const ctx = ensureAudioCtx();
+			const result = ctx.createBuffer(base.numberOfChannels, base.length, base.sampleRate);
+			for (let channel = 0; channel < result.numberOfChannels; channel++) result.getChannelData(channel).set(base.getChannelData(channel));
+			for (const range of ranges) {
+				const take = takes.find((item) => item.id === range.takeId);
+				if (!take) continue;
+				try {
+					const alternate = await ensurePlaybackBufferForClip({ ...clip, id: `${clip.id}:${take.id}`, assetId: take.assetId, sourceOffsetSec: take.sourceOffsetSec, sourceDurationSec: take.sourceDurationSec, takes: undefined, compRanges: undefined });
+					const from = Math.floor(range.startBar / clip.lengthBars * result.length);
+					const to = Math.min(result.length, Math.ceil(range.endBar / clip.lengthBars * result.length));
+					for (let channel = 0; channel < result.numberOfChannels; channel++) {
+						const target = result.getChannelData(channel);
+						const source = alternate.getChannelData(Math.min(channel, alternate.numberOfChannels - 1));
+						for (let frame = from; frame < to; frame++) target[frame] = source[Math.min(source.length - 1, Math.floor(frame * source.length / result.length))] ?? 0;
+					}
+				} catch { /* An unavailable alternate leaves the preserved source audible. */ }
+			}
+			stretchedBuffersRef.current.set(clip.id, { key, buffer: result });
+			return result;
+		}
 		const source = await ensureBufferForAsset(clip.assetId);
 		const win = getClipSourceWindow(clip, source);
 		const barSecNow = getBarSeconds();
@@ -6407,6 +6441,22 @@ export default function DAW(_props: TabRendererProps) {
 							<button className="w-full text-left px-3 py-2 hover:bg-violet-400/10" onClick={() => { setMidiEditorClipId(clipContextMenu.clipId); setClipContextMenu(null); }}>♬ Edit MIDI</button>
 						)}
 						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => crossfadeIntoNextClip(menuClip.id)}>Crossfade into next clip</button>}
+						{menuClip?.assetId && <div className="px-3 py-2 border-y border-white/10 text-xs space-y-2">
+							<div>Takes ({(menuClip.takes ?? []).length + 1}/{MAX_DAW_TAKES + 1})</div>
+							<select aria-label="Add project audio as take" className="w-full bg-neutral-900" value="" disabled={(menuClip.takes ?? []).length >= MAX_DAW_TAKES} onChange={(event) => {
+								const asset = projectAssets.find((item) => item.id === event.target.value);
+								if (!asset) return;
+								setClips((current) => current.map((clip) => clip.id === menuClip.id && (clip.takes ?? []).length < MAX_DAW_TAKES ? { ...clip, takes: [...(clip.takes ?? []), { id: crypto.randomUUID(), name: asset.name, assetId: asset.id }] } : clip));
+							}}><option value="">Add project audio as take…</option>{projectAssets.filter((asset) => asset.kind === "audio" && asset.id !== menuClip.assetId).map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select>
+							{(menuClip.takes ?? []).map((take) => <div key={take.id} className="flex gap-1 items-center"><span className="truncate flex-1">{take.name}</span><button aria-label={`Comp loop range from ${take.name}`} onClick={() => {
+								const startBar = Math.max(0, loopL - menuClip.startBar);
+								const endBar = Math.min(menuClip.lengthBars, loopR - menuClip.startBar);
+								if (endBar <= startBar) return;
+								setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, compRanges: addCompRange(clip.compRanges, { startBar, endBar, takeId: take.id }, clip.lengthBars, clip.takes ?? []) } : clip));
+								stretchedBuffersRef.current.delete(menuClip.id);
+							}}>Use L–R</button><button aria-label={`Remove take ${take.name}`} onClick={() => setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, takes: clip.takes?.filter((item) => item.id !== take.id), compRanges: clip.compRanges?.filter((range) => range.takeId !== take.id) } : clip))}>×</button></div>)}
+							{normalizeCompRanges(menuClip.compRanges, menuClip.lengthBars, menuClip.takes ?? []).map((range, index) => <div key={index} className="flex gap-1"><span className="flex-1">{range.startBar.toFixed(2)}–{range.endBar.toFixed(2)}: {menuClip.takes?.find((take) => take.id === range.takeId)?.name}</span><button aria-label={`Remove comp range ${index + 1}`} onClick={() => setClips((current) => current.map((clip) => clip.id === menuClip.id ? { ...clip, compRanges: clip.compRanges?.filter((_, at) => at !== index) } : clip))}>×</button></div>)}
+						</div>}
 						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => { void detectClipWarpMarkers(menuClip); setClipContextMenu(null); }}>Detect warp markers</button>}
 						{menuClip?.assetId && <button className="w-full text-left px-3 py-2 hover:bg-white/10" onClick={() => {
 							const sourceSec = Math.max(0.001, menuClip.sourceDurationSec ?? menuClip.lengthBars * getBarSeconds());
