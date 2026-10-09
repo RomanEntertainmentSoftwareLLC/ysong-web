@@ -8,6 +8,7 @@ import "./RoomsResponsive.css";
 import { bridgeApi, normalizeVisualAdvertisingSettings } from "../lib/bridgeApi";
 import { requestYSongRoomPrerollAd, type YSongVideoPrerollDecision } from "../lib/ysongAds";
 import { listRoomVirtualParticipants, removeRoomPersonaSlot, type RoomVirtualParticipant } from "../lib/roomPersonaParticipants";
+import { boundRoomMessages, isRoomChatCacheEnabled, readRoomChatCache, setRoomChatCacheEnabled, writeRoomChatCache } from "../lib/roomChat";
 import {
   createRoom,
   deleteRoom,
@@ -48,9 +49,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 
 function mergeMessages(current: RoomMessage[], incoming: RoomMessage[]) {
-  const byId = new Map(current.map((m) => [m.id, m]));
-  incoming.forEach((m) => byId.set(m.id, m));
-  return [...byId.values()].sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return boundRoomMessages([...current, ...incoming]);
+}
+
+function messageTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Time unavailable" : date.toLocaleString();
 }
 
 function mentionKey(name: string) {
@@ -110,6 +114,8 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
   const [inviteName,setInviteName]=useState("");
   const [inviteBusy,setInviteBusy]=useState(false);
   const [peopleOpen,setPeopleOpen]=useState(false);
+  const [chatCacheEnabled,setChatCacheEnabled]=useState(isRoomChatCacheEnabled);
+  const [chatRefreshing,setChatRefreshing]=useState(false);
   const [mention,setMention]=useState<{start:number;end:number;query:string}|null>(null);
   const [mentionIndex,setMentionIndex]=useState(0);
   const bottomRef=useRef<HTMLDivElement|null>(null);
@@ -132,8 +138,8 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
   async function refreshDetail(roomId=activeRoomId){
     if(!roomId){setDetail(null);setVirtualParticipants([]);return;}
     setVirtualParticipants(listRoomVirtualParticipants(roomId));
-    try{const d=await getRoom(roomId);setDetail(d);setRooms(prev=>prev.map(r=>r.id===d.room.id?d.room:r));}
-    catch(e:unknown){setError(roomError(e,"Could not load room."));}
+    try{const d=await getRoom(roomId);const messages=boundRoomMessages([...readRoomChatCache(roomId),...(d.messages||[])]);setDetail({...d,messages});writeRoomChatCache(roomId,messages);setChatRefreshing(false);setRooms(prev=>prev.map(r=>r.id===d.room.id?d.room:r));}
+    catch(e:unknown){if(roomId===activeRoomId){setChatRefreshing(true);setDetail(current=>current?.room.id===roomId?{...current,messages:boundRoomMessages([...current.messages,...readRoomChatCache(roomId)])}:current);}setError(roomError(e,"Could not load room. Reconnecting…"));}
   }
 
   useEffect(()=>{
@@ -152,7 +158,8 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
     window.dispatchEvent(new CustomEvent("ysong:active-room-changed",{detail:{roomId:activeRoomId}}));
     void refreshDetail(activeRoomId);
   },[activeRoomId]);
-  useEffect(()=>{if(!activeRoomId)return;const timer=setInterval(()=>void refreshDetail(activeRoomId),3000);return()=>clearInterval(timer);},[activeRoomId]);
+  useEffect(()=>{if(!activeRoomId)return;setChatRefreshing(true);const timer=setInterval(()=>{setChatRefreshing(true);void refreshDetail(activeRoomId);},3000);return()=>clearInterval(timer);},[activeRoomId]);
+  useEffect(()=>{if(detail?.room.id)writeRoomChatCache(detail.room.id,detail.messages);},[detail?.room.id,detail?.messages,chatCacheEnabled]);
   useEffect(()=>{const f=()=>void refreshDetail();window.addEventListener("ysong:room-personas-changed",f);return()=>window.removeEventListener("ysong:room-personas-changed",f);},[activeRoomId]);
   useEffect(()=>{const f=(event:StorageEvent)=>{if(event.key?.startsWith("ysong:rooms:persona-slots:v1:"))setVirtualParticipants(listRoomVirtualParticipants(activeRoomId));};window.addEventListener("storage",f);return()=>window.removeEventListener("storage",f);},[activeRoomId]);
   useEffect(()=>{bottomRef.current?.scrollIntoView({block:"nearest"});},[detail?.messages.length,aiThinking]);
@@ -210,6 +217,7 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
     const text=input.trim();
     if(!text||!detail?.room.joined)return;
     const roomId=detail.room.id;
+    if(text.length>2000){setError("Messages must be 2,000 characters or fewer.");return;}
     const targetPersonaIds=mentionedPersonaIds(text,detail.personas);
     setInput("");setMention(null);setError("");
     try{
@@ -248,8 +256,8 @@ export default function RoomsPane({ meUserId, meAvatarUrl, meDisplayName }: Prop
         {detail.room.joined&&activeRoomId===detail.room.id&&<RoomVideoStage key={detail.room.id} roomId={detail.room.id} members={detail.members} meUserId={meUserId} meDisplayName={meDisplayName}/>}
         {detail.room.joined&&virtualParticipants.length>0&&<div className="shrink-0 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2"><div className="text-[10px] uppercase tracking-wide opacity-55 mb-1">Virtual participants · on this device</div><div className="flex flex-wrap gap-2">{virtualParticipants.map(p=><div key={p.personaId} className="flex items-center gap-2 rounded-xl border border-neutral-200 dark:border-neutral-800 px-2 py-1" title={`Stable persona ID: ${p.personaId}`}><Avatar src={p.avatarPath} name={p.name} size={28}/><div className="min-w-0"><div className="text-xs font-medium">{p.name} <span className="opacity-55">· {p.kind}</span></div><div className="text-[10px] opacity-55">{p.status==="unavailable"?"Unavailable":p.avatarPath?"Identity only · no AI replies":"Identity only · artwork pending · no AI replies"}</div></div><button type="button" onClick={()=>removeVirtualParticipant(p.personaId)} className="px-1 text-xs opacity-55 hover:opacity-100" aria-label={`Remove ${p.name} from room`}>×</button></div>)}</div></div>}
         {!detail.room.joined?<div className="flex-1 grid place-items-center"><div className="text-center max-w-md px-6"><h3 className="text-xl font-semibold">Public room</h3><p className="text-sm opacity-55 mt-2">Join to send messages and add virtual participants.</p><button onClick={()=>void doJoin()} className="mt-4 bg-violet-600 text-white rounded-xl px-5 py-2">Join Room</button></div></div>:<>
-          <div className="flex-1 min-h-0 overflow-y-auto"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-5 space-y-4">{detail.messages.map(m=>{const isMe=m.senderKind==="user"&&m.senderUserId===meUserId;const isAi=m.senderKind==="persona";const avatar=isAi?m.personaAvatarPath:(isMe?meAvatarUrl:"");return <div key={m.id} className={`flex items-end gap-2 ${isMe?"justify-end":"justify-start"}`}>{!isMe&&<Avatar src={avatar} name={m.senderName} size={34}/>}<div className={`max-w-[76%] min-w-0 ${isMe?"items-end":"items-start"} flex flex-col`}><div className="text-[10px] opacity-45 mb-1 px-1">{isMe?meDisplayName||"You":m.senderName}{isAi&&<span className="ml-1.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-wide">AI</span>}</div><div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${isMe?"bg-neutral-800 text-white dark:bg-neutral-700":"bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"}`}>{m.content}</div></div>{isMe&&<Avatar src={meAvatarUrl} name={meDisplayName||"You"} size={34}/>}</div>})}{aiThinking&&<div className="flex items-center gap-2 text-xs opacity-50"><span className="inline-flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:120ms]"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:240ms]"/></span>AI personas are deciding whether to jump in...</div>}<div ref={bottomRef}/></div></div>
-          <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-3 pb-12"><div className="relative"><div className="rounded-2xl border border-neutral-300 dark:border-neutral-700 bg-white/70 dark:bg-neutral-900/70 px-2 py-1.5 flex items-end gap-2"><textarea ref={inputRef} rows={1} value={input} onChange={(e)=>{setInput(e.target.value);updateMention(e.target.value,e.target.selectionStart??e.target.value.length);}} onClick={(e)=>updateMention(input,e.currentTarget.selectionStart??input.length)} onKeyUp={(e)=>{if(!["ArrowDown","ArrowUp","Enter","Escape"].includes(e.key))updateMention(input,e.currentTarget.selectionStart??input.length);}} onKeyDown={(e)=>{if(mention&&mentionCandidates.length){if(e.key==="ArrowDown"){e.preventDefault();setMentionIndex(i=>(i+1)%mentionCandidates.length);return;}if(e.key==="ArrowUp"){e.preventDefault();setMentionIndex(i=>(i-1+mentionCandidates.length)%mentionCandidates.length);return;}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();insertMention(mentionCandidates[Math.min(mentionIndex,mentionCandidates.length-1)]);return;}if(e.key==="Escape"){e.preventDefault();setMention(null);return;}}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={`Message #${detail.room.name}... Type @ to mention an AI`} className="flex-1 min-h-9 max-h-32 resize-none bg-transparent border-0 px-2 py-2 text-sm focus:outline-none"/><button disabled={!input.trim()} onClick={()=>void send()} className="rounded-xl bg-violet-600 text-white px-4 h-9 text-sm disabled:opacity-35">Send</button></div>
+          <div className="flex-1 min-h-0 overflow-y-auto" role="log" aria-label={`${detail.room.name} chat messages`} aria-live="polite" aria-relevant="additions text"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-5 space-y-4">{chatRefreshing&&<div className="text-center text-[10px] opacity-45" role="status">Reconnecting to room�</div>}{detail.messages.map(m=>{const isMe=m.senderKind==="user"&&m.senderUserId===meUserId;const isAi=m.senderKind==="persona";const avatar=isAi?m.personaAvatarPath:(isMe?meAvatarUrl:"");return <div key={m.id} className={`flex items-end gap-2 ${isMe?"justify-end":"justify-start"}`}>{!isMe&&<Avatar src={avatar} name={m.senderName} size={34}/>}<div className={`max-w-[76%] min-w-0 ${isMe?"items-end":"items-start"} flex flex-col`}><div className="text-[10px] opacity-45 mb-1 px-1">{isMe?meDisplayName||"You":m.senderName}{isAi&&<span className="ml-1.5 rounded-full border px-1.5 py-0.5 text-[8px] uppercase tracking-wide">AI</span>}<time className="ml-2" dateTime={m.createdAt}>{messageTime(m.createdAt)}</time></div><div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${isMe?"bg-neutral-800 text-white dark:bg-neutral-700":"bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"}`}>{m.content}</div></div>{isMe&&<Avatar src={meAvatarUrl} name={meDisplayName||"You"} size={34}/>}</div>})}{aiThinking&&<div className="flex items-center gap-2 text-xs opacity-50"><span className="inline-flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:120ms]"/><i className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:240ms]"/></span>AI personas are deciding whether to jump in...</div>}<div ref={bottomRef}/></div></div>
+          <div className="shrink-0 border-t border-neutral-200 dark:border-neutral-800"><div className="mx-auto max-w-[760px] px-4 sm:px-6 py-3 pb-12"><label className="mb-2 flex items-center gap-2 text-[10px] opacity-55"><input type="checkbox" checked={chatCacheEnabled} onChange={(e)=>{setChatCacheEnabled(e.target.checked);setRoomChatCacheEnabled(e.target.checked);}}/>Keep recent chat on this device</label><div className="relative"><div className="rounded-2xl border border-neutral-300 dark:border-neutral-700 bg-white/70 dark:bg-neutral-900/70 px-2 py-1.5 flex items-end gap-2"><textarea aria-label={`Message ${detail.room.name}`} maxLength={2000} ref={inputRef} rows={1} value={input} onChange={(e)=>{setInput(e.target.value);updateMention(e.target.value,e.target.selectionStart??e.target.value.length);}} onClick={(e)=>updateMention(input,e.currentTarget.selectionStart??input.length)} onKeyUp={(e)=>{if(!["ArrowDown","ArrowUp","Enter","Escape"].includes(e.key))updateMention(input,e.currentTarget.selectionStart??input.length);}} onKeyDown={(e)=>{if(mention&&mentionCandidates.length){if(e.key==="ArrowDown"){e.preventDefault();setMentionIndex(i=>(i+1)%mentionCandidates.length);return;}if(e.key==="ArrowUp"){e.preventDefault();setMentionIndex(i=>(i-1+mentionCandidates.length)%mentionCandidates.length);return;}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();insertMention(mentionCandidates[Math.min(mentionIndex,mentionCandidates.length-1)]);return;}if(e.key==="Escape"){e.preventDefault();setMention(null);return;}}if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void send();}}} placeholder={`Message #${detail.room.name}... Type @ to mention an AI`} className="flex-1 min-h-9 max-h-32 resize-none bg-transparent border-0 px-2 py-2 text-sm focus:outline-none"/><button type="button" disabled={!input.trim()} onClick={()=>void send()} className="rounded-xl bg-violet-600 text-white px-4 h-9 text-sm disabled:opacity-35">Send</button></div>
             {mention&&<div className="absolute left-2 right-2 bottom-[calc(100%+8px)] z-20 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-950 shadow-xl overflow-hidden">{mentionCandidates.length?mentionCandidates.map((p,i)=><button key={p.id} type="button" onMouseDown={(e)=>{e.preventDefault();insertMention(p);}} className={`w-full flex items-center gap-2 px-3 py-2 text-left ${i===mentionIndex?"bg-violet-500/10":"hover:bg-black/5 dark:hover:bg-white/5"}`}><Avatar src={p.avatarUrl||p.avatarPath} name={p.name} size={28}/><span className="min-w-0 flex-1"><span className="block text-xs font-medium truncate">{p.name}</span><span className="block text-[10px] opacity-50 truncate">{mentionToken(p.name)} · {p.participationMode.replace("_"," ")}</span></span><span className="text-[9px] uppercase tracking-wide opacity-45">AI</span></button>):<div className="px-3 py-2 text-xs opacity-50">No matching AI persona in this room.</div>}</div>}</div>{error&&<div className="text-xs text-red-500 mt-2">{error}</div>}</div></div>
         </>}</>}
     </section>
