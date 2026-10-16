@@ -182,6 +182,9 @@ export type Vst3InstanceStatus = {
 	muted: boolean;
 	level: number;
 	gainReductionDb?: number;
+	/** Optional Bridge timing hints. Values are estimates when supplied by Bridge. */
+	loadPercent?: number;
+	processingMs?: number;
 	error?: string | null;
 };
 
