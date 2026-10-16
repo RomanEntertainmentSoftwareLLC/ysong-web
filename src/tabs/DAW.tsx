@@ -122,6 +122,8 @@ type ProjectAsset = {
 	sizeMB?: number;
 
 	durationSec?: number;
+	// IndexedDB audio produced by an explicit local bounce.
+	localArtifactId?: string;
 };
 
 type Clip = {
@@ -166,6 +168,7 @@ type Clip = {
 	// Prior committed content lives with its canonical clip and persists in DawPersistV1.
 	partAlternatives?: Array<Omit<Clip, "partAlternatives">>;
 	partStemNode?: StemNode;
+	bounceSource?: { mode: "bounce" | "consolidate"; projectId: string; trackId: string; fromBar: number; toBar: number; sourceClips: Array<{ id: string; name: string; assetId: string; startBar: number; lengthBars: number }>; createdAt: string };
 };
 
 type VocalMidiPreview = {
@@ -4274,6 +4277,15 @@ export default function DAW(_props: TabRendererProps) {
 
 		const asset =
 			findAssetById(assetId) || ({ id: assetId, kind: "audio", name: assetId, objectKey: assetId } as any);
+		if (asset.localArtifactId) {
+			const wav = await loadFreezeArtifact(asset.localArtifactId);
+			if (!wav) throw new Error(`Local bounce audio is missing: ${asset.name}`);
+			const buf = await ctx.decodeAudioData(await wav.arrayBuffer());
+			audioBuffersRef.current.set(assetId, buf);
+			waveformPeaksRef.current.set(assetId, computeStereoPeaks(buf, 1024));
+			setWaveformVersion((v) => v + 1);
+			return buf;
+		}
 
 		let url = asset.url;
 		if (!url && asset.objectKey) {
@@ -5444,6 +5456,69 @@ export default function DAW(_props: TabRendererProps) {
 		}
 	};
 
+	const [bounceBusy, setBounceBusy] = useState(false);
+	const bounceBusyRef = useRef(false);
+	const [bounceStatus, setBounceStatus] = useState("");
+	// One selected audio track owns the render; the loop markers define its range.
+	const bounceSelectedRange = async (mode: "bounce" | "consolidate") => {
+		if (bounceBusyRef.current) return;
+		const track = tracks.find((item) => item.id === selectedTrackId);
+		if (!track || track.type !== "audio") { setBounceStatus("Select an audio track first."); return; }
+		const fromBar = loopL, toBar = loopR;
+		const barSeconds = getBarSeconds();
+		const duration = (toBar - fromBar) * barSeconds;
+		if (!(duration > 0 && duration <= 60)) { setBounceStatus("Set a loop range of at most 60 seconds."); return; }
+		const overlaps = clips.filter((clip) => clip.trackId === track.id && clip.assetId && clip.startBar < toBar && clip.startBar + clip.lengthBars > fromBar);
+		if (!overlaps.length) { setBounceStatus("The selected track has no audio in the loop range."); return; }
+		if (mode === "consolidate" && overlaps.some((clip) => clip.startBar < fromBar || clip.startBar + clip.lengthBars > toBar)) {
+			setBounceStatus("Consolidate needs the loop range to contain each source clip completely."); return;
+		}
+		if (mode === "consolidate" && !window.confirm(`Replace ${overlaps.length} source clip(s) on ${track.name} with one rendered clip? Undo restores the source clips.`)) return;
+		if (isPlaying) stop();
+		const projectId = activeProjectId;
+		const sourceSignature = JSON.stringify(overlaps);
+		const trackSignature = JSON.stringify(track);
+		const timebaseSignature = JSON.stringify({ bpm, sigNum, sigDen, loopL, loopR });
+		bounceBusyRef.current = true;
+		setBounceBusy(true);
+		setBounceStatus(`Rendering ${track.name}...`);
+		try {
+			const sampleRate = 44100;
+			const offline = new OfflineAudioContext(2, Math.ceil(duration * sampleRate), sampleRate);
+			for (const clip of overlaps) {
+				const buffer = await ensurePlaybackBufferForClip(clip);
+				const start = Math.max(0, (clip.startBar - fromBar) * barSeconds);
+				const offset = Math.max(0, (fromBar - clip.startBar) * barSeconds);
+				const length = Math.min(buffer.duration - offset, duration - start);
+				if (length <= 0) continue;
+				const source = offline.createBufferSource();
+				source.buffer = buffer;
+				source.connect(offline.destination);
+				source.start(start, offset, length);
+			}
+			const rendered = await offline.startRendering();
+			const current = currentPayloadRef.current.payload;
+			if (activeProjectRef.current !== projectId ||
+				JSON.stringify(current.clips.filter((clip) => clip.trackId === track.id && clip.assetId && clip.startBar < toBar && clip.startBar + clip.lengthBars > fromBar)) !== sourceSignature ||
+				JSON.stringify({ bpm: current.bpm, sigNum: current.sigNum, sigDen: current.sigDen, loopL: current.loopL, loopR: current.loopR }) !== timebaseSignature ||
+				JSON.stringify(tracksRef.current.find((item) => item.id === track.id)) !== trackSignature) throw new Error("The source changed during rendering. Bounce was cancelled.");
+			const artifactId = crypto.randomUUID(), assetId = crypto.randomUUID(), clipId = crypto.randomUUID();
+			const wav = new Blob([encodeStereoWav(new Float32Array(rendered.getChannelData(0)), new Float32Array(rendered.getChannelData(1)), sampleRate, 32)], { type: "audio/wav" });
+			await saveFreezeArtifact(artifactId, wav);
+			const outputTrackId = mode === "bounce" ? crypto.randomUUID() : track.id;
+			const name = `${track.name} ${mode === "bounce" ? "bounce" : "consolidated"}`;
+			if (mode === "bounce") setTracks((previous) => [...previous, { id: outputTrackId, type: "audio", name, mute: false, solo: false, arm: false, level: 100, mixer: createDefaultMixerStrip() }]);
+			setProjectAssets((previous) => [...previous, { id: assetId, kind: "audio", name: `${name}.wav`, localArtifactId: artifactId, durationSec: duration, sizeMB: wav.size / 1048576 }]);
+			const output: Clip = { id: clipId, trackId: outputTrackId, name, startBar: fromBar, lengthBars: toBar - fromBar, assetId, sourceOffsetSec: 0, sourceDurationSec: duration, bounceSource: { mode, projectId, trackId: track.id, fromBar, toBar, sourceClips: overlaps.map((clip) => ({ id: clip.id, name: clip.name, assetId: clip.assetId!, startBar: clip.startBar, lengthBars: clip.lengthBars })), createdAt: new Date().toISOString() } };
+			if (mode === "consolidate") overlaps.forEach((clip) => stopSourcesForClip(clip.id));
+			setClips((previous) => [...previous.filter((clip) => mode !== "consolidate" || !overlaps.some((source) => source.id === clip.id)), output]);
+			setSelectedTrackId(outputTrackId);
+			setSelectedClipId(clipId);
+			setBounceStatus(`${name} created. ${mode === "consolidate" ? "Undo restores the source clips." : "Source clips remain in place."}`);
+		} catch (error) { setBounceStatus(error instanceof Error ? error.message : "Bounce failed."); }
+		finally { bounceBusyRef.current = false; setBounceBusy(false); }
+	};
+
 	const freezeTrack = async (track: Track) => {
 		if (freezingTrackId || track.freeze || track.type !== "instrument") return;
 		const durationSeconds = (endBar - 1) * getBarSeconds();
@@ -5950,6 +6025,12 @@ export default function DAW(_props: TabRendererProps) {
 					))}
 				</div>
 			) : null}
+			<div className="shrink-0 flex items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px]">
+				<span>Selected audio track + loop range:</span>
+				<button type="button" disabled={bounceBusy} onClick={() => void bounceSelectedRange("bounce")} className="rounded border border-cyan-300/30 px-2 py-0.5 disabled:opacity-35">Bounce to new track</button>
+				<button type="button" disabled={bounceBusy} onClick={() => void bounceSelectedRange("consolidate")} className="rounded border border-cyan-300/30 px-2 py-0.5 disabled:opacity-35">Consolidate clips</button>
+				{bounceStatus && <span role="status">{bounceStatus}</span>}
+			</div>
 			{freezeStatus && <div role="status" className="shrink-0 border-b border-cyan-300/15 px-3 py-1 text-[11px] text-cyan-100">{freezeStatus}</div>}
 			{clips.filter((clip) => clip.id === selectedClipId && !clip.assetId && clip.midiNotes).map((clip) => (
 				<MidiToVocalPanel key={`${activeProjectId}:${clip.id}`} clip={clip} timebase={{ bpm, sigNum, sigDen }} onChange={(vocalSetup) => setClips((previous) => previous.map((item) => item.id === clip.id ? { ...item, vocalSetup } : item))} />
