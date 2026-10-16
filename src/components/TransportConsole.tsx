@@ -20,6 +20,12 @@ type Props = {
   onJumpEnd: () => void;
   onBpmChange: (value: number) => void;
   onSignatureChange: (num: number, den: number) => void;
+  metronomeEnabled?: boolean;
+  metronomeLevel?: number;
+  countInBars?: number;
+  onMetronomeEnabledChange?: (enabled: boolean) => void;
+  onMetronomeLevelChange?: (level: number) => void;
+  onCountInBarsChange?: (bars: number) => void;
   className?: string;
   compact?: boolean;
 };
@@ -74,6 +80,12 @@ export default function TransportConsole({
   onJumpEnd,
   onBpmChange,
   onSignatureChange,
+  metronomeEnabled = false,
+  metronomeLevel = 65,
+  countInBars = 0,
+  onMetronomeEnabledChange,
+  onMetronomeLevelChange,
+  onCountInBarsChange,
   className = "",
   compact = false,
 }: Props) {
@@ -153,6 +165,17 @@ export default function TransportConsole({
             <option value="6/8">6/8</option>
             <option value="5/4">5/4</option>
             <option value="7/8">7/8</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1 text-[10px] sm:text-[11px] opacity-80" title="Metronome output level">
+          <input type="checkbox" aria-label="Metronome" checked={metronomeEnabled} onChange={(event) => onMetronomeEnabledChange?.(event.target.checked)} />
+          <span>Click</span>
+          <input aria-label="Metronome level" className="w-14 accent-cyan-300" type="range" min={0} max={100} step={1} value={metronomeLevel} disabled={!metronomeEnabled} onChange={(event) => onMetronomeLevelChange?.(Number(event.target.value))} />
+        </label>
+        <label className="flex items-center gap-1 text-[10px] sm:text-[11px] opacity-80">
+          <span>Count-in</span>
+          <select aria-label="Count-in bars" className="px-1 py-1 rounded-md bg-neutral-950/40 border border-neutral-200/10 dark:border-neutral-800 text-sm" value={countInBars} onChange={(event) => onCountInBarsChange?.(Number(event.target.value))}>
+            <option value={0}>Off</option><option value={1}>1 bar</option><option value={2}>2 bars</option><option value={4}>4 bars</option>
           </select>
         </label>
       </div>

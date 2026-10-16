@@ -845,6 +845,13 @@ export default function DAW(_props: TabRendererProps) {
 	const [bpm, setBpm] = useState(120);
 	const [sigNum, setSigNum] = useState(4);
 	const [sigDen, setSigDen] = useState(4);
+	const [metronomeEnabled, setMetronomeEnabled] = useState(false);
+	const [metronomeLevel, setMetronomeLevel] = useState(65);
+	const [countInBars, setCountInBars] = useState(0);
+	const metronomeEnabledRef = useRef(metronomeEnabled);
+	const metronomeLevelRef = useRef(metronomeLevel);
+	metronomeEnabledRef.current = metronomeEnabled;
+	metronomeLevelRef.current = metronomeLevel;
 
 	useEffect(() => {
 		const maxClipEnd = clips.reduce((acc, c) => Math.max(acc, c.startBar + c.lengthBars), 1);
@@ -1108,6 +1115,27 @@ export default function DAW(_props: TabRendererProps) {
 	const transportClockUnixOffsetMsRef = useRef<number>(0);
 	const playStartPosRef = useRef<number>(1);
 	const lastUiUpdateMsRef = useRef<number>(0);
+	const metronomeSourcesRef = useRef<Set<AudioScheduledSourceNode>>(new Set());
+	const metronomeTimerRef = useRef<number | null>(null);
+	const metronomeGenerationRef = useRef(0);
+	const scheduleMetronomeClick = (when: number, accent: boolean) => {
+		if (!metronomeEnabledRef.current || metronomeLevelRef.current <= 0) return;
+		const ctx = ensureAudioCtx();
+		const oscillator = ctx.createOscillator();
+		const gain = ctx.createGain();
+		oscillator.type = "sine";
+		oscillator.frequency.setValueAtTime(accent ? 1560 : 1040, when);
+		const peak = (metronomeLevelRef.current / 100) * (accent ? 0.24 : 0.16);
+		gain.gain.setValueAtTime(0.0001, when);
+		gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), when + 0.003);
+		gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+		oscillator.connect(gain);
+		gain.connect(masterGainRef.current ?? ctx.destination);
+		oscillator.onended = () => { metronomeSourcesRef.current.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
+		metronomeSourcesRef.current.add(oscillator);
+		oscillator.start(Math.max(ctx.currentTime, when));
+		oscillator.stop(Math.max(ctx.currentTime, when) + 0.05);
+	};
 
 	// --- Refs for scroll sync + ruler math ---
 	const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -2808,7 +2836,7 @@ export default function DAW(_props: TabRendererProps) {
 				try { recorder.start(250); } catch { setAudioRecordStatus("Microphone capture could not start."); finishAudioRecording(); return; }
 				setIsRecording(true);
 				setAudioRecordStatus("Recording. Browser input and playback timing may vary.");
-				if (!isPlaying) void start(loopEnabled, session.startBar, 0);
+				if (!isPlaying) void start(loopEnabled, session.startBar, 0, 0);
 			};
 			if (audioCountIn > 0) {
 				setAudioRecordStatus(`Count-in: ${audioCountIn} bar${audioCountIn === 1 ? "" : "s"}.`);
@@ -4205,6 +4233,7 @@ export default function DAW(_props: TabRendererProps) {
 
 	const stopScheduledAudio = () => {
 		audioScheduleGenerationRef.current += 1;
+		metronomeGenerationRef.current += 1;
 		bridgeApi.stopVst3().catch(() => {});
 		stopGmSoundFontPlayback();
 		if (loopSchedulerTimerRef.current != null) {
@@ -4212,6 +4241,7 @@ export default function DAW(_props: TabRendererProps) {
 			loopSchedulerTimerRef.current = null;
 		}
 		loopSchedulerBusyRef.current = false;
+		if (metronomeTimerRef.current != null) { window.clearTimeout(metronomeTimerRef.current); metronomeTimerRef.current = null; }
 		try {
 			for (const s of activeSourcesRef.current) {
 				try {
@@ -4221,6 +4251,8 @@ export default function DAW(_props: TabRendererProps) {
 		} finally {
 			activeSourcesRef.current = [];
 			activeClipSourcesRef.current.clear();
+			for (const source of metronomeSourcesRef.current) { try { source.stop(); } catch {} }
+			metronomeSourcesRef.current.clear();
 		}
 	};
 
@@ -4672,7 +4704,7 @@ export default function DAW(_props: TabRendererProps) {
 		setIsPlaying(false);
 	};
 
-	const start = async (loopOverride?: boolean, positionOverride?: number, leadOverride?: number) => {
+	const start = async (loopOverride?: boolean, positionOverride?: number, leadOverride?: number, countInOverride = countInBars) => {
 		const startGeneration = ++transportStartGenerationRef.current;
 		transportStartPendingRef.current = true;
 		window.dispatchEvent(new Event("ysong:daw-play-request"));
@@ -4720,6 +4752,8 @@ export default function DAW(_props: TabRendererProps) {
 		const numNow = Math.max(1, sigNumRef.current);
 		const beatSecNow = (60 / bpmNow) * (4 / denNow);
 		const barSecNow = beatSecNow * numNow;
+		const countBeats = Math.max(0, Math.round(countInOverride)) * numNow;
+		const countInSec = countBeats * beatSecNow;
 		transportBarSecRef.current = barSecNow;
 
 		// Bridge MIDI is timestamped in wall-clock milliseconds while browser audio uses
@@ -4730,20 +4764,47 @@ export default function DAW(_props: TabRendererProps) {
 		const firstBoundary = loopOn ? loopR : endBar;
 		const anchorCtxTime = ctx.currentTime;
 		const anchorUnixMs = Date.now();
-		const firstStartAt = anchorCtxTime + leadSec;
-		const firstStartUnixMs = anchorUnixMs + leadSec * 1000;
+		const firstStartAt = anchorCtxTime + leadSec + countInSec;
+		const firstStartUnixMs = anchorUnixMs + (leadSec + countInSec) * 1000;
 		transportClockUnixOffsetMsRef.current = firstStartUnixMs - firstStartAt * 1000;
-		playStartMsRef.current = performance.now() + leadSec * 1000;
+		playStartMsRef.current = performance.now() + (leadSec + countInSec) * 1000;
 		playStartCtxTimeRef.current = firstStartAt;
 		playStartPosRef.current = startPos;
 		lastUiUpdateMsRef.current = 0;
 		setPlayheadPosBars(startPos);
+		const metronomeGeneration = ++metronomeGenerationRef.current;
+		if (countBeats > 0 && metronomeEnabled) {
+			for (let beat = 0; beat < countBeats; beat++) scheduleMetronomeClick(firstStartAt - countInSec + beat * beatSecNow, beat % numNow === 0);
+		}
+		if (metronomeEnabled) scheduleMetronomeClick(firstStartAt, Math.floor((startPos - 1) * numNow + 0.00001) % numNow === 0);
 
 		await scheduleAudioFromBars(startPos, firstBoundary, { startAtSec: firstStartAt, startUnixMs: firstStartUnixMs, clearExisting: false }).catch(() => {});
 		if (startGeneration !== transportStartGenerationRef.current) return;
 		transportStartPendingRef.current = false;
 		setIsPlaying(true);
 		lastPosRef.current = startPos;
+		const scheduleMetronomeAhead = () => {
+			if (metronomeGeneration !== metronomeGenerationRef.current || startGeneration !== transportStartGenerationRef.current) return;
+			const currentBeatSec = (60 / Math.max(1, bpmRef.current)) * (4 / Math.max(1, sigDenRef.current));
+			const currentNum = Math.max(1, sigNumRef.current);
+			const elapsed = Math.max(0, ctx.currentTime - playStartCtxTimeRef.current);
+			const beatIndex = Math.max(0, Math.floor(elapsed / currentBeatSec + 0.00001));
+			const nextBeatIndex = beatIndex + 1;
+			const nextAt = playStartCtxTimeRef.current + nextBeatIndex * currentBeatSec;
+			const beatInBar = ((Math.floor((playStartPosRef.current - 1) * currentNum + 0.00001) + nextBeatIndex) % currentNum);
+			if (metronomeEnabledRef.current) scheduleMetronomeClick(nextAt, beatInBar === 0);
+			metronomeTimerRef.current = window.setTimeout(scheduleMetronomeAhead, Math.max(10, (nextAt - ctx.currentTime - 0.015) * 1000));
+		};
+		if (metronomeEnabled) {
+			const elapsed = Math.max(0, ctx.currentTime - playStartCtxTimeRef.current);
+			const beatIndex = Math.floor(elapsed / beatSecNow + 0.00001);
+			const nextAt = playStartCtxTimeRef.current + (beatIndex + 1) * beatSecNow;
+			const nextBeatInBar = ((Math.floor((startPos - 1) * numNow + 0.00001) + beatIndex + 1) % numNow) === 0;
+			scheduleMetronomeClick(nextAt, nextBeatInBar);
+			metronomeTimerRef.current = window.setTimeout(scheduleMetronomeAhead, Math.max(10, (nextAt - ctx.currentTime - 0.015) * 1000));
+		} else {
+			metronomeTimerRef.current = window.setTimeout(scheduleMetronomeAhead, 100);
+		}
 
 		// Keep only a modest look-ahead. The previous 90-second pre-schedule made live
 		// tempo changes expensive and left a huge amount of stale loop data to cancel.
@@ -7018,6 +7079,12 @@ export default function DAW(_props: TabRendererProps) {
 					onJumpEnd={() => setPlayheadPosBars(endBar)}
 					onBpmChange={changeBpm}
 					onSignatureChange={changeSignature}
+					metronomeEnabled={metronomeEnabled}
+					metronomeLevel={metronomeLevel}
+					countInBars={countInBars}
+					onMetronomeEnabledChange={setMetronomeEnabled}
+					onMetronomeLevelChange={setMetronomeLevel}
+					onCountInBarsChange={setCountInBars}
 				/>
 				<div className="flex flex-wrap items-center justify-center gap-2 py-1 text-xs text-neutral-300" aria-label="Audio recording settings">
 					<label>Input <select value={audioInputId} onChange={(event) => setAudioInputId(event.target.value)} disabled={audioRecordBusy} onFocus={() => { void navigator.mediaDevices?.enumerateDevices().then((devices) => setAudioInputs(devices.filter((device) => device.kind === "audioinput"))).catch(() => {}); }} className="bg-neutral-900"><option value="">System default</option>{audioInputs.map((device) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Input ${audioInputs.indexOf(device) + 1}`}</option>)}</select></label>
