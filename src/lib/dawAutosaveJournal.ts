@@ -3,6 +3,7 @@ export type Journal<T extends object> = {
 	v: 1;
 	base: string | null;
 	name: string;
+	updatedAt?: number;
 	entries: Partial<T>[];
 };
 
@@ -32,6 +33,25 @@ export function recoverJournal<T extends object>(
 	} catch { return null; }
 }
 
+export function inspectJournal<T extends object>(
+	base: T | null, baseText: string | null, raw: string | null,
+): { state: T; name: string; updatedAt: number | null; entryCount: number } | null {
+	const recovered = recoverJournal(base, baseText, raw);
+	if (!recovered || !raw) return null;
+	try {
+		const journal = JSON.parse(raw) as Journal<T>;
+		return {
+			...recovered,
+			updatedAt: typeof journal.updatedAt === "number" && Number.isFinite(journal.updatedAt) ? journal.updatedAt : null,
+			entryCount: journal.entries.length,
+		};
+	} catch { return null; }
+}
+
+export function hasNewerJournalState<T extends object>(base: T | null, recovered: T): boolean {
+	return JSON.stringify(base) !== JSON.stringify(recovered);
+}
+
 export function appendJournal<T extends object>(
 	previous: string | null, base: T | null, baseText: string | null, state: T, name: string,
 ): string {
@@ -48,7 +68,7 @@ export function appendJournal<T extends object>(
 	const entries = [...(journal?.entries ?? []), patch];
 	// Bound both entry count and accumulated size by compacting to one snapshot.
 	const compact = entries.length > MAX_JOURNAL_ENTRIES || JSON.stringify(entries).length > 1_000_000;
-	const result = JSON.stringify({ v: 1, base: baseId(baseText), name, entries: compact ? [state] : entries } satisfies Journal<T>);
+	const result = JSON.stringify({ v: 1, base: baseId(baseText), name, updatedAt: Date.now(), entries: compact ? [state] : entries } satisfies Journal<T>);
 	if (result.length > 2_000_000) throw new Error("Project autosave exceeds the local journal limit. Save locally to keep these edits.");
 	return result;
 }

@@ -47,7 +47,7 @@ import { measureExport, validateExportSettings, type ExportMeasurement } from ".
 import { automationValue, automationValueBounds, normalizeAutomationLanes, type AutomationInterpolation, type AutomationLane, type AutomationParameter } from "../lib/dawAutomation";
 import { detectWarpTransients, normalizeWarpMarkers, type WarpMarker } from "../lib/dawWarp";
 import { addCompRange, MAX_DAW_TAKES, normalizeCompRanges, type DawTake, type DawCompRange } from "../lib/dawTakes";
-import { appendJournal, journalKey, recoverJournal } from "../lib/dawAutosaveJournal";
+import { appendJournal, hasNewerJournalState, inspectJournal, journalKey } from "../lib/dawAutosaveJournal";
 import { loadFreezeArtifact, saveFreezeArtifact } from "../lib/dawFreeze";
 import {
 	GM_PROGRAMS,
@@ -683,6 +683,9 @@ export default function DAW(_props: TabRendererProps) {
 	const [selectedAutomationPointIds, setSelectedAutomationPointIds] = useState<string[]>([]);
 	const automationClipboardRef = useRef<Array<{ offset: number; value: number; mode?: AutomationInterpolation }> | null>(null);
 	const [dawHydrated, setDawHydrated] = useState(false);
+	const [recoveryCandidate, setRecoveryCandidate] = useState<{ projectId: string; state: DawPersistV1; name: string; updatedAt: number | null; entryCount: number } | null>(null);
+	const [recoveryError, setRecoveryError] = useState<string | null>(null);
+	const [restoringRecovery, setRestoringRecovery] = useState(false);
 	const [vst3Plugins, setVst3Plugins] = useState<BridgePlugin[]>([]);
 	const [bridgeAvailable, setBridgeAvailable] = useState<boolean | null>(null);
 	const [midiInputDevices, setMidiInputDevices] = useState<BridgeMidiInputDevice[]>([]);
@@ -943,6 +946,9 @@ export default function DAW(_props: TabRendererProps) {
 		setHydratedProjectId(null);
 		setPersistedSnapshot(null);
 		setSaveError(null);
+		setRecoveryCandidate(null);
+		setRecoveryError(null);
+		setRestoringRecovery(false);
 		setPendingProjectId(null);
 		setSwitchError(null);
 		projectFileHandleRef.current = null;
@@ -3153,9 +3159,11 @@ export default function DAW(_props: TabRendererProps) {
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : "Could not read local project storage.");
 		}
-		const recovered = recoverJournal(safeParse<DawPersistV1>(stored), stored, journalRaw);
-		const data = recovered?.state ?? safeParse<DawPersistV1>(stored);
-		if (recovered) storedName = recovered.name;
+		const base = safeParse<DawPersistV1>(stored);
+		const recovered = inspectJournal(base, stored, journalRaw);
+		setRecoveryCandidate(recovered && recovered.state.v === 1 && hasNewerJournalState(base, recovered.state)
+			? { projectId: activeProjectId, ...recovered } : null);
+		const data = base;
 		setProjectName(storedName);
 		if (!data || data.v !== 1) {
 			// New/empty project: reset to defaults
@@ -3300,6 +3308,56 @@ export default function DAW(_props: TabRendererProps) {
 		} catch (error) {
 			setSaveError(error instanceof Error ? error.message : "Could not save to local project storage.");
 			return false;
+		}
+	};
+
+	const restoreRecovery = () => {
+		if (!recoveryCandidate || recoveryCandidate.projectId !== activeProjectId) return;
+		const data = recoveryCandidate.state;
+		const restoredTracks = validateProjectSidechains((data.tracks ?? []).map((track) => ({
+			...track,
+			level: clamp(track.level ?? 100, 0, 127),
+			effects: normalizeTrackEffects(track.effects),
+			automation: normalizeAutomationLanes(track.automation),
+			mixer: normalizeMixerStrip(track.mixer),
+		})));
+		setProjectGeneration(data.generation && (data.generation.origin === "create-song" || data.generation.origin === "generation-library") ? data.generation : undefined);
+		setTracks(restoredTracks);
+		setClips(data.clips ?? []);
+		setProjectAssets((data.projectAssets ?? []).map(normalizeProjectAssetForPersist));
+		setApprovedComposerArrangement(data.approvedComposerArrangement ?? null);
+		setProgressiveStemState(data.progressiveStemState ?? { universe: null, nodes: [], activeByRole: {} });
+		setTrackHeights(Object.fromEntries(restoredTracks.map((track) => [track.id, Math.max(MIN_TRACK_H, data.trackHeights?.[track.id] ?? ROW_H)])));
+		setSelectedTrackId(data.selectedTrackId ?? restoredTracks[0]?.id ?? null);
+		setSelectedClipId(data.selectedClipId ?? null);
+		setSnapEnabled(!!data.snapEnabled);
+		setGridValue(data.gridValue ?? "bar");
+		setGridMode(data.gridMode ?? "absolute");
+		setZoomPct(clamp(data.zoomPct ?? 100, MIN_ZOOM_PCT, MAX_ZOOM_PCT));
+		setPlayheadPosBars(data.playheadPosBars ?? 1);
+		setLoopL(data.loopL ?? 1);
+		setLoopR(data.loopR ?? 5);
+		setEndBar(data.endBar ?? DEFAULT_END_BAR);
+		setEndMarkerMode(data.endMarkerMode ?? (data.endBar != null && data.endBar !== 65 ? "manual" : "auto"));
+		setLoopEnabled(!!data.loopEnabled);
+		setTimelineMarkers((data.timelineMarkers ?? []).filter((marker) => marker && typeof marker.id === "string" && (marker.kind === "marker" || marker.kind === "region") && typeof marker.name === "string" && Number.isFinite(marker.startBar)).map((marker) => ({ ...marker, startBar: clamp(marker.startBar, 1, MAX_BARS), ...(marker.kind === "region" ? { endBar: clamp(marker.endBar ?? marker.startBar + 1, marker.startBar + 0.01, MAX_BARS) } : {}) })));
+		setBpm(clamp(data.bpm ?? 120, 20, 400));
+		setSigNum(data.sigNum ?? 4);
+		setSigDen(data.sigDen ?? 4);
+		setMasterLevel(clamp(data.masterLevel ?? 100, 0, 127));
+		setProjectName(recoveryCandidate.name);
+		setPersistedSnapshot({ id: activeProjectId, fingerprint: "" });
+		setRestoringRecovery(true);
+	};
+
+	const discardRecovery = () => {
+		if (!recoveryCandidate || recoveryCandidate.projectId !== activeProjectId) return;
+		try {
+			localStorage.removeItem(journalKey(activeProjectId));
+			setRecoveryCandidate(null);
+			setRecoveryError(null);
+		} catch (error) {
+			setRecoveryError(error instanceof Error ? error.message : "Could not discard the recovery journal. It has been kept safely.");
 		}
 	};
 
@@ -3568,7 +3626,7 @@ export default function DAW(_props: TabRendererProps) {
 		// the restore Effect and other mount Effects run from the same initial commit;
 		// persisting before hydration can overwrite the saved selection/project with
 		// transient defaults before React has committed the restored state.
-		if (!dawHydrated || hydratedProjectId !== activeProjectId || pendingProjectId) return;
+		if (!dawHydrated || hydratedProjectId !== activeProjectId || pendingProjectId || recoveryCandidate?.projectId === activeProjectId) return;
 		if (!projectDirty && !saveError) return;
 		setIsSavingUi(true);
 		autosaveTimerRef.current = window.setTimeout(() => {
@@ -3580,6 +3638,10 @@ export default function DAW(_props: TabRendererProps) {
 				localStorage.setItem(journalKey(activeProjectId), next);
 				setPersistedSnapshot({ id: activeProjectId, fingerprint: currentFingerprint });
 				setSaveError(null);
+				if (restoringRecovery && recoveryCandidate?.projectId === activeProjectId) {
+					setRecoveryCandidate(null);
+					setRestoringRecovery(false);
+				}
 			} catch (error) {
 				setSaveError(error instanceof Error ? error.message : "Could not autosave the project journal.");
 			}
@@ -3597,6 +3659,7 @@ export default function DAW(_props: TabRendererProps) {
 		hydratedProjectId,
 		activeProjectId,
 		pendingProjectId,
+		recoveryCandidate,
 		DAW_STORAGE_KEY,
 		projectGeneration,
 		tracks,
@@ -3621,6 +3684,7 @@ export default function DAW(_props: TabRendererProps) {
 		masterLevel,
 		approvedComposerArrangement,
 		progressiveStemState,
+		restoringRecovery,
 	]);
 
 
@@ -5830,6 +5894,17 @@ export default function DAW(_props: TabRendererProps) {
 	const openExportPanel = () => { setFileMenuOpen(false); setExportStatus(""); setExportOpen(true); };
 	return (
 		<div className={`daw-workspace h-full min-h-0 flex flex-col relative ${touchEditMode ? "daw-touch-edit" : ""}`}>
+			{recoveryCandidate?.projectId === activeProjectId && <div className="shrink-0 border-b border-amber-300/25 bg-amber-300/[0.08] px-4 py-3" role="region" aria-label="Recovered session">
+				<div className="flex flex-wrap items-start justify-between gap-3">
+					<div className="min-w-0">
+						<div className="text-sm font-semibold text-amber-100">A recovered session is available</div>
+						<p className="mt-1 text-xs opacity-75"><strong>{recoveryCandidate.name || "Untitled Project"}</strong> · {recoveryCandidate.state.tracks?.length ?? 0} tracks · {recoveryCandidate.state.clips?.length ?? 0} clips · {recoveryCandidate.entryCount} autosave updates{recoveryCandidate.updatedAt ? ` · ${new Date(recoveryCandidate.updatedAt).toLocaleString()}` : ""}</p>
+						<p className="mt-1 text-[11px] opacity-60">Your last saved project is still intact. Restore these newer edits or discard this recovery copy.</p>
+						{recoveryError && <p className="mt-1 text-xs text-red-300" role="alert">{recoveryError}</p>}
+					</div>
+					<div className="flex shrink-0 gap-2"><YSButton className="px-3 py-1.5 rounded-lg text-xs" onClick={discardRecovery}>Discard recovery</YSButton><YSButton className="px-3 py-1.5 rounded-lg text-xs bg-amber-300/20" onClick={restoreRecovery}>Restore session</YSButton></div>
+				</div>
+			</div>}
 			{/* App-style menu bar. Project file commands live here instead of consuming transport space. */}
 			<div className="daw-menu-bar relative z-50 h-8 shrink-0 px-1 flex items-center gap-1 border-t border-b border-neutral-200/15 dark:border-neutral-800 bg-neutral-950/65 select-none">
 				<div className="relative h-full flex items-center" ref={fileMenuRef}>
