@@ -323,7 +323,9 @@ export class AudioController {
 		return audio;
 	}
 
-	private async getPlayableUrl(asset: AudioAsset): Promise<string> {
+	async getPlayableUrl(ref: AudioTargetRef): Promise<string> {
+		const asset = this.resolve(ref);
+		if (!asset) throw new Error("Unknown audio asset");
 		// If we already have a URL, only trust it if it looks signed or isn't
 		// a private GCS URL.
 		if (asset.publicUrl) {

@@ -35,6 +35,8 @@ export type GenerationRecord = {
   folderId?: string;
   songResult?: SongGenerationResult;
   lineage?: GenerationLineage;
+  note?: string;
+  favorite?: boolean;
 };
 
 export type GenerationFolder = { id: string; name: string; createdAt: number; updatedAt: number };
@@ -60,6 +62,8 @@ function normalizeRecord(value: unknown): GenerationRecord | null {
     source: { prompt: item.source.prompt, ...(typeof item.source.lyrics === "string" ? { lyrics: item.source.lyrics } : {}), ...(typeof item.source.style === "string" ? { style: item.source.style } : {}), ...(typeof item.source.origin === "string" ? { origin: item.source.origin } : {}) },
     artifacts: artifacts.map((artifact) => ({ ...artifact, ...(typeof artifact.durationSec === "number" && Number.isFinite(artifact.durationSec) && artifact.durationSec > 0 ? { durationSec: artifact.durationSec } : {}) })), ...(typeof item.error === "string" ? { error: item.error } : {}), ...(typeof item.folderId === "string" && item.folderId ? { folderId: item.folderId } : {}),
     ...(item.songResult ? { songResult: parseSongGenerationResult(item.songResult) ?? undefined } : {}),
+    ...(typeof item.note === "string" ? { note: item.note.slice(0, 2000) } : {}),
+    ...(item.favorite === true ? { favorite: true } : {}),
     ...(item.lineage && typeof item.lineage.rootId === "string" && item.lineage.rootId && Number.isInteger(item.lineage.version) && item.lineage.version > 0 &&
       ["initial", "retry", "variation", "stem-regeneration", "edit"].includes(item.lineage.operation) &&
       item.lineage.sourceReferences && Array.isArray(item.lineage.sourceReferences.artifactIds) && typeof item.lineage.sourceReferences.prompt === "string"
@@ -146,6 +150,21 @@ export function moveGenerationToFolder(generationId: string, folderId?: string):
   if (!record) throw new Error("Generation not found.");
   const unfiled = { ...record }; delete unfiled.folderId;
   return saveGeneration({ ...unfiled, ...(folderId ? { folderId } : {}), updatedAt: Date.now() });
+}
+
+/** Save review metadata without changing a generation or its retained artifacts. */
+export function updateGenerationReview(id: string, changes: { note?: string; favorite?: boolean }): GenerationRecord {
+  const record = listGenerations().find((item) => item.id === id);
+  if (!record) throw new Error("Generation not found.");
+  const next = { ...record };
+  if (changes.note !== undefined) {
+    const note = changes.note.slice(0, 2000);
+    if (note.trim()) next.note = note; else delete next.note;
+  }
+  if (changes.favorite !== undefined) {
+    if (changes.favorite) next.favorite = true; else delete next.favorite;
+  }
+  return saveGeneration({ ...next, updatedAt: Date.now() });
 }
 
 /** Delete only the library record; linked local projects and artifacts are not deleted. */
