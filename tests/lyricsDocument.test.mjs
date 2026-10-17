@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { importPlainLyrics, lineText, lyricsToPlainText, makeSyllables, restoreLyricsVersion, saveLyricsVersion, suggestMidiTiming, suggestTiming, updateLineText } from '../src/lib/lyricsDocument.ts';
 import { midiOnsets } from '../src/lib/midiOnsets.ts';
+import { analyzeLyrics, estimateWordSyllables } from '../src/lib/lyricsAnalysis.ts';
 
 test('plain text round trip preserves sections and lines', () => {
   const original = '[Verse 1]\nFirst line\nSecond line\n\n[Chorus]\nSing again';
@@ -53,4 +54,27 @@ test('versions snapshot sections and restore timing', () => {
   assert.equal(lineText(restored.sections[0].lines[0]), 'One two');
   assert.equal(restored.sections[0].lines[0].startMs, 100);
   assert.equal(restored.sections[0].lines[0].id, original.sections[0].lines[0].id);
+});
+
+test('lyrics analysis reports deterministic text observations', () => {
+  const document = importPlainLyrics('[Verse]\nI see the light\nWe feel the night\nI see the light\n[Chorus]\nSing again');
+  const analysis = analyzeLyrics(document);
+  assert.equal(analysis.lines.length, 4);
+  assert.deepEqual(analysis.rhymeGroups.map((group) => group.ending), ['ight']);
+  assert.deepEqual(analysis.duplicateLines, [{ text: 'i see the light', occurrences: [{ section: 'Verse', line: 1 }, { section: 'Verse', line: 3 }] }]);
+  assert.deepEqual(analysis.repeatedWords.find((item) => item.word === 'light'), { word: 'light', count: 2 });
+  assert.deepEqual(analysis.sections.map(({ name, lines, share }) => ({ name, lines, share })), [{ name: 'Verse', lines: 3, share: 86 }, { name: 'Chorus', lines: 1, share: 14 }]);
+  assert.equal(analysis.meter.totalLines, 4);
+  assert.equal(estimateWordSyllables('fire'), 1);
+});
+
+test('lyrics analysis excludes blank lines and keeps section totals aligned', () => {
+  const document = importPlainLyrics('[Verse]\n\n[Chorus]\n');
+  const analysis = analyzeLyrics(document);
+  assert.equal(analysis.lines.length, 0);
+  assert.deepEqual(analysis.sections.map(({ lines, words, syllables, share }) => ({ lines, words, syllables, share })), [
+    { lines: 0, words: 0, syllables: 0, share: 0 },
+    { lines: 0, words: 0, syllables: 0, share: 0 },
+  ]);
+  assert.deepEqual(analysis.meter, { totalLines: 0, repeatedCount: null, counts: [] });
 });
