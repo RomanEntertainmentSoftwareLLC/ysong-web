@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { analyzeCritique, prepareCritique } from "./workflow";
 import { critiqueSourceHash, loadCritiques, saveCritique, type SavedCritique } from "./reportLibrary";
+import CritiqueRepairAudition from "./CritiqueRepairAudition";
 
 type Props = {
   onBack: () => void;
@@ -72,6 +73,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<SeverityFilter>("all");
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
+  const selectedFinding = useMemo(() => report?.findings.find(row => row.id === activeFindingId) || null, [report, activeFindingId]);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -290,6 +292,7 @@ export default function CritiqueApp({ onBack, onOpenStemRestore, onOpenHumanize,
               {timelineFindings.map((row, index) => { const start = Math.max(0, Math.min(duration, Number(row.start_seconds) || 0)); const end = row.end_seconds != null && Number.isFinite(Number(row.end_seconds)) ? Math.max(start, Math.min(duration, Number(row.end_seconds))) : start; const left = (start / duration) * 100; const width = ((end - start) / duration) * 100; const active = activeFindingId === row.id; return <button key={`${row.id}-${index}`} type="button" aria-label={`Audition ${row.title} at ${formatTime(row.start_seconds)}${row.end_seconds != null ? ` to ${formatTime(row.end_seconds)}` : ""}`} title={`${formatTime(row.start_seconds)}${row.end_seconds != null ? `–${formatTime(row.end_seconds)}` : ""} · ${row.title}`} onClick={() => jumpTo(row)} className={`absolute top-1 h-10 rounded-sm ${row.severity === "critical" ? "bg-rose-500" : row.severity === "warning" ? "bg-amber-500" : "bg-sky-500"} ${end > start ? "opacity-30 hover:opacity-55" : "w-1.5 opacity-80 hover:opacity-100"} ${active ? "ring-2 ring-violet-500 ring-offset-1 ring-offset-neutral-100 dark:ring-offset-neutral-950" : ""}`} style={{ left: `${left}%`, ...(end > start ? { width: `${Math.max(0.6, width)}%` } : {}) }}/>; })}
             </div>
             <div className="mt-2 flex justify-between text-[10px] text-neutral-500"><span>0:00</span><span>Thin markers are point findings; wider ranges are measured spans.</span><span>{formatTime(report.duration_seconds)}</span></div>
+            {selectedFinding && <CritiqueRepairAudition key={`${upload.asset_id}:${selectedFinding.id}`} asset={upload} finding={selectedFinding}/> }
           </section>
 
           <section className="mt-5 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/45 p-5">
