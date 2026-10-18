@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createBlankVisualScene, makeVisualMaterial } from "../src/lib/visualsScene.ts";
-import { applyVisualMaterialUpload, createVisualMaterialUploadTracker, isCurrentVisualMaterialTexture } from "../src/lib/visualMaterialUpload.ts";
+import { applyVisualMaterialUpload, clearVisualMaterialTexture, createVisualMaterialUploadTracker, isCurrentVisualMaterialTexture } from "../src/lib/visualMaterialUpload.ts";
 import { createVisualSceneWriter } from "../src/lib/visualSceneWriter.ts";
 
 test("uploaded texture references merge into the latest scene and assign imported objects", () => {
@@ -48,4 +48,24 @@ test("a late upload cannot replace a newer selection in the same slot", () => {
 	assert.equal(first(), false);
 	assert.equal(second(), true);
 	assert.equal(normal(), true);
+});
+
+test("clearing a slot leaves other maps intact and invalidates its pending upload", () => {
+	const reserve = createVisualMaterialUploadTracker();
+	const material = makeVisualMaterial("Paint");
+	const scene = { ...createBlankVisualScene("3d", "Model"), materials: [material] };
+	const pending = reserve(material.id, "baseColorMap");
+	const assigned = applyVisualMaterialUpload(scene, material.id, "baseColorMap", "/paint.png", "paint.png");
+	const withNormal = applyVisualMaterialUpload(assigned, material.id, "normalMap", "/normal.png", "normal.png");
+	reserve(material.id, "baseColorMap");
+	const cleared = clearVisualMaterialTexture(withNormal, material.id, "baseColorMap");
+	assert.equal(pending(), false);
+	assert.deepEqual(cleared.materials[0].baseColorMap, { url: "", fileName: "" });
+	assert.deepEqual(cleared.materials[0].normalMap, { url: "/normal.png", fileName: "normal.png" });
+});
+
+test("upload of a removed material does not assign a dangling object override", () => {
+	const scene = createBlankVisualScene("3d", "Model");
+	const result = applyVisualMaterialUpload(scene, "removed", "baseColorMap", "/late.png", "late.png");
+	assert.equal(result, scene);
 });

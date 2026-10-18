@@ -11,6 +11,7 @@ export function applyVisualMaterialUpload(
 	url: string,
 	fileName: string,
 ): VisualSceneState {
+	if (!current.materials.some((material) => material.id === materialId)) return current;
 	const imported = current.object.model === "asset" || current.object.model === "glb";
 	return {
 		...current,
@@ -19,6 +20,20 @@ export function applyVisualMaterialUpload(
 			? { ...material, [key]: { url, fileName } } : material),
 		object: imported && !current.object.materialId
 			? { ...current.object, materialId } : current.object,
+	};
+}
+
+export function clearVisualMaterialTexture(
+	current: VisualSceneState,
+	materialId: string,
+	key: MaterialTextureKey,
+): VisualSceneState {
+	if (!current.materials.some((material) => material.id === materialId)) return current;
+	return {
+		...current,
+		updatedAt: Date.now(),
+		materials: current.materials.map((material) => material.id === materialId
+			? { ...material, [key]: { url: "", fileName: "" } } : material),
 	};
 }
 
