@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { primitiveWorldMatrix } from "../lib/visualsHierarchy";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
@@ -5093,6 +5094,7 @@ export default function VisualOutput() {
 				runtime.mesh.visible =
 					state.project.mode !== "2d" && p.visible && visualLayerActive(layer, positionSeconds);
 				runtime.mesh.scale.set(sx, sy, sz);
+				runtime.mesh.matrixAutoUpdate = !p.parentId;
 				if (physicsWorld && runtime.bodySignature !== primitiveBodySignature(p)) createPhysicsBody(p, runtime);
 				const authoredRotation = new THREE.Euler(rx, ry, rz);
 				const authoredQuaternion = new THREE.Quaternion().setFromEuler(authoredRotation);
@@ -5129,6 +5131,20 @@ export default function VisualOutput() {
 						z: authoredQuaternion.z,
 						w: authoredQuaternion.w,
 					});
+				}
+				if (p.parentId) {
+					const parentWorld = primitiveWorldMatrix(state.primitives, p.parentId);
+					if (parentWorld) {
+						const local = new THREE.Matrix4().compose(new THREE.Vector3(px, py, pz), authoredQuaternion, new THREE.Vector3(sx, sy, sz));
+						runtime.mesh.matrix.copy(parentWorld.multiply(local));
+						runtime.mesh.matrixWorldNeedsUpdate = true;
+						if (runtime.body) {
+							const worldPosition = new THREE.Vector3(), worldRotation = new THREE.Quaternion(), worldScale = new THREE.Vector3();
+							runtime.mesh.matrix.decompose(worldPosition, worldRotation, worldScale);
+							runtime.body.setTranslation({x:worldPosition.x,y:worldPosition.y,z:worldPosition.z},true);
+							runtime.body.setRotation({x:worldRotation.x,y:worldRotation.y,z:worldRotation.z,w:worldRotation.w},true);
+						}
+					}
 				}
 			}
 		};

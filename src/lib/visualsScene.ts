@@ -146,6 +146,8 @@ export type VisualPrimitivePhysics = {
 };
 
 export type VisualPrimitiveObject = {
+	/** Parent primitive. Transform fields are local when this is set. */
+	parentId?: string;
 	id: string;
 	/** Geometry and material source; transform and physics stay local. */
 	instanceSourceId?: string;
@@ -1703,6 +1705,12 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 	normalized.secondaryDynamics=normalized.secondaryDynamics.map(item=>item.materialId&&!validMaterialIds.has(item.materialId)?{...item,materialId:""}:item);
 	if (normalized.object.materialId&&!validMaterialIds.has(normalized.object.materialId)) normalized.object.materialId="";
 	const primitiveIds=new Set(normalized.primitives.map(item=>item.id));
+	const parents=new Map(normalized.primitives.map(item=>[item.id,item.parentId||""]));
+	normalized.primitives=normalized.primitives.map(item=>{
+		let id=item.parentId, depth=0;
+		while(id && depth++<8){if(id===item.id)break;id=parents.get(id)||"";}
+		return id || depth>=8 || (item.parentId&&!primitiveIds.has(item.parentId)) ? {...item,parentId:""} : item;
+	});
 	const shapeIds=new Set(normalized.shapes2d.map(item=>item.id));
 	const secondaryIds=new Set(normalized.secondaryDynamics.map(item=>item.id));
 	// A layer's entity ID is its durable link to the rendered object. Drop broken
