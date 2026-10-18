@@ -421,7 +421,14 @@ export type VisualLayerTimeline = {
 	trimOut: number;
 	fadeIn: number;
 	fadeOut: number;
+	keyframes?: VisualObjectKeyframe[];
 };
+
+export type VisualObjectAnimatedProperty = "visible" | "positionX" | "positionY" | "positionZ" | "rotationX" | "rotationY" | "rotationZ" | "baseScale" | "rotationSpeed" | "idleAmount" | "pulseAmount" | "glowAmount" | "bodyAmount" | "armAmount" | "springAmount" | "sensitivity" | "deadZone" | "attack" | "release";
+export type VisualObjectKeyframe = { id: string; time: number; property: VisualObjectAnimatedProperty; value: number | boolean; easing: VisualKeyEasing };
+const OBJECT_ANIMATED_PROPERTIES: readonly VisualObjectAnimatedProperty[] = ["visible", "positionX", "positionY", "positionZ", "rotationX", "rotationY", "rotationZ", "baseScale", "rotationSpeed", "idleAmount", "pulseAmount", "glowAmount", "bodyAmount", "armAmount", "springAmount", "sensitivity", "deadZone", "attack", "release"];
+const MAX_OBJECT_KEYFRAMES = 256;
+const OBJECT_KEYFRAME_LIMITS: Partial<Record<VisualObjectAnimatedProperty, [number, number]>> = { positionX: [-10000, 10000], positionY: [-10000, 10000], positionZ: [-10000, 10000], rotationX: [-36000, 36000], rotationY: [-36000, 36000], rotationZ: [-36000, 36000], baseScale: [0.001, 100], rotationSpeed: [-100, 100], idleAmount: [0, 10], pulseAmount: [0, 10], glowAmount: [0, 10], bodyAmount: [0, 10], armAmount: [0, 10], springAmount: [0, 10], sensitivity: [0, 10], deadZone: [0, 1], attack: [0, 10], release: [0, 10] };
 
 export type VisualAiDirectorState = {
 	style: VisualAiDirectorStyle;
@@ -1320,7 +1327,31 @@ function normalizeTimeline(input: VisualLayer["timeline"] | undefined): VisualLa
 		trimOut: Math.max(0, numberOr(input?.trimOut, 0)),
 		fadeIn: Math.max(0, numberOr(input?.fadeIn, 0)),
 		fadeOut: Math.max(0, numberOr(input?.fadeOut, 0)),
+		keyframes: Array.isArray(input?.keyframes) ? input.keyframes.filter((key): key is VisualObjectKeyframe => !!key && typeof key === "object" && OBJECT_ANIMATED_PROPERTIES.includes(key.property) && Number.isFinite(key.time) && key.time >= 0 && key.time <= 36000 && (key.property === "visible" ? typeof key.value === "boolean" : typeof key.value === "number" && Number.isFinite(key.value))).slice(0, MAX_OBJECT_KEYFRAMES).map(key => { const limits = OBJECT_KEYFRAME_LIMITS[key.property]; return { id: typeof key.id === "string" ? key.id : "", time: key.time, property: key.property, value: limits ? Math.max(limits[0], Math.min(limits[1], key.value as number)) : key.value, easing: key.easing === "smooth" ? "smooth" as const : "linear" as const }; }) : [],
 	};
+}
+
+/** Sample object animation in the owning layer's local timeline time. */
+export function visualObjectAt(scene: VisualSceneState, layer: VisualLayer | undefined, positionSeconds: number): { object: VisualSceneState["object"]; visible: boolean } {
+	const keys = layer?.timeline?.keyframes;
+	if (!keys?.length) return { object: scene.object, visible: true };
+	const localTime = Math.max(0, positionSeconds - (layer?.timeline?.start ?? 0));
+	const object = { ...scene.object };
+	let visible = true;
+	for (const property of OBJECT_ANIMATED_PROPERTIES) {
+		const track = keys.filter(key => key.property === property).sort((a, b) => a.time - b.time);
+		if (!track.length) continue;
+		const nextIndex = track.findIndex(key => key.time > localTime);
+		const previous = nextIndex < 0 ? track[track.length - 1] : track[Math.max(0, nextIndex - 1)];
+		const next = nextIndex < 0 ? previous : track[nextIndex];
+		if (property === "visible") { visible = previous.value === true; continue; }
+		const from = previous.value as number;
+		const to = next.value as number;
+		const fraction = next.time === previous.time ? 0 : Math.max(0, Math.min(1, (localTime - previous.time) / (next.time - previous.time)));
+		const eased = previous.easing === "smooth" ? fraction * fraction * (3 - 2 * fraction) : fraction;
+		(object as unknown as Record<string, unknown>)[property] = from + (to - from) * eased;
+	}
+	return { object, visible };
 }
 
 

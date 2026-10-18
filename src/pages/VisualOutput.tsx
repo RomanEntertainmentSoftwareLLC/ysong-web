@@ -44,6 +44,7 @@ import {
 	visualAudioValue,
 	visualLayerActive,
 	visualLayerOpacityAt,
+	visualObjectAt,
 	type VisualLayer,
 	type VisualPerformanceCue,
 	type VisualProgramCamera,
@@ -5221,7 +5222,7 @@ export default function VisualOutput() {
 			lastRenderAt = now - (sinceLast % FRAME_INTERVAL_MS);
 			const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
 			lastTime = now;
-			const currentScene = sceneRef.current;
+			let currentScene = sceneRef.current;
 			const nextPostSignature = currentScene.postFx.stack
 				.map((m: VisualPostFxModule) => `${m.id}:${m.type}:${m.enabled ? 1 : 0}`)
 				.join("|");
@@ -5351,6 +5352,8 @@ export default function VisualOutput() {
 			}
 
 			const objectLayer = currentScene.layers.find((layer) => layer.type === "object");
+			const animatedObject = visualObjectAt(currentScene, objectLayer, currentTransportPosition);
+			if (animatedObject.object !== currentScene.object) currentScene = { ...currentScene, object: animatedObject.object };
 			for (const [key, value] of selectableRoots)
 				if (value === performerRoot && key !== objectLayer?.id) selectableRoots.delete(key);
 			if (objectLayer) {
@@ -6128,13 +6131,13 @@ export default function VisualOutput() {
 				currentScene.project.mode !== "2d" &&
 				!!objectLayer &&
 				visualLayerActive(objectLayer, currentTransportPosition);
-			mannequin.root.visible = currentScene.object.model === "mannequin" && objectVisible;
-			crystal.root.visible = currentScene.object.model === "crystal" && objectVisible;
+			mannequin.root.visible = currentScene.object.model === "mannequin" && objectVisible && animatedObject.visible;
+			crystal.root.visible = currentScene.object.model === "crystal" && objectVisible && animatedObject.visible;
 			const importedModelActive = currentScene.object.model === "glb" || currentScene.object.model === "asset";
 			if (!importedModelActive || !currentScene.object.modelUrl) {
 				if (glb.root || glb.loadingUrl || lastGlbUrl) clearGlb();
 			}
-			if (glb.root) glb.root.visible = importedModelActive && objectVisible;
+			if (glb.root) glb.root.visible = importedModelActive && objectVisible && animatedObject.visible;
 			if (importedModelActive && currentScene.object.modelUrl)
 				loadVisualModel(
 					currentScene.object.modelUrl,
