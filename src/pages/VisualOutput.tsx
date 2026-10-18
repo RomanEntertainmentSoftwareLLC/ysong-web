@@ -37,6 +37,7 @@ import {
 import { subscribeRoomVenueEvents } from "../lib/roomVenueRealtime";
 import {
 	DEFAULT_VISUAL_SCENE,
+	MAX_VISUAL_POST_FX_MODULES,
 	HUMANOID_SLOTS,
 	PERFORMANCE_BEHAVIORS,
 	normalizeVisualScene,
@@ -3019,6 +3020,8 @@ export default function VisualOutput() {
 				pass.enabled = module.enabled && !!lutTexture;
 				return { module, type: module.type, pass };
 			}
+			if (module.type !== "colorGrade" && module.type !== "lens" && module.type !== "film")
+				throw new Error(`Unsupported post effect: ${module.type}`);
 			const pass = new ShaderPass(YSongStudioPostShader);
 			const uniforms = pass.uniforms as Record<string, { value: unknown }>;
 			(uniforms.resolution.value as THREE.Vector2).set(targetWidth, targetHeight);
@@ -3028,7 +3031,7 @@ export default function VisualOutput() {
 		const rebuildPostStack = (stack: VisualPostFxModule[]) => {
 			for (const runtime of postRuntimes) runtime.pass.dispose?.();
 			postRuntimes = [];
-			for (const module of stack) {
+			for (const module of stack.slice(0, MAX_VISUAL_POST_FX_MODULES)) {
 				try {
 					postRuntimes.push(makePostRuntime(module));
 				} catch (caught) {

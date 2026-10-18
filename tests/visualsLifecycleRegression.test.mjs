@@ -4,9 +4,22 @@ import * as THREE from "three";
 import { applyVisualMaterialUpload, createVisualMaterialUploadTracker } from "../src/lib/visualMaterialUpload.ts";
 import { resolveVisualProgramCamera } from "../src/lib/visualsCamera.ts";
 import { pickVisibleEditorObject } from "../src/lib/visualsEditorPicking.ts";
-import { createBlankVisualScene, makeVisualMaterial, makeVisualPrimitive, normalizeVisualScene } from "../src/lib/visualsScene.ts";
+import { createBlankVisualScene, makeVisualMaterial, makeVisualPrimitive, MAX_VISUAL_POST_FX_MODULES, normalizeVisualScene } from "../src/lib/visualsScene.ts";
 import { resolveVisualSelection } from "../src/lib/visualsSelection.ts";
 import { syncVisualSceneToFrames } from "../src/lib/visualsViewportSync.ts";
+
+test("post FX imports stay bounded and disable unknown effects", () => {
+	const scene = createBlankVisualScene("3d", "Post FX stage");
+	scene.postFx.stack = [
+		{ id: "future", type: "futureEffect", name: "Future Effect", enabled: true },
+		...Array.from({ length: MAX_VISUAL_POST_FX_MODULES + 2 }, (_, index) => ({ id: `bloom-${index}`, type: "bloom", name: "Bloom", enabled: true })),
+	];
+	const reopened = normalizeVisualScene(scene);
+	assert.equal(reopened.postFx.stack.length, MAX_VISUAL_POST_FX_MODULES);
+	assert.equal(reopened.postFx.stack[0].enabled, false);
+	assert.match(reopened.postFx.stack[0].name, /Unsupported effect/);
+	assert.equal(reopened.postFx.stack[1].type, "bloom");
+});
 
 function populatedScene() {
 	const scene = createBlankVisualScene("3d", "Lifecycle stage");
