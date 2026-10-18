@@ -2343,6 +2343,19 @@ export default function VisualOutput() {
 			canvas.style.touchAction = "none";
 		}
 		let transformDragging = false;
+		let transformFineSnap = false;
+		let transformSnapBase = 0;
+		const applyTransformSnap = () => {
+			if(!transformControls)return;
+			const snap=transformFineSnap?transformSnapBase*.1:transformSnapBase;
+			transformControls.setTranslationSnap(snap>0?snap:null);
+			transformControls.setRotationSnap(snap>0?snap*Math.PI/180:null);
+			transformControls.setScaleSnap(snap>0?snap:null);
+		};
+		const onTransformFineKeyDown=(event:KeyboardEvent)=>{if(event.key==="Shift"&&!event.repeat){transformFineSnap=true;applyTransformSnap()}};
+		const onTransformFineKeyUp=(event:KeyboardEvent)=>{if(event.key==="Shift"){transformFineSnap=false;applyTransformSnap()}};
+		const onTransformFineBlur=()=>{transformFineSnap=false;applyTransformSnap()};
+		window.addEventListener("keydown",onTransformFineKeyDown);window.addEventListener("keyup",onTransformFineKeyUp);window.addEventListener("blur",onTransformFineBlur);
 		let transformDirty = false;
 		let transformStart: VisualTransform | null = null;
 		let transformId = "";
@@ -2700,11 +2713,10 @@ export default function VisualOutput() {
 				const mode = event.data.mode as VisualTransformMode;
 				const space = event.data.space as VisualTransformSpace;
 				const snap = Number(event.data.snap);
+				transformSnapBase=Math.max(0,Number.isFinite(snap)?snap:0);
 				if (mode === "translate" || mode === "rotate" || mode === "scale") transformControls.setMode(mode);
 				if (space === "local" || space === "world") transformControls.setSpace(space);
-				transformControls.setTranslationSnap(snap > 0 ? snap : null);
-				transformControls.setRotationSnap(snap > 0 ? snap * Math.PI / 180 : null);
-				transformControls.setScaleSnap(snap > 0 ? snap : null);
+				applyTransformSnap();
 				syncTransformGizmo();
 				return;
 			}
@@ -6852,6 +6864,7 @@ export default function VisualOutput() {
 			clearPlacement(true);
 			transformControls?.detach();
 			transformControls?.dispose();
+			window.removeEventListener("keydown",onTransformFineKeyDown);window.removeEventListener("keyup",onTransformFineKeyUp);window.removeEventListener("blur",onTransformFineBlur);
 			transformControls?.getHelper().removeFromParent();
 			transformProxy.removeFromParent();
 			modelPlacementActive = false;

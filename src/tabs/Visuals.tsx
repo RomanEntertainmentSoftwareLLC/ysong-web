@@ -92,6 +92,19 @@ type SceneClipboard =
 	| { kind:"camera"; camera:VisualProgramCamera }
 	| { kind:"layer"; layer:VisualLayer; primitive?:VisualPrimitiveObject; shape?:VisualShape2D; secondary?:VisualSecondaryDynamic };
 
+type TransformSnapPreferences = { enabled:boolean; increments:Record<VisualTransformMode,number> };
+const TRANSFORM_SNAP_PREFERENCES_KEY = "ysong.visuals.transform-snap.v1";
+const DEFAULT_TRANSFORM_SNAP_PREFERENCES:TransformSnapPreferences = {enabled:false,increments:{translate:.5,rotate:15,scale:.1}};
+function readTransformSnapPreferences():TransformSnapPreferences {
+	try {
+		const value=JSON.parse(window.localStorage.getItem(TRANSFORM_SNAP_PREFERENCES_KEY)||"null");
+		if(!value||typeof value!=="object")return DEFAULT_TRANSFORM_SNAP_PREFERENCES;
+		const increments=(value as Partial<TransformSnapPreferences>).increments;
+		const finite=(candidate:unknown,fallback:number,min:number,max:number)=>typeof candidate==="number"&&Number.isFinite(candidate)&&candidate>=min&&candidate<=max?candidate:fallback;
+		return {enabled:(value as Partial<TransformSnapPreferences>).enabled===true,increments:{translate:finite(increments?.translate,.5,.001,1000),rotate:finite(increments?.rotate,15,.1,180),scale:finite(increments?.scale,.1,.001,10)}};
+	} catch { return DEFAULT_TRANSFORM_SNAP_PREFERENCES; }
+}
+
 const VISUAL_SCENE_BACKUP_KEY = "ysong.visuals.scene.backup.v1";
 const visualSceneWriter = createVisualSceneWriter<VisualSceneState>(next=>bridgeApi.setVisualScene(next));
 
@@ -147,7 +160,9 @@ export default function VisualsPane() {
 	const [editorFreeRoamActive,setEditorFreeRoamActive]=useState(false);
 	const [transformMode,setTransformMode]=useState<VisualTransformMode>("translate");
 	const [transformSpace,setTransformSpace]=useState<VisualTransformSpace>("world");
-	const [transformSnap,setTransformSnap]=useState(0);
+	const [transformSnapPreferences,setTransformSnapPreferences]=useState<TransformSnapPreferences>(readTransformSnapPreferences);
+	const [fineTransformSnap,setFineTransformSnap]=useState(false);
+	const transformSnap=transformSnapPreferences.enabled?transformSnapPreferences.increments[transformMode]*(fineTransformSnap?.1:1):0;
 	const [transformUndoAvailable,setTransformUndoAvailable]=useState(false);
 	const transformUndoRef=useRef<{id:string;transform:VisualTransform}|null>(null);
 	const creationHistoryRef=useRef<{object:VisualSceneState["primitives"][number];material:VisualSceneState["materials"][number];layer:VisualLayer;undone:boolean}|null>(null);
@@ -192,6 +207,14 @@ export default function VisualsPane() {
 	useEffect(()=>{
 		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-transform-tool",mode:transformMode,space:transformSpace,snap:transformSnap},window.location.origin);
 	},[transformMode,transformSpace,transformSnap,previewProgramCamera,editorFxPreview]);
+	useEffect(()=>{try{window.localStorage.setItem(TRANSFORM_SNAP_PREFERENCES_KEY,JSON.stringify(transformSnapPreferences))}catch{/* preferences are best effort */}},[transformSnapPreferences]);
+	useEffect(()=>{
+		const onKeyDown=(event:KeyboardEvent)=>{if(event.key==="Shift"&&!event.repeat&&!(event.target instanceof HTMLElement&&(event.target.isContentEditable||["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName))))setFineTransformSnap(true)};
+		const onKeyUp=(event:KeyboardEvent)=>{if(event.key==="Shift")setFineTransformSnap(false)};
+		const onBlur=()=>setFineTransformSnap(false);
+		window.addEventListener("keydown",onKeyDown);window.addEventListener("keyup",onKeyUp);window.addEventListener("blur",onBlur);
+		return()=>{window.removeEventListener("keydown",onKeyDown);window.removeEventListener("keyup",onKeyUp);window.removeEventListener("blur",onBlur)};
+	},[]);
 	useEffect(()=>{
 		let cancelled=false;
 		void bridgeApi.getVisualScene<VisualSceneState>().then(payload=>{
@@ -632,9 +655,10 @@ export default function VisualsPane() {
 
 			<main className="visuals-viewport relative min-h-0 overflow-hidden bg-[#050609] p-3">
 				{!previewProgramCamera?<div className="absolute left-5 top-12 z-40 flex max-w-[calc(100%-165px)] flex-wrap items-center gap-1 rounded-md border border-white/15 bg-[#10151d]/95 p-1 text-[10px] shadow-xl" aria-label="Transform gizmo tools">
-					{([ ["translate","Move"], ["rotate","Rotate"], ["scale","Scale"] ] as const).map(([mode,label])=><button key={mode} type="button" disabled={!transformAvailable} aria-pressed={transformMode===mode} onClick={()=>{setTransformMode(mode);setTransformSnap(0)}} className={`min-h-8 rounded px-2 ${transformMode===mode?"bg-violet-500/25 text-violet-100":"text-neutral-300 hover:bg-white/10"} disabled:opacity-35`}>{label}</button>)}
+					{([ ["translate","Move"], ["rotate","Rotate"], ["scale","Scale"] ] as const).map(([mode,label])=><button key={mode} type="button" disabled={!transformAvailable} aria-pressed={transformMode===mode} onClick={()=>setTransformMode(mode)} className={`min-h-8 rounded px-2 ${transformMode===mode?"bg-violet-500/25 text-violet-100":"text-neutral-300 hover:bg-white/10"} disabled:opacity-35`}>{label}</button>)}
 					<button type="button" disabled={!transformAvailable} onClick={()=>setTransformSpace(value=>value==="world"?"local":"world")} className="min-h-8 rounded border border-white/10 px-2 text-neutral-300 disabled:opacity-35" title="Toggle world or local axes">{transformSpace==="world"?"World":"Local"}</button>
-					<label className="flex items-center gap-1 px-1 text-neutral-400">Snap <select aria-label="Transform snap increment" value={transformSnap} onChange={event=>setTransformSnap(Number(event.target.value))} className="min-h-8 rounded border border-white/10 bg-[#121620] px-1 text-neutral-200"><option value={0}>Off</option>{(transformMode==="rotate"?[5,15,45]:transformMode==="scale"?[.1,.25,.5]:[.1,.5,1]).map(value=><option key={value} value={value}>{value}{transformMode==="rotate"?"°":""}</option>)}</select></label>
+					<label className="flex min-h-8 items-center gap-1 px-1 text-neutral-400"><input type="checkbox" aria-label="Enable transform snapping" checked={transformSnapPreferences.enabled} onChange={event=>setTransformSnapPreferences(current=>({...current,enabled:event.target.checked}))} className="accent-violet-500"/>Snap <select aria-label={`${transformMode} snap increment`} value={transformSnapPreferences.increments[transformMode]} onChange={event=>setTransformSnapPreferences(current=>({...current,increments:{...current.increments,[transformMode]:Number(event.target.value)}}))} className="min-h-8 rounded border border-white/10 bg-[#121620] px-1 text-neutral-200">{(transformMode==="rotate"?[1,5,15,45,90]:transformMode==="scale"?[.01,.05,.1,.25,.5]:[.01,.1,.25,.5,1,5]).map(value=><option key={value} value={value}>{value}{transformMode==="rotate"?"°":transformMode==="scale"?"×":" units"}</option>)}</select></label>
+					<button type="button" disabled={!transformSnapPreferences.enabled} aria-pressed={fineTransformSnap} onPointerDown={event=>{event.preventDefault();event.currentTarget.setPointerCapture(event.pointerId);setFineTransformSnap(true)}} onPointerUp={()=>setFineTransformSnap(false)} onPointerCancel={()=>setFineTransformSnap(false)} onLostPointerCapture={()=>setFineTransformSnap(false)} className={`min-h-8 rounded border px-2 ${fineTransformSnap?"border-cyan-300/50 bg-cyan-400/20 text-cyan-100":"border-white/10 text-neutral-300"} disabled:opacity-35`} title="Hold Shift or press and hold for one tenth snap increments">Fine ×0.1 <span className="text-[8px] text-neutral-500">Shift</span></button>
 					<button type="button" disabled={!transformUndoAvailable} onClick={()=>{const previous=transformUndoRef.current;if(previous){setScene(current=>applyVisualTransform(current,previous.id,previous.transform));transformUndoRef.current=null;setTransformUndoAvailable(false)}}} className="min-h-8 rounded px-2 text-neutral-300 hover:bg-white/10 disabled:opacity-35" title="Undo last gizmo drag">Undo</button><button type="button" disabled={!creationHistoryRef.current||creationHistoryRef.current.undone} onClick={undoPrimitiveCreation} className="min-h-8 rounded px-2 text-neutral-300 hover:bg-white/10 disabled:opacity-35" title="Undo primitive creation">Undo Create</button><button type="button" disabled={!creationHistoryRef.current||!creationHistoryRef.current.undone} onClick={redoPrimitiveCreation} className="min-h-8 rounded px-2 text-neutral-300 hover:bg-white/10 disabled:opacity-35" title="Redo primitive creation">Redo Create</button>
 				</div>:null}
 				<div className="absolute left-5 top-4 z-30 flex max-w-[calc(100%-150px)] items-center gap-2 overflow-hidden text-[10px] font-semibold uppercase tracking-[.16em] text-neutral-400"><span className="shrink-0">Live Viewport</span><span className="shrink-0 rounded bg-black/50 px-1.5 py-.5 text-neutral-500">{previewProgramCamera?"PROGRAM PREVIEW":"SCENE VIEW"}</span><span className="truncate rounded bg-black/50 px-1.5 py-.5 text-neutral-600">{previewProgramCamera?"ACTIVE CAMERA / OBS VIEW":editorFreeRoamActive?`FX ${editorFxPreview?"ON":"OFF"} · FREE ROAM · ESC/CLICK EXIT · WASD + MOUSE · Q/E VERTICAL`:`FX ${editorFxPreview?"ON":"OFF"} · CLICK VIEWPORT FOR FREE ROAM`}</span></div>
