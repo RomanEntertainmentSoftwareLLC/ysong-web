@@ -175,11 +175,14 @@ function neighborFrame(frames: VisualCameraKeyframe[], index: number, closed: bo
 }
 
 export function sampleVisualProgramCamera(camera: VisualProgramCamera, positionSeconds: number): VisualCameraSample {
-	const frames = [...camera.keyframes].sort((a, b) => a.time - b.time);
+	const frames = [...camera.keyframes].sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
 	if (!frames.length) return baseCameraSample(camera);
 	if (frames.length === 1) return normalizedFrame(camera, frames[0]);
 
 	const t = pathTime(camera, frames, positionSeconds);
+	// Equal-time keys have no segment to interpolate. Choose by stable id.
+	const exact = [...frames].reverse().find(frame => frame.time === t);
+	if (exact) return normalizedFrame(camera, exact);
 	const firstTime = frames[0].time;
 	const lastTime = frames[frames.length - 1].time;
 	if (!camera.loop && t <= firstTime) return normalizedFrame(camera, frames[0]);

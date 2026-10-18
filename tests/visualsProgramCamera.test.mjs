@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { resolveVisualProgramCamera } from "../src/lib/visualsCamera.ts";
+import { resolveVisualProgramCamera, sampleVisualProgramCamera } from "../src/lib/visualsCamera.ts";
 import { createBlankVisualScene, normalizeVisualScene } from "../src/lib/visualsScene.ts";
 
 test("program camera follows the persisted master and timeline cuts after replacement", () => {
@@ -20,6 +20,20 @@ test("program camera follows the persisted master and timeline cuts after replac
 	assert.equal(replaced.cameraCuts.length, 0);
 	assert.equal(resolveVisualProgramCamera(replaced, 3)?.id, second.id);
 	assert.equal(normalizeVisualScene(structuredClone(replaced)).activeCameraId, second.id);
+});
+
+test("camera keys interpolate deterministically and survive normalization", () => {
+	const scene = createBlankVisualScene("3d", "Keyed camera");
+	const camera = scene.cameras[0];
+	const key = (id, time, x) => ({ id, time, positionX: x, positionY: 0, positionZ: 5, targetX: 0, targetY: 0, targetZ: 0, fov: 50, easing: "linear" });
+	const keyed = { ...camera, pathInterpolation: "linear", keyframes: [key("b", 2, 20), key("a", 0, 0)] };
+	assert.equal(sampleVisualProgramCamera(keyed, 1).positionX, 10);
+	assert.equal(sampleVisualProgramCamera({ ...keyed, keyframes: [...keyed.keyframes].reverse() }, 1).positionX, 10);
+	const saved = normalizeVisualScene({ ...scene, cameras: [keyed] });
+	assert.equal(sampleVisualProgramCamera(saved.cameras[0], 1).positionX, 10);
+	const collision = { ...keyed, keyframes: [key("b", 1, 20), key("a", 1, 0)] };
+	assert.equal(sampleVisualProgramCamera(collision, 1).positionX, 20);
+	assert.equal(sampleVisualProgramCamera({ ...collision, keyframes: [...collision.keyframes].reverse() }, 1).positionX, 20);
 });
 
 test("program camera falls back to an enabled camera when the selected camera is unavailable", () => {
