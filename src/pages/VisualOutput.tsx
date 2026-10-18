@@ -2877,6 +2877,15 @@ export default function VisualOutput() {
 		const floorLight = new THREE.PointLight(0x2e75ff, 1.8, 24, 2);
 		floorLight.position.set(-3, -1, 2);
 		threeScene.add(floorLight);
+		const authoredLights = [sun, moon, key, rim, floorLight];
+		const lightHelpers = editorFreeRoam ? [
+			new THREE.DirectionalLightHelper(sun, 1),
+			new THREE.DirectionalLightHelper(moon, 1),
+			new THREE.SpotLightHelper(key),
+			new THREE.PointLightHelper(rim, 0.35),
+			new THREE.PointLightHelper(floorLight, 0.35),
+		] : [];
+		threeScene.add(...lightHelpers);
 
 		// Neutral editor-only workbench lights keep PBR materials readable even in a
 		// genuinely blank scene. They never exist as authored scene lighting and are
@@ -5735,6 +5744,10 @@ export default function VisualOutput() {
 			floorLight.color.set(stage.fillColor);
 			floorLight.intensity = lightingActive ? stage.fillIntensity * (1 + fillReact) : 0;
 			floorLight.position.set(stage.fillX, stage.fillY, stage.fillZ);
+			lightHelpers.forEach((helper, index) => {
+				helper.visible = lightingActive && !activeProgramCamera && authoredLights[index].intensity > 0;
+				if (helper.visible) helper.update();
+			});
 			renderer.toneMappingExposure = Math.max(0.2, lightingActive ? stage.exposure : 1);
 			renderer.shadowMap.enabled = lightingActive && stage.shadows;
 			sun.castShadow = lightingActive && stage.shadows && stage.sunShadows;
@@ -5743,6 +5756,21 @@ export default function VisualOutput() {
 			sun.shadow.bias = stage.shadowBias;
 			moon.shadow.bias = stage.shadowBias;
 			key.shadow.bias = stage.shadowBias;
+			const shadowRange = Math.max(4, Math.min(100, stage.shadowRange));
+			for (const light of [sun, moon]) {
+				const camera = light.shadow.camera;
+				if (camera.right !== shadowRange || camera.far !== shadowRange * 2) {
+					camera.left = camera.bottom = -shadowRange;
+					camera.right = camera.top = shadowRange;
+					camera.far = shadowRange * 2;
+					camera.updateProjectionMatrix();
+				}
+			}
+			const keyShadowFar = Math.max(key.shadow.camera.near + 1, stage.keyDistance > 0 ? Math.min(stage.keyDistance, shadowRange * 2) : shadowRange * 2);
+			if (key.shadow.camera.far !== keyShadowFar) {
+				key.shadow.camera.far = keyShadowFar;
+				key.shadow.camera.updateProjectionMatrix();
+			}
 			const authoredShadowMap = [512, 1024, 2048, 4096].includes(Math.round(stage.shadowMapSize))
 				? Math.round(stage.shadowMapSize)
 				: 1024;
@@ -6955,6 +6983,10 @@ export default function VisualOutput() {
 				helper.materialCopies.forEach((material) => material.dispose());
 			}
 			cameraHelpers.clear();
+			for (const helper of lightHelpers) {
+				helper.removeFromParent();
+				helper.dispose();
+			}
 			threeScene.remove(cameraHelperRoot);
 			for (const runtime of secondaryRuntime.values()) disposeSecondaryRuntime(runtime);
 			secondaryRuntime.clear();

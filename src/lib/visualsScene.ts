@@ -696,6 +696,7 @@ export type VisualSceneState = {
 		moonShadows: boolean;
 		keyShadows: boolean;
 		shadowMapSize: number;
+		shadowRange: number;
 		shadowBias: number;
 		exposure: number;
 		bloomStrength: number;
@@ -1207,6 +1208,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		moonShadows: false,
 		keyShadows: true,
 		shadowMapSize: 1024,
+		shadowRange: 18,
 		shadowBias: -0.00035,
 		exposure: 1.05,
 		bloomStrength: 0.85,
@@ -1525,7 +1527,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 				: [],
 		},
 		grid: { ...DEFAULT_VISUAL_SCENE.grid, ...(raw.grid ?? {}) },
-		stage: { ...DEFAULT_VISUAL_SCENE.stage, ...(raw.stage ?? {}), ambientSkyColor:typeof raw.stage?.ambientSkyColor==="string"?raw.stage.ambientSkyColor:DEFAULT_VISUAL_SCENE.stage.ambientSkyColor, ambientGroundColor:typeof raw.stage?.ambientGroundColor==="string"?raw.stage.ambientGroundColor:DEFAULT_VISUAL_SCENE.stage.ambientGroundColor, moonEnabled:raw.stage?.moonEnabled===true, moonColor:typeof raw.stage?.moonColor==="string"?raw.stage.moonColor:DEFAULT_VISUAL_SCENE.stage.moonColor, moonIntensity:Math.max(0,Math.min(20,numberOr(raw.stage?.moonIntensity,DEFAULT_VISUAL_SCENE.stage.moonIntensity))), moonX:numberOr(raw.stage?.moonX,DEFAULT_VISUAL_SCENE.stage.moonX), moonY:numberOr(raw.stage?.moonY,DEFAULT_VISUAL_SCENE.stage.moonY), moonZ:numberOr(raw.stage?.moonZ,DEFAULT_VISUAL_SCENE.stage.moonZ), moonSource:(["bass","mids","highs","energy","kick","rms","peak"] as VisualAudioSource[]).includes(raw.stage?.moonSource as VisualAudioSource)?raw.stage!.moonSource as VisualAudioSource:DEFAULT_VISUAL_SCENE.stage.moonSource, moonAmount:Math.max(0,Math.min(10,numberOr(raw.stage?.moonAmount,DEFAULT_VISUAL_SCENE.stage.moonAmount))), shadowMapSize:[512,1024,2048,4096].includes(Math.round(numberOr(raw.stage?.shadowMapSize,1024)))?Math.round(numberOr(raw.stage?.shadowMapSize,1024)):1024, shadowBias:Math.max(-.02,Math.min(.02,numberOr(raw.stage?.shadowBias,-.00035))), sunShadows:raw.stage?.sunShadows!==false, moonShadows:raw.stage?.moonShadows===true, keyShadows:raw.stage?.keyShadows!==false },
+		stage: { ...DEFAULT_VISUAL_SCENE.stage, ...(raw.stage ?? {}), ambientSkyColor:typeof raw.stage?.ambientSkyColor==="string"?raw.stage.ambientSkyColor:DEFAULT_VISUAL_SCENE.stage.ambientSkyColor, ambientGroundColor:typeof raw.stage?.ambientGroundColor==="string"?raw.stage.ambientGroundColor:DEFAULT_VISUAL_SCENE.stage.ambientGroundColor, moonEnabled:raw.stage?.moonEnabled===true, moonColor:typeof raw.stage?.moonColor==="string"?raw.stage.moonColor:DEFAULT_VISUAL_SCENE.stage.moonColor, moonIntensity:Math.max(0,Math.min(20,numberOr(raw.stage?.moonIntensity,DEFAULT_VISUAL_SCENE.stage.moonIntensity))), moonX:numberOr(raw.stage?.moonX,DEFAULT_VISUAL_SCENE.stage.moonX), moonY:numberOr(raw.stage?.moonY,DEFAULT_VISUAL_SCENE.stage.moonY), moonZ:numberOr(raw.stage?.moonZ,DEFAULT_VISUAL_SCENE.stage.moonZ), moonSource:(["bass","mids","highs","energy","kick","rms","peak"] as VisualAudioSource[]).includes(raw.stage?.moonSource as VisualAudioSource)?raw.stage!.moonSource as VisualAudioSource:DEFAULT_VISUAL_SCENE.stage.moonSource, moonAmount:Math.max(0,Math.min(10,numberOr(raw.stage?.moonAmount,DEFAULT_VISUAL_SCENE.stage.moonAmount))), shadowMapSize:[512,1024,2048,4096].includes(Math.round(numberOr(raw.stage?.shadowMapSize,1024)))?Math.round(numberOr(raw.stage?.shadowMapSize,1024)):1024, shadowRange:Math.max(4,Math.min(100,numberOr(raw.stage?.shadowRange,18))), shadowBias:Math.max(-.02,Math.min(.02,numberOr(raw.stage?.shadowBias,-.00035))), sunShadows:raw.stage?.sunShadows!==false, moonShadows:raw.stage?.moonShadows===true, keyShadows:raw.stage?.keyShadows!==false },
 		sky: {
 			...DEFAULT_VISUAL_SCENE.sky,
 			...(raw.sky ?? {}),
