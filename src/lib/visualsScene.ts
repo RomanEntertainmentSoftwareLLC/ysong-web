@@ -147,6 +147,8 @@ export type VisualPrimitivePhysics = {
 
 export type VisualPrimitiveObject = {
 	id: string;
+	/** Geometry and material source; transform and physics stay local. */
+	instanceSourceId?: string;
 	name: string;
 	primitive: VisualPrimitiveType;
 	visible: boolean;

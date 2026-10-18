@@ -5048,17 +5048,18 @@ export default function VisualOutput() {
 				const layer = state.layers.find((l) => l.type === "primitive" && l.entityId === p.id);
 				if (!layer) continue;
 				let runtime = primitiveRuntime.get(p.id);
-				const geometrySignature = primitiveGeometrySignature(p);
-				const materialAsset = state.materials.find((m) => m.id === p.materialId) || state.materials[0];
+				const source = state.primitives.find((candidate) => candidate.id === p.instanceSourceId) || p;
+				const geometrySignature = primitiveGeometrySignature(source);
+				const materialAsset = state.materials.find((m) => m.id === source.materialId) || state.materials[0];
 				if (!materialAsset) continue;
 				if (!runtime) {
-					const mesh = new THREE.Mesh(makePrimitiveGeometry(p), getMaterial(materialAsset, modulation));
+					const mesh = new THREE.Mesh(makePrimitiveGeometry(source), getMaterial(materialAsset, modulation));
 					mesh.userData.ysongSelectableId = layer.id;
 					mesh.castShadow = true;
 					mesh.receiveShadow = true;
 					primitiveGroup.add(mesh);
 					selectableRoots.set(layer.id, mesh);
-					runtime = { mesh, geometrySignature, materialId: p.materialId, body: null, bodySignature: "" };
+					runtime = { mesh, geometrySignature, materialId: source.materialId, body: null, bodySignature: "" };
 					primitiveRuntime.set(p.id, runtime);
 				} else {
 					const previousSelectableId = String(runtime.mesh.userData.ysongSelectableId || "");
@@ -5069,12 +5070,12 @@ export default function VisualOutput() {
 					}
 					if (runtime.geometrySignature !== geometrySignature) {
 						runtime.mesh.geometry.dispose();
-						runtime.mesh.geometry = makePrimitiveGeometry(p);
+						runtime.mesh.geometry = makePrimitiveGeometry(source);
 						runtime.geometrySignature = geometrySignature;
 					}
-					if (runtime.materialId !== p.materialId) {
+					if (runtime.materialId !== source.materialId) {
 						runtime.mesh.material = getMaterial(materialAsset, modulation);
-						runtime.materialId = p.materialId;
+						runtime.materialId = source.materialId;
 					} else {
 						runtime.mesh.material = getMaterial(materialAsset, modulation);
 					}
