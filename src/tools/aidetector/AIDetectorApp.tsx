@@ -51,10 +51,26 @@ function humanSize(bytes: number) {
 }
 
 function verdictLabel(report: DetectorReport) {
+  if (isUncertain(report)) return "Uncertain · evidence is inconclusive";
   if (report.verdict_label) return report.verdict_label;
   if (report.verdict === "likely_human") return "Likely human-produced";
   if (report.verdict === "likely_ai" || report.verdict === "ai_like") return "Likely AI-generated";
   return "Indeterminate";
+}
+
+function isUncertain(report: DetectorReport) {
+  if (report.verdict === "uncertain") return true;
+  if (report.strong_provenance || report.strong_signal_fingerprint) return false;
+
+  const score = report.ai_evidence_score;
+  const diagnostics = report.calibration_diagnostics ?? report.measurements;
+  const scoreMargin = diagnostics?.score_margin;
+  const directionalCoherence = diagnostics?.directional_coherence;
+  const hasCloseScore = Number.isFinite(score) && score >= 43 && score <= 62;
+  const hasSmallMargin = typeof scoreMargin === "number" && Number.isFinite(scoreMargin) && scoreMargin <= 0.48;
+  const hasContradiction = typeof directionalCoherence === "number" && Number.isFinite(directionalCoherence) && directionalCoherence <= 0.62;
+
+  return hasCloseScore || hasSmallMargin || hasContradiction;
 }
 
 function verdictNote(report: DetectorReport) {
@@ -65,6 +81,7 @@ function verdictNote(report: DetectorReport) {
 }
 
 function verdictExplanation(report: DetectorReport) {
+  if (isUncertain(report) && report.verdict !== "uncertain") return "The score is near neutral, evidence is weak, or signal layers disagree. Treat this as inconclusive; the numeric diagnostics below show the measured evidence without forcing an origin label.";
   if (report.verdict_explanation) return report.verdict_explanation;
   if (report.strong_provenance) return "Explicit provenance plus signal evidence supports AI origin.";
   if (report.strong_signal_fingerprint) return "A persistent decoder-style spectral comb supplies strong architecture-level evidence even though explicit provenance is absent.";
@@ -146,8 +163,8 @@ export default function AIDetectorApp({ onBack }: Props) {
 
   const scoreAccent = useMemo(() => {
     if (!report) return "#8b5cf6";
+    if (isUncertain(report)) return "#f59e0b";
     if (report.verdict === "likely_human") return "#2dd4bf";
-    if (report.verdict === "uncertain") return "#f59e0b";
     return "#fb7185";
   }, [report]);
 
@@ -210,8 +227,8 @@ export default function AIDetectorApp({ onBack }: Props) {
             <section className="rounded-3xl border border-neutral-200 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-900/55 md:p-6">
               <div className="flex items-start justify-between gap-3"><div><div className="text-[10px] uppercase tracking-[.2em] text-violet-500">2 · Verdict</div><h2 className="mt-1 text-xl font-semibold">Origin assessment</h2></div><span className="text-[11px] text-neutral-500">{report.mode} · {report.analysis_profile.sampled_windows} windows · {report.elapsed_seconds.toFixed(2)}s</span></div>
               <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-center">
-                <div className="grid h-36 w-36 shrink-0 place-items-center rounded-full p-[10px]" style={{ background: `conic-gradient(${scoreAccent} ${report.ai_evidence_score}%, rgba(148,163,184,.16) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-white text-center dark:bg-neutral-900"><div><div className="text-4xl font-semibold tabular-nums">{report.ai_evidence_score.toFixed(1)}</div><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">AI evidence</div></div></div></div>
-                <div><div className="text-2xl font-semibold">{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{(report.evidence_strength_pct ?? report.evidence_agreement).toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
+                <div className="grid h-36 w-36 shrink-0 place-items-center rounded-full p-[10px]" style={{ background: `conic-gradient(${scoreAccent} ${report.ai_evidence_score}%, rgba(148,163,184,.16) 0)` }}><div className="grid h-full w-full place-items-center rounded-full bg-white text-center dark:bg-neutral-900"><div><div className="text-4xl font-semibold tabular-nums">{report.ai_evidence_score.toFixed(1)}</div><div className="text-[10px] uppercase tracking-[.18em] text-neutral-500">AI evidence · 0–100</div></div></div></div>
+                <div><div className={`text-2xl font-semibold ${isUncertain(report) ? "text-amber-600 dark:text-amber-400" : ""}`}>{verdictLabel(report)}</div><div className="mt-2 text-sm text-neutral-500">Evidence strength <strong className="text-neutral-800 dark:text-neutral-200">{(report.evidence_strength_pct ?? report.evidence_agreement).toFixed(1)}%</strong></div><p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-300">{verdictExplanation(report)}</p><div className="mt-3 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-[11px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-950/70">{verdictNote(report)}</div></div>
               </div>
               <div className="mt-6 grid grid-cols-3 text-[10px] uppercase tracking-wide text-neutral-500"><span>Human-leaning</span><span className="text-center">Indeterminate</span><span className="text-right">AI-leaning</span></div>
               <details className="mt-5 border-t border-neutral-200 pt-4 text-sm dark:border-neutral-800">
