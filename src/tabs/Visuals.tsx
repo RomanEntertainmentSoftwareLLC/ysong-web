@@ -1193,6 +1193,15 @@ function ReadoutGrid({rows}:{rows:Array<[string,number,string?]>}){return <div c
 
 function SkyInspector({scene,setScene,commitAssetScene}:{scene:VisualSceneState;setScene:React.Dispatch<React.SetStateAction<VisualSceneState>>;commitAssetScene:(update:(current:VisualSceneState)=>VisualSceneState)=>void}){
 	const patch=(p:Partial<VisualSceneState["sky"]>)=>setScene(v=>({...v,sky:{...v.sky,...p}}));
+	const [environmentError,setEnvironmentError]=useState("");
+	const uploadEnvironment=async(file:File)=>{
+		if(!/\.(hdr|exr|png|jpe?g|webp)$/i.test(file.name)){setEnvironmentError("Choose an HDR, EXR, PNG, JPEG or WebP equirectangular image.");return;}
+		setEnvironmentError("");
+		try{
+			const result=await bridgeApi.uploadVisualMedia(file);
+			commitAssetScene(current=>({...current,updatedAt:Date.now(),sky:{...current.sky,environmentUrl:result.url,environmentFileName:file.name,environmentSource:"upload"}}));
+		}catch(error){setEnvironmentError(error instanceof Error?error.message:"Environment upload failed.")}
+	};
 	const upload=async(file:File,field:keyof Pick<VisualSceneState["sky"],"sphereUrl"|"boxRightUrl"|"boxLeftUrl"|"boxTopUrl"|"boxBottomUrl"|"boxFrontUrl"|"boxBackUrl">)=>{
 		const result=await bridgeApi.uploadVisualMedia(file);
 		commitAssetScene(current=>({
@@ -1202,6 +1211,16 @@ function SkyInspector({scene,setScene,commitAssetScene}:{scene:VisualSceneState;
 		}));
 	};
 	return <><InspectorSection title="Sky Environment">
+		<div className="space-y-2 rounded border border-white/10 p-2 text-[10px]">
+			<div className="font-semibold">Scene environment / HDRI</div>
+			<input type="file" accept=".hdr,.exr,.png,.jpg,.jpeg,.webp" aria-label="Import environment image or HDRI" onChange={e=>{const file=e.currentTarget.files?.[0];if(file)void uploadEnvironment(file);e.currentTarget.value=""}}/>
+			<div className="break-all text-neutral-500">{scene.sky.environmentFileName||"No environment asset"}{scene.sky.environmentSource?` · ${scene.sky.environmentSource}`:""}</div>
+			{scene.sky.environmentUrl?<button className="inspector-btn" onClick={()=>patch({environmentUrl:"",environmentFileName:"",environmentSource:"",environmentBackground:false})}>Remove environment</button>:null}
+			{environmentError?<div role="alert" className="text-amber-300">{environmentError}</div>:null}
+			<RangeRow label="Environment intensity" value={scene.sky.environmentIntensity} min={0} max={5} step={.05} onChange={v=>patch({environmentIntensity:v})}/>
+			<RangeRow label="Environment yaw" value={scene.sky.environmentYaw} min={-3.14} max={3.14} step={.01} onChange={v=>patch({environmentYaw:v})}/>
+			<Toggle label="Show as background" checked={scene.sky.environmentBackground} onChange={v=>patch({environmentBackground:v})}/>
+		</div>
 		<SelectRow label="Mode" value={scene.sky.mode} options={["sphere","box"]} labels={{sphere:"Sky Sphere",box:"Skybox (6 faces)"}} onChange={v=>patch({mode:v as VisualSceneState["sky"]["mode"]})}/>
 		<div className="grid grid-cols-3 gap-2"><RangeRow label="Pitch" value={scene.sky.rotationX} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationX:v})}/><RangeRow label="Yaw" value={scene.sky.rotationY} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationY:v})}/><RangeRow label="Roll" value={scene.sky.rotationZ} min={-3.14} max={3.14} step={.01} onChange={v=>patch({rotationZ:v})}/></div>
 		<RangeRow label="Brightness" value={scene.sky.brightness} min={.1} max={3} step={.05} onChange={v=>patch({brightness:v})}/>

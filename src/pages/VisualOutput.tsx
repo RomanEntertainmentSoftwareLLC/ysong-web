@@ -4089,6 +4089,47 @@ export default function VisualOutput() {
 		exrLoader.setCrossOrigin("anonymous");
 		const pmremGenerator = new THREE.PMREMGenerator(renderer);
 		pmremGenerator.compileEquirectangularShader();
+		let sceneEnvironmentUrl = "";
+		let sceneEnvironmentTexture: THREE.Texture | null = null;
+		let sceneEnvironmentFailedUrl = "";
+		let sceneEnvironmentDisposed = false;
+		const updateSceneEnvironment = (state: VisualSceneState) => {
+			const url = state.sky.environmentUrl || "";
+			if (url !== sceneEnvironmentUrl) {
+				sceneEnvironmentUrl = url;
+				sceneEnvironmentFailedUrl = "";
+				sceneEnvironmentTexture?.dispose();
+				sceneEnvironmentTexture = null;
+				threeScene.environment = null;
+				if (url) {
+					const ready = (texture: THREE.Texture) => {
+						if (sceneEnvironmentDisposed || sceneEnvironmentUrl !== url) { texture.dispose(); return; }
+						texture.mapping = THREE.EquirectangularReflectionMapping;
+						sceneEnvironmentTexture = texture;
+						threeScene.environment = texture;
+					};
+					const failed = () => {
+						if (sceneEnvironmentDisposed || sceneEnvironmentUrl !== url) return;
+						sceneEnvironmentFailedUrl = url;
+						threeScene.environment = null;
+						reportBackgroundMediaError(`scene-environment|${url}`, "Could not load the environment image. Using scene lighting and background instead.");
+					};
+					const extension = (state.sky.environmentFileName || url.split(/[?#]/)[0]).toLowerCase();
+					if (extension.endsWith(".hdr")) rgbeLoader.load(url, ready, undefined, failed);
+					else if (extension.endsWith(".exr")) exrLoader.load(url, ready, undefined, failed);
+					else materialTextureLoader.load(url, texture => { texture.colorSpace = THREE.SRGBColorSpace; ready(texture); }, undefined, failed);
+				}
+			}
+			threeScene.environment = sceneEnvironmentFailedUrl === url ? null : sceneEnvironmentTexture;
+			threeScene.environmentIntensity = Math.max(0, Math.min(5, state.sky.environmentIntensity));
+			threeScene.environmentRotation.set(0, state.sky.environmentYaw, 0);
+			if (state.sky.environmentBackground && sceneEnvironmentTexture && sceneEnvironmentFailedUrl !== url) {
+				skyBox.visible = false;
+				environmentScene.background = sceneEnvironmentTexture;
+				environmentScene.backgroundIntensity = state.sky.environmentIntensity;
+				environmentScene.backgroundRotation.set(0, state.sky.environmentYaw, 0);
+			}
+		};
 		const requestMaterialTexture = (url: string, color: boolean, assign: (texture: THREE.Texture) => void) => {
 			if (!url) return;
 			// Color/data uses separate cache entries because the same image cannot safely
@@ -5644,6 +5685,7 @@ export default function VisualOutput() {
 				},
 			};
 			updateSky(skyScene, currentTransportPosition);
+			updateSceneEnvironment(skyScene);
 
 			const stage = {
 				...currentScene.stage,
@@ -6925,6 +6967,8 @@ export default function VisualOutput() {
 			materialRuntime.forEach((material) => material.dispose());
 			materialTextureCache.forEach((texture) => texture.dispose());
 			materialEnvironmentCache.forEach((target) => target.dispose());
+			sceneEnvironmentDisposed = true;
+			sceneEnvironmentTexture?.dispose();
 			pmremGenerator.dispose();
 			physicsWorld?.free();
 			clearGlb();

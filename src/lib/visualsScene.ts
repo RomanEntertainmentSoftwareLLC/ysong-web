@@ -705,6 +705,12 @@ export type VisualSceneState = {
 		lensFlareIntensity: number;
 	};
 	sky: {
+		environmentUrl: string;
+		environmentFileName: string;
+		environmentSource: "upload" | "";
+		environmentIntensity: number;
+		environmentYaw: number;
+		environmentBackground: boolean;
 		mode: VisualSkyMode;
 		sphereUrl: string;
 		sphereFileName: string;
@@ -1210,6 +1216,12 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		lensFlareIntensity: 0.7,
 	},
 	sky: {
+		environmentUrl: "",
+		environmentFileName: "",
+		environmentSource: "",
+		environmentIntensity: 1,
+		environmentYaw: 0,
+		environmentBackground: false,
 		mode: "sphere",
 		sphereUrl: "",
 		sphereFileName: "",
@@ -1517,6 +1529,12 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 		sky: {
 			...DEFAULT_VISUAL_SCENE.sky,
 			...(raw.sky ?? {}),
+			environmentUrl: typeof raw.sky?.environmentUrl === "string" ? raw.sky.environmentUrl : "",
+			environmentFileName: typeof raw.sky?.environmentFileName === "string" ? raw.sky.environmentFileName : "",
+			environmentSource: raw.sky?.environmentSource === "upload" ? "upload" : "",
+			environmentIntensity: Math.max(0, Math.min(5, numberOr(raw.sky?.environmentIntensity, 1))),
+			environmentYaw: numberOr(raw.sky?.environmentYaw, 0),
+			environmentBackground: raw.sky?.environmentBackground === true,
 			rotationX: numberOr(raw.sky?.rotationX, DEFAULT_VISUAL_SCENE.sky.rotationX),
 			rotationY: numberOr(raw.sky?.rotationY, DEFAULT_VISUAL_SCENE.sky.rotationY),
 			rotationZ: numberOr(raw.sky?.rotationZ, DEFAULT_VISUAL_SCENE.sky.rotationZ),

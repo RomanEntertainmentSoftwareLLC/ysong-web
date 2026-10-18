@@ -34,6 +34,12 @@ test("scene objects, environment, camera, materials and reactivity survive a sav
 	scene.secondaryDynamics.push(secondary);
 	scene.layers.push({ id: `layer-${secondary.id}`, type: "secondary", name: secondary.name, visible: true, opacity: 1, entityId: secondary.id });
 	scene.sky.rotationY = 1.2;
+	scene.sky.environmentUrl = "/visuals/media/studio.hdr";
+	scene.sky.environmentFileName = "studio.hdr";
+	scene.sky.environmentSource = "upload";
+	scene.sky.environmentIntensity = 2.25;
+	scene.sky.environmentYaw = .8;
+	scene.sky.environmentBackground = true;
 	scene.stage.fogAmount = .42;
 	scene.audioModulation.enabled = true;
 	scene.audioModulation.bindings.push({ id: "binding-ring", enabled: true, name: "Ring", source: "bass", target: `primitive:${primitive.id}:rotationY`, amount: 2, attack: .1, release: .3, threshold: 0, invert: false, curve: "linear" });
@@ -52,6 +58,12 @@ test("scene objects, environment, camera, materials and reactivity survive a sav
 	assert.equal(reopened.secondaryDynamics[0].audioImpulse, 1.6);
 	assert.equal(reopened.materials.find(item => item.id === material.id).baseColorMap.url, "/media/copper.png");
 	assert.equal(reopened.sky.rotationY, 1.2);
+	assert.equal(reopened.sky.environmentUrl, "/visuals/media/studio.hdr");
+	assert.equal(reopened.sky.environmentFileName, "studio.hdr");
+	assert.equal(reopened.sky.environmentSource, "upload");
+	assert.equal(reopened.sky.environmentIntensity, 2.25);
+	assert.equal(reopened.sky.environmentYaw, .8);
+	assert.equal(reopened.sky.environmentBackground, true);
 	assert.equal(reopened.stage.fogAmount, .42);
 	assert.equal(reopened.cameras[0].positionX, 8);
 	assert.equal(reopened.cameras[0].targetEntityId, primitive.id);
