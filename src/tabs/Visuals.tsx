@@ -57,6 +57,7 @@ import { buildVisualCameraShots, resolveVisualProgramCamera, sampleVisualProgram
 import { syncVisualSceneToFrames } from "../lib/visualsViewportSync";
 import { resolveVisualSelection } from "../lib/visualsSelection";
 import { createVisualSceneWriter } from "../lib/visualSceneWriter";
+import { appendVisualSceneJournal, newerVisualRevision, VISUAL_SCENE_JOURNAL_KEY } from "../lib/visualSceneJournal";
 import { assetReferences, deleteProjectAsset, relinkProjectAsset } from "../lib/visualProjectAssets";
 import { applyVisualMaterialUpload, clearVisualMaterialTexture, createVisualMaterialUploadTracker } from "../lib/visualMaterialUpload";
 import { visualAnimationCueDuration, visualAnimationSpans } from "../lib/visualsPerformance";
@@ -129,9 +130,22 @@ function writeVisualSceneBackup(scene: VisualSceneState, updatedAt = Date.now())
 	try { window.localStorage.setItem(VISUAL_SCENE_BACKUP_KEY, JSON.stringify({...scene,updatedAt})); } catch { /* best effort */ }
 }
 
+function journalVisualScene(scene: VisualSceneState) {
+	try {
+		const next = appendVisualSceneJournal(window.localStorage.getItem(VISUAL_SCENE_JOURNAL_KEY), scene);
+		if (next) window.localStorage.setItem(VISUAL_SCENE_JOURNAL_KEY, next);
+	} catch { /* Local storage may be unavailable or full. */ }
+}
+
+function readJournalStorage(): string | null {
+	try { return window.localStorage.getItem(VISUAL_SCENE_JOURNAL_KEY); } catch { return null; }
+}
+
 export default function VisualsPane() {
 	const world = useWorldPlayer();
 	const [scene,setScene]=useState<VisualSceneState>(()=>readVisualSceneBackup() ?? createBlankVisualScene("hybrid","Untitled Visual"));
+	const [recoveredScene,setRecoveredScene]=useState<VisualSceneState|null>(null);
+	const recoveryPendingRef=useRef(false);
 	const sceneRef=useRef(scene);
 	sceneRef.current=scene;
 	const cameraKeyUndoRef=useRef<{cameraId:string;keyframes:VisualCameraKeyframe[]}|null>(null);
@@ -217,6 +231,7 @@ export default function VisualsPane() {
 		const next={...update(sceneRef.current),updatedAt:Date.now()};
 		sceneRef.current=next;
 		setScene(next);
+		journalVisualScene(next);
 		writeVisualSceneBackup(next,next.updatedAt);
 		sceneWriterRef.current(next);
 	},[]);
@@ -247,6 +262,13 @@ export default function VisualsPane() {
 			const remote = payload?.scene as VisualSceneState | undefined;
 			const remoteValid = !!remote && typeof remote === "object" && Array.isArray(remote.layers);
 			const backup = readVisualSceneBackup();
+			const saved = remoteValid && (!backup || (remote.updatedAt || 0) >= (backup.updatedAt || 0))
+				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
+			const recovered = newerVisualRevision(readJournalStorage(), remoteValid || backup ? saved : null);
+			if (recovered) {
+				hydratedSceneRef.current=saved; sceneRef.current=saved; setScene(saved); sceneReadyRef.current=true;
+				recoveryPendingRef.current=true; setRecoveredScene(recovered); return;
+			}
 			const next = remoteValid && (!backup || (remote.updatedAt || 0) >= (backup.updatedAt || 0))
 				? normalizeVisualScene(remote) : (backup ?? createBlankVisualScene("hybrid","Untitled Visual"));
 			hydratedSceneRef.current=next;
@@ -267,7 +289,7 @@ export default function VisualsPane() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	},[]);
 	useEffect(()=>{
-		if(!sceneReadyRef.current)return;
+		if(!sceneReadyRef.current||recoveryPendingRef.current)return;
 		// The embedded Scene viewport is a local editor and should reflect React state
 		// immediately. Bridge remains the durable/OBS authority, but waiting for its
 		// round-trip caused materials and Sky Sphere updates to appear seconds later.
@@ -275,6 +297,7 @@ export default function VisualsPane() {
 		if(scene===hydratedSceneRef.current)return;
 		sceneDirtyRef.current=true;
 		const snapshot={...scene,updatedAt:Date.now()};
+		journalVisualScene(snapshot);
 		writeVisualSceneBackup(snapshot,snapshot.updatedAt);
 		const generation=++sceneSaveGenerationRef.current;
 		const t=window.setTimeout(()=>{if(generation===sceneSaveGenerationRef.current)sceneWriterRef.current(snapshot)},90);
@@ -284,7 +307,7 @@ export default function VisualsPane() {
 		viewportFrameRef.current?.contentWindow?.postMessage({type:"ysong-editor-selection",id:selectedId},window.location.origin);
 	},[selectedId]);
 	useEffect(()=>()=>{
-		if(sceneReadyRef.current&&sceneDirtyRef.current){const snapshot={...sceneRef.current,updatedAt:Date.now()};writeVisualSceneBackup(snapshot,snapshot.updatedAt);sceneWriterRef.current(snapshot)}
+		if(sceneReadyRef.current&&sceneDirtyRef.current&&!recoveryPendingRef.current){const snapshot={...sceneRef.current,updatedAt:Date.now()};journalVisualScene(snapshot);writeVisualSceneBackup(snapshot,snapshot.updatedAt);sceneWriterRef.current(snapshot)}
 	},[]);
 	useEffect(()=>{
 		const host=viewportHostRef.current;if(!host)return;
@@ -644,6 +667,7 @@ export default function VisualsPane() {
 	const copyObsSource=async()=>{const url=`${window.location.origin}/visual-output?obs=1`;try{await navigator.clipboard.writeText(url);setNotice("OBS Browser Source copied. 1920 × 1080, 60 FPS.")}catch{setNotice(url)}};
 
 	return <div className="visuals-editor flex h-full min-h-0 flex-col overflow-hidden bg-[#090b10] text-neutral-100">
+		{recoveredScene?<div role="dialog" aria-modal="true" aria-label="Recover Visuals scene" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75"><div className="max-w-md rounded-lg border border-violet-400/40 bg-[#151925] p-6 shadow-2xl"><h2 className="text-base font-semibold">Recover Visuals edits?</h2><p className="mt-2 text-sm text-neutral-300">A local scene revision from {new Date(recoveredScene.updatedAt).toLocaleString()} is newer than the saved scene. Restore it or discard it to continue.</p><div className="mt-5 flex gap-3"><button className="rounded bg-violet-600 px-4 py-2 text-sm" onClick={()=>{const restored={...recoveredScene,updatedAt:Date.now()};sceneRef.current=restored;setScene(restored);hydratedSceneRef.current=restored;sceneDirtyRef.current=true;journalVisualScene(restored);writeVisualSceneBackup(restored,restored.updatedAt);sceneWriterRef.current(restored);syncViewportScene();setSelectedId(restored.layers[0]?.id||restored.cameras[0]?.id||"");recoveryPendingRef.current=false;setRecoveredScene(null);setNotice("Recovered local Visuals edits.")}}>Restore</button><button className="rounded border border-white/20 px-4 py-2 text-sm" onClick={()=>{try{window.localStorage.removeItem(VISUAL_SCENE_JOURNAL_KEY)}catch{/* Storage may be unavailable. */}writeVisualSceneBackup(sceneRef.current,sceneRef.current.updatedAt);syncViewportScene();recoveryPendingRef.current=false;setRecoveredScene(null);setNotice("Discarded the local Visuals recovery revision.")}}>Discard</button></div></div></div>:null}
 		<input ref={imageInputRef} type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)void importMedia(f,"image");e.currentTarget.value=""}}/>
 		<input ref={videoInputRef} type="file" accept="video/mp4,video/webm,.mp4,.webm" className="hidden" onChange={e=>{const f=e.target.files?.[0];if(f)void importMedia(f,"video");e.currentTarget.value=""}}/>
 		<input ref={modelInputRef} type="file" multiple accept="model/gltf-binary,model/gltf+json,.glb,.gltf,.fbx,.obj,.mtl,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga,.tif,.tiff,.dds" className="hidden" onChange={e=>{const files=Array.from(e.target.files||[]);if(files.length)void importModelPackage(files);e.currentTarget.value=""}}/>
