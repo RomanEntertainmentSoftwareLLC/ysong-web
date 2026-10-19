@@ -17,6 +17,11 @@ export type VisualAudioBinding = {
 	invert: boolean;
 	curve: VisualAudioCurve;
 };
+export type VisualMidiBinding = {
+	id: string; enabled: boolean; device: string; channel: number;
+	intent: "note" | "velocity" | "cc"; number: number;
+	target: string; amount: number;
+};
 export type VisualLayerType = "media" | "particles" | "spectrum" | "object" | "primitive" | "shape2d" | "secondary" | "nowPlaying" | "stage" | "lighting" | "fog" | "sky" | "clouds" | "weather";
 export type VisualMediaKind = "image" | "video" | "model";
 export type VisualObjectModel = "mannequin" | "crystal" | "glb" | "asset";
@@ -561,6 +566,7 @@ export type VisualSceneState = {
 		testSignal: number;
 		bindings: VisualAudioBinding[];
 	};
+	midiModulation: { enabled: boolean; bindings: VisualMidiBinding[] };
 	director: VisualAiDirectorState;
 	layers: VisualLayer[];
 	object: {
@@ -1045,6 +1051,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 		chromaticAberration:0, lensDistortion:0, lensZoom:1, halation:0, filmGrain:0, vignette:0, vignetteSoftness:.45
 	},
 	audioModulation: { enabled: false, masterAmount: 1, testSignal: 0, bindings: [] },
+	midiModulation: { enabled: false, bindings: [] },
 	director: { style:"cinematic", scope:"full", intensity:.8, preserveManual:true, replacePreviousDirectorPlan:true, seed:7, prompt:"", lastPlanId:"", lastPlanSummary:"", lastPlanSource:"", lastAppliedAt:0 },
 	layers: [
 		{ id: "stage", type: "stage", name: "Stage", visible: true, opacity: 1, timeline: { start: 0, duration: 0, trimIn: 0, trimOut: 0, fadeIn: 0, fadeOut: 0 } },
@@ -1508,6 +1515,19 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 				curve: binding.curve === "easeIn" || binding.curve === "easeOut" || binding.curve === "linear" ? binding.curve : "smoothstep",
 			})) : [],
 		},
+		midiModulation: {
+			enabled: raw.midiModulation?.enabled === true,
+			bindings: Array.isArray(raw.midiModulation?.bindings) ? raw.midiModulation.bindings.filter(Boolean).slice(0, 64).map((binding, index) => ({
+				id: typeof binding.id === "string" && binding.id ? binding.id : `midi-binding-${index+1}`,
+				enabled: binding.enabled !== false,
+				device: typeof binding.device === "string" ? binding.device.slice(0, 200) : "",
+				channel: Math.max(0, Math.min(16, Math.round(numberOr(binding.channel, 0)))),
+				intent: binding.intent === "velocity" || binding.intent === "cc" ? binding.intent : "note",
+				number: Math.max(0, Math.min(127, Math.round(numberOr(binding.number, 60)))),
+				target: typeof binding.target === "string" ? binding.target : "",
+				amount: Math.max(-100, Math.min(100, numberOr(binding.amount, 1))),
+			})) : [],
+		},
 		director: {
 			...DEFAULT_VISUAL_SCENE.director, ...(raw.director ?? {}),
 			style: (["balanced","cinematic","aggressive","ethereal","minimal"] as string[]).includes(String(raw.director?.style)) ? raw.director!.style as VisualAiDirectorStyle : DEFAULT_VISUAL_SCENE.director.style,
@@ -1813,7 +1833,7 @@ export function createBlankVisualScene(mode: VisualProjectMode, name = "Untitled
 	const next=structuredClone(DEFAULT_VISUAL_SCENE);
 	next.project={id:`visual-project-${crypto.randomUUID()}`,name,mode};
 	next.updatedAt=Date.now();
-	next.assets=[]; next.primitives=[]; next.shapes2d=[]; next.secondaryDynamics=[]; next.animations=[]; next.animationCues=[]; next.ikConstraints=[]; next.cameraCuts=[]; next.timeline.markers=[]; next.audioModulation.bindings=[]; next.audioModulation.testSignal=0;
+	next.assets=[]; next.primitives=[]; next.shapes2d=[]; next.secondaryDynamics=[]; next.animations=[]; next.animationCues=[]; next.ikConstraints=[]; next.cameraCuts=[]; next.timeline.markers=[]; next.audioModulation.bindings=[]; next.audioModulation.testSignal=0; next.midiModulation.bindings=[]; next.midiModulation.enabled=false;
 	next.object.modelUrl=""; next.object.modelFileName=""; next.object.animation=""; next.object.assetFiles=[]; next.object.role="auto"; next.object.materialId=""; next.object.humanoidMap={}; next.object.morphTargets={};
 	next.performance.timelineCues=[]; next.performance.manualCueSequence=0; next.performance.autoDirector=false; next.director.lastPlanId=""; next.director.lastPlanSummary=""; next.director.lastPlanSource=""; next.director.lastAppliedAt=0;
 	// A blank project is genuinely blank. Runtime/editor infrastructure may still exist,

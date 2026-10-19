@@ -76,6 +76,7 @@ import {
 	modulationValue,
 	type VisualModulationFrame,
 } from "../lib/visualsModulation";
+import { acceptVisualMidiEvent, visualMidiDeltas } from "../lib/visualsMidi";
 import {
 	fitVisualRenderSize,
 	nextAdaptiveQualityScale,
@@ -5204,6 +5205,12 @@ export default function VisualOutput() {
 		};
 
 		const modulationRuntime = new Map<string, number>();
+		const midiRuntime = new Map<string, { value: number; updatedAt: number }>();
+		let midiConnected = false;
+		const stopMidi = bridgeApi.subscribeMidiEvents(
+			event => acceptVisualMidiEvent(sceneRef.current, midiRuntime, event),
+			connected => { midiConnected = connected; if (!connected) midiRuntime.clear(); },
+		);
 		let lastOverlayModulationAt = 0;
 		const resetSceneRuntime = () => {
 			for (const [id, runtime] of [...primitiveRuntime]) destroyPrimitiveRuntime(id, runtime);
@@ -5212,6 +5219,7 @@ export default function VisualOutput() {
 			for (const material of materialRuntime.values()) material.dispose();
 			materialRuntime.clear();
 			modulationRuntime.clear();
+			midiRuntime.clear();
 		};
 
 		const render = (now: number) => {
@@ -5249,6 +5257,8 @@ export default function VisualOutput() {
 				dt,
 				modulationRuntime,
 			);
+			for (const [target, delta] of visualMidiDeltas(currentScene, midiRuntime, midiConnected))
+				modulation.deltas.set(target, (modulation.deltas.get(target) ?? 0) + delta);
 			const mv = (target: string, base: number, min = -Infinity, max = Infinity) =>
 				modulationValue(modulation, target, base, min, max);
 			const windEnabled = currentScene.wind.enabled;
@@ -7056,6 +7066,7 @@ export default function VisualOutput() {
 			composer.dispose();
 			renderer.dispose();
 			channel.close();
+			stopMidi();
 		};
 	}, [
 		embedded,
