@@ -8,6 +8,9 @@ export type VisualAudioBinding = {
 	source: VisualAudioSource;
 	target: string;
 	amount: number;
+	min?: number;
+	max?: number;
+	sensitivity?: number;
 	attack: number;
 	release: number;
 	threshold: number;
@@ -1495,6 +1498,9 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 				source: (["bass","mids","highs","energy","kick","rms","peak","beat","bar"] as string[]).includes(String(binding.source)) ? binding.source as VisualAudioSource : "energy",
 				target: typeof binding.target === "string" ? binding.target : "stage.bloomStrength",
 				amount: Math.max(-100, Math.min(100, numberOr(binding.amount, 1))),
+				min: Math.max(-100, Math.min(100, numberOr(binding.min, 0))),
+				max: Math.max(-100, Math.min(100, numberOr(binding.max, numberOr(binding.amount, 1)))),
+				sensitivity: Math.max(0, Math.min(8, numberOr(binding.sensitivity, 1))),
 				attack: Math.max(.001, Math.min(10, numberOr(binding.attack, .08))),
 				release: Math.max(.001, Math.min(10, numberOr(binding.release, .24))),
 				threshold: Math.max(0, Math.min(.99, numberOr(binding.threshold, 0))),

@@ -88,6 +88,7 @@ export function evaluateVisualAudioModulation(
 			continue;
 		}
 		let signal = Math.max(sources[binding.source] ?? 0, clamp01(config.testSignal));
+		signal = clamp01(signal * (binding.sensitivity ?? 1));
 		const threshold = clamp01(binding.threshold);
 		signal = signal <= threshold ? 0 : (signal - threshold) / Math.max(0.0001, 1 - threshold);
 		signal = applyCurve(binding.invert ? 1 - signal : signal, binding.curve);
@@ -96,7 +97,9 @@ export function evaluateVisualAudioModulation(
 		const alpha = 1 - Math.exp(-Math.max(0.001, dt) / seconds);
 		const smoothed = previous + (signal - previous) * alpha;
 		runtime.set(binding.id, smoothed);
-		const delta = smoothed * binding.amount * config.masterAmount;
+		const minimum = binding.min ?? 0;
+		const maximum = binding.max ?? binding.amount;
+		const delta = (minimum + smoothed * (maximum - minimum)) * config.masterAmount;
 		deltas.set(binding.target, (deltas.get(binding.target) ?? 0) + delta);
 	}
 	for (const id of [...runtime.keys()]) if (!liveIds.has(id)) runtime.delete(id);
@@ -298,6 +301,9 @@ export function makeVisualAudioBinding(targetId = "stage.bloomStrength"): Visual
 		source: "energy",
 		target: targetId,
 		amount: 1,
+		min: 0,
+		max: 1,
+		sensitivity: 1,
 		attack: 0.08,
 		release: 0.24,
 		threshold: 0,
