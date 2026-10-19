@@ -1176,8 +1176,10 @@ export default function VisualOutput() {
 	const editorFreeRoam = embedded && !programPreview;
 	const editorFxPreview = editorFreeRoam && query.get("fx") !== "0";
 	const obsMode = query.get("obs") === "1";
-	const renderWidth = monitorMode ? 480 : embedded ? PREVIEW_WIDTH : PROGRAM_WIDTH;
-	const renderHeight = monitorMode ? 270 : embedded ? PREVIEW_HEIGHT : PROGRAM_HEIGHT;
+	const exportWidth = Number(query.get("exportWidth"));
+	const captureWidth = embedded && programPreview && [640, 1280, 1920].includes(exportWidth) ? exportWidth : null;
+	const renderWidth = captureWidth ?? (monitorMode ? 480 : embedded ? PREVIEW_WIDTH : PROGRAM_WIDTH);
+	const renderHeight = captureWidth ? Math.round(captureWidth * 9 / 16) : monitorMode ? 270 : embedded ? PREVIEW_HEIGHT : PROGRAM_HEIGHT;
 	const qualitySelection = editorFreeRoam ? scene.renderer.editorQuality : scene.renderer.programQuality;
 	const antialiasEnabled = editorFreeRoam ? scene.renderer.editorAntialias : scene.renderer.programAntialias;
 
