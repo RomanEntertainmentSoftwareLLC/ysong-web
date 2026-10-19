@@ -1,3 +1,4 @@
+import { recoverProjectAssets } from "./visualProjectAssets.ts";
 export type VisualAudioSource = "bass" | "mids" | "highs" | "energy" | "kick" | "rms" | "peak" | "beat" | "bar";
 export type VisualAudioCurve = "linear" | "easeIn" | "easeOut" | "smoothstep";
 export type VisualAudioBinding = {
@@ -110,6 +111,15 @@ export type VisualSkyMode = "sphere" | "box";
 export type VisualTextureSlot = {
 	url: string;
 	fileName: string;
+};
+
+export type VisualProjectAsset = {
+	id: string;
+	kind: "model" | "texture" | "environment" | "material";
+	name: string;
+	url: string;
+	provenance: string;
+	status: "available" | "missing";
 };
 
 export type VisualMaterialAsset = {
@@ -510,6 +520,7 @@ export type VisualSceneState = {
 	};
 	assets: VisualMediaAsset[];
 	materials: VisualMaterialAsset[];
+	projectAssets: VisualProjectAsset[];
 	primitives: VisualPrimitiveObject[];
 	shapes2d: VisualShape2D[];
 	secondaryDynamics: VisualSecondaryDynamic[];
@@ -1028,6 +1039,7 @@ export const DEFAULT_VISUAL_SCENE: VisualSceneState = {
 	timeline: { durationSeconds: 180, zoom: 1, snapSeconds: 0.25, snapMode: "seconds", markers: [] },
 	assets: [],
 	materials: [structuredClone(DEFAULT_VISUAL_MATERIAL)],
+	projectAssets: [],
 	primitives: [],
 	shapes2d: [],
 	secondaryDynamics: [],
@@ -1475,6 +1487,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 				}))
 			: [],
 		materials: Array.isArray(raw.materials) && raw.materials.length ? raw.materials.filter(Boolean).map((material,index)=>normalizeVisualMaterial(material as Partial<VisualMaterialAsset>,index)) : [structuredClone(DEFAULT_VISUAL_MATERIAL)],
+		projectAssets: Array.isArray(raw.projectAssets) ? raw.projectAssets.filter((asset): asset is VisualProjectAsset => !!asset && typeof asset === "object" && typeof asset.id === "string" && typeof asset.url === "string" && ["model","texture","environment","material"].includes(asset.kind)).map(asset=>({id:asset.id,kind:asset.kind,name:String(asset.name||"Asset"),url:asset.url,provenance:String(asset.provenance||"Imported"),status:asset.status==="missing"?"missing":"available"})) : [],
 		primitives: Array.isArray(raw.primitives) ? raw.primitives.filter(Boolean).map((primitive,index)=>normalizeVisualPrimitive(primitive as Partial<VisualPrimitiveObject>,index)) : [],
 		shapes2d: Array.isArray(raw.shapes2d) ? raw.shapes2d.filter(Boolean).map((shape,index)=>normalizeVisualShape2D(shape as Partial<VisualShape2D>,index)) : [],
 		secondaryDynamics: Array.isArray(raw.secondaryDynamics) ? raw.secondaryDynamics.filter(Boolean).map((item,index)=>normalizeSecondaryDynamic(item as Partial<VisualSecondaryDynamic>,index)) : [],
@@ -1826,6 +1839,7 @@ export function normalizeVisualScene(input: unknown): VisualSceneState {
 			});
 		}
 	}
+	normalized.projectAssets = recoverProjectAssets(normalized);
 	return normalized;
 }
 
@@ -1893,3 +1907,5 @@ export function visualLayerOpacityAt(layer: VisualLayer, positionSeconds: number
 	if (timeline.fadeOut > 0) factor = Math.min(factor, (timeline.duration - local) / timeline.fadeOut);
 	return layer.opacity * Math.max(0, Math.min(1, factor));
 }
+
+
